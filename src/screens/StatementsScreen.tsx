@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { open, save } from "@tauri-apps/plugin-dialog";
+import { LabelWithHelp } from "../components/FieldHelp";
 import { api } from "../lib/api";
 import { formatEuros } from "../lib/money";
 import type { AnnualStatements, LedgerFilter } from "../lib/types";
@@ -95,8 +96,9 @@ export function StatementsScreen() {
         <div>
           <h1>États annuels</h1>
           <p className="muted">
-            Bilan, compte de résultat et annexe socle (immos, dettes) — mapping
-            PCG → postes.
+            <LabelWithHelp topic="bilan">Bilan</LabelWithHelp>,{" "}
+            <LabelWithHelp topic="compteResultat">compte de résultat</LabelWithHelp>{" "}
+            et annexe socle (immos, dettes) — mapping PCG → postes.
           </p>
         </div>
         <div className="row-actions">
