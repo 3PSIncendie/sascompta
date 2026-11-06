@@ -6,6 +6,8 @@ name: Windows installer
 on:
   workflow_dispatch:
   push:
+    branches:
+      - main
     tags:
       - "v*"
   pull_request:
@@ -13,6 +15,8 @@ on:
       - "src-tauri/**"
       - "src/**"
       - "package.json"
+      - "package-lock.json"
+      - "scripts/build-windows.ps1"
       - ".github/workflows/windows-installer.yml"
 
 jobs:
@@ -54,3 +58,4 @@ jobs:
             src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
             src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi
           if-no-files-found: error
+          retention-days: 30
