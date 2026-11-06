@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { save } from "@tauri-apps/plugin-dialog";
+import { LabelWithHelp } from "../components/FieldHelp";
 import { api } from "../lib/api";
 import { formatEuros, formatRateBp } from "../lib/money";
 import type {
@@ -92,7 +93,17 @@ export function TaxScreen() {
   return (
     <div className="panel">
       <h1>TVA &amp; tiers</h1>
-      <p>Codes TVA, ventilation, balance auxiliaire et brouillon CA3.</p>
+      <p>
+        Codes TVA, ventilation, balance auxiliaire et{" "}
+        <LabelWithHelp topic="ca3">brouillon CA3</LabelWithHelp>.
+      </p>
+      <aside className="help-callout">
+        <strong>Rappel</strong>
+        <p>
+          SasCompta prépare un brouillon. La déclaration officielle se fait sur
+          le site des impôts. Surveillez les échéances dans le parcours guidé.
+        </p>
+      </aside>
 
       <div className="tabs">
         {(

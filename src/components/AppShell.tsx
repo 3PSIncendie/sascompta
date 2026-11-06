@@ -1,6 +1,8 @@
+import { DeadlineBadge } from "./DeadlineReminders";
 import type { NavId, WorkspaceInfo } from "../lib/types";
 
 const NAV: { id: NavId; label: string }[] = [
+  { id: "guide", label: "Parcours guidé" },
   { id: "ma-sas", label: "Ma SAS" },
   { id: "plan", label: "Plan comptable" },
   { id: "journaux", label: "Journaux" },
@@ -36,12 +38,19 @@ export function AppShell({ workspace, nav, onNav, onClose, children }: Props) {
               className={nav === item.id ? "active" : ""}
               onClick={() => onNav(item.id)}
             >
-              {item.label}
+              <span className="nav-label">
+                {item.label}
+                {item.id === "guide" && <DeadlineBadge workspace={workspace} />}
+              </span>
             </button>
           ))}
         </nav>
-        <div style={{ marginTop: "auto" }}>
-          <button type="button" className="ghost" onClick={onClose} style={{ color: "#fff", borderColor: "rgba(255,255,255,0.25)" }}>
+        <div className="sidebar-footer">
+          <button
+            type="button"
+            className="ghost sidebar-close"
+            onClick={onClose}
+          >
             Fermer le workspace
           </button>
         </div>

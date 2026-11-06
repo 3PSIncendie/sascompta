@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { LabelWithHelp } from "../components/FieldHelp";
 import { api } from "../lib/api";
 import type { Account } from "../lib/types";
 
@@ -50,7 +51,18 @@ export function ChartScreen() {
   return (
     <div className="panel">
       <h1>Plan comptable</h1>
-      <p>PCG SAS classes 1–7 — comptes standards et personnalisés.</p>
+      <p>
+        PCG SAS classes 1–7 — comptes standards et personnalisés. Chaque numéro
+        est une « case » pour ranger une nature d’opération.
+      </p>
+      <aside className="help-callout">
+        <strong>Pour débuter</strong>
+        <p>
+          Cherchez d’abord 512 (banque), 411 (clients), 401 (fournisseurs), 706
+          (prestations). Ajoutez un compte seulement si aucun existant ne
+          convient.
+        </p>
+      </aside>
 
       <div className="toolbar">
         <label>
@@ -58,7 +70,7 @@ export function ChartScreen() {
           <input value={filter} onChange={(e) => setFilter(e.target.value)} />
         </label>
         <label>
-          N°
+          <LabelWithHelp topic="numeroCompte">N°</LabelWithHelp>
           <input value={number} onChange={(e) => setNumber(e.target.value)} />
         </label>
         <label>
@@ -66,7 +78,7 @@ export function ChartScreen() {
           <input value={label} onChange={(e) => setLabel(e.target.value)} />
         </label>
         <label>
-          Type
+          <LabelWithHelp topic="typeCompte">Type</LabelWithHelp>
           <select
             value={accountType}
             onChange={(e) => setAccountType(e.target.value)}

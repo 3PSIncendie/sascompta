@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
+import { LabelWithHelp } from "../components/FieldHelp";
 import { api } from "../lib/api";
 import { formatEuros, parseEurosToCents } from "../lib/money";
 import type {
@@ -183,8 +184,16 @@ export function EntriesScreen() {
     <div className="panel">
       <h1>Écritures</h1>
       <p>
-        Saisie en partie double — {postedCount} écriture(s) validée(s).
+        Saisie en partie double — {postedCount} écriture(s) validée(s). Le total
+        débit doit égaler le total crédit avant validation.
       </p>
+      <aside className="help-callout">
+        <strong>Exemple simple</strong>
+        <p>
+          Vente 120 € TTC : débit 411 (client) 120 · crédit 706 (prestation) 100
+          · crédit 44571 (TVA) 20. Puis validez.
+        </p>
+      </aside>
 
       <div className="btn-row" style={{ marginBottom: "1rem" }}>
         <button type="button" className="primary" onClick={startNew}>
@@ -235,7 +244,7 @@ export function EntriesScreen() {
           <h2>{editing ? "Saisie" : "Consultation"}</h2>
           <div className="form-grid two">
             <label>
-              Journal
+              <LabelWithHelp topic="journal">Journal</LabelWithHelp>
               <select
                 value={journalCode}
                 disabled={!editing}
@@ -258,7 +267,7 @@ export function EntriesScreen() {
               />
             </label>
             <label>
-              Pièce
+              <LabelWithHelp topic="piece">Pièce</LabelWithHelp>
               <input
                 value={pieceRef}
                 disabled={!editing}
@@ -266,7 +275,7 @@ export function EntriesScreen() {
               />
             </label>
             <label>
-              Libellé
+              <LabelWithHelp topic="libelle">Libellé</LabelWithHelp>
               <input
                 value={label}
                 disabled={!editing}
@@ -277,10 +286,18 @@ export function EntriesScreen() {
 
           <div className="line-editor">
             <div className="line-row" style={{ fontSize: "0.8rem", color: "var(--ink-muted)" }}>
-              <span>Compte</span>
-              <span>Tiers</span>
-              <span>TVA</span>
-              <span>Débit</span>
+              <span>
+                <LabelWithHelp topic="numeroCompte">Compte</LabelWithHelp>
+              </span>
+              <span>
+                <LabelWithHelp topic="tiers">Tiers</LabelWithHelp>
+              </span>
+              <span>
+                <LabelWithHelp topic="codeTva">TVA</LabelWithHelp>
+              </span>
+              <span>
+                <LabelWithHelp topic="debitCredit">Débit</LabelWithHelp>
+              </span>
               <span>Crédit</span>
               <span></span>
               <span></span>

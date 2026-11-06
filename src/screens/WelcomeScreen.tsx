@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { save, open } from "@tauri-apps/plugin-dialog";
+import { FieldHelp, LabelWithHelp } from "../components/FieldHelp";
 import { api } from "../lib/api";
 import type { WorkspaceInfo } from "../lib/types";
 
@@ -7,24 +8,75 @@ interface Props {
   onOpened: (info: WorkspaceInfo) => void;
 }
 
+function validateCreate(input: {
+  orgName: string;
+  siren: string;
+  year: string;
+  displayName: string;
+  password: string;
+  password2: string;
+}): string | null {
+  if (input.orgName.trim().length < 2) {
+    return "Indiquez la raison sociale (au moins 2 caractères).";
+  }
+  const siren = input.siren.replace(/\s/g, "");
+  if (!/^\d{9}$/.test(siren)) {
+    return "Le SIREN doit contenir exactement 9 chiffres.";
+  }
+  if (!/^\d{4}$/.test(input.year)) {
+    return "L’exercice doit être une année à 4 chiffres (ex. 2026).";
+  }
+  if (input.displayName.trim().length < 2) {
+    return "Indiquez un profil local (ex. Dirigeant).";
+  }
+  if (input.password.length < 8) {
+    return "Choisissez un mot de passe d’au moins 8 caractères.";
+  }
+  if (input.password !== input.password2) {
+    return "Les mots de passe ne correspondent pas.";
+  }
+  return null;
+}
+
 export function WelcomeScreen({ onOpened }: Props) {
   const [mode, setMode] = useState<"create" | "open">("create");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const [orgName, setOrgName] = useState("Demo SAS");
-  const [siren, setSiren] = useState("123456782");
-  const [year, setYear] = useState("2026");
-  const [displayName, setDisplayName] = useState("Dirigeant");
-  const [password, setPassword] = useState("SecretPass1");
-  const [password2, setPassword2] = useState("SecretPass1");
+  const [orgName, setOrgName] = useState("");
+  const [siren, setSiren] = useState("");
+  const [year, setYear] = useState(String(new Date().getFullYear()));
+  const [displayName, setDisplayName] = useState("");
+  const [password, setPassword] = useState("");
+  const [password2, setPassword2] = useState("");
   const [openPath, setOpenPath] = useState("");
   const [openPassword, setOpenPassword] = useState("");
 
+  const liveHint = useMemo(
+    () =>
+      validateCreate({
+        orgName,
+        siren,
+        year,
+        displayName,
+        password,
+        password2,
+      }),
+    [orgName, siren, year, displayName, password, password2],
+  );
+
   async function handleCreate() {
     setError(null);
-    if (password !== password2) {
-      setError("Les mots de passe ne correspondent pas.");
+    const v = validateCreate({
+      orgName,
+      siren,
+      year,
+      displayName,
+      password,
+      password2,
+    });
+    if (v) {
+      setError(v);
       return;
     }
     setBusy(true);
@@ -41,12 +93,12 @@ export function WelcomeScreen({ onOpened }: Props) {
       const info = await api.createWorkspace({
         path: String(path),
         password,
-        orgName,
-        siren,
+        orgName: orgName.trim(),
+        siren: siren.replace(/\s/g, ""),
         fiscalYearLabel: year,
         startDate: `${year}-01-01`,
         endDate: `${year}-12-31`,
-        displayName,
+        displayName: displayName.trim(),
       });
       onOpened(info);
     } catch (e) {
@@ -87,7 +139,6 @@ export function WelcomeScreen({ onOpened }: Props) {
     setError(null);
     setBusy(true);
     try {
-      // Chemin fixe local (pas de dialogue) — comme les jalons J0–J3
       const path = "/tmp/sascompta-demo/demo.sascompta";
       const info = await api.createDemoWorkspace(path);
       onOpened(info);
@@ -102,11 +153,17 @@ export function WelcomeScreen({ onOpened }: Props) {
     <div className="welcome-wrap">
       <div className="welcome-card">
         <section className="welcome-hero">
+          <p className="eyebrow light">Compta SAS locale</p>
           <h1>SasCompta</h1>
           <p>
-            Comptabilité générale pour une SAS française — workspace local protégé
-            par mot de passe.
+            Créez votre société, suivez le parcours guidé, et tenez une
+            comptabilité claire — même sans formation avancée.
           </p>
+          <ul className="welcome-points">
+            <li>Parcours en 5 étapes</li>
+            <li>Aide sur chaque jargon</li>
+            <li>Rappels TVA &amp; clôture</li>
+          </ul>
         </section>
         <section className="welcome-forms">
           <div className="tabs">
@@ -130,30 +187,44 @@ export function WelcomeScreen({ onOpened }: Props) {
             <div className="form-grid">
               <div className="form-grid two">
                 <label>
-                  Raison sociale
-                  <input value={orgName} onChange={(e) => setOrgName(e.target.value)} />
+                  <LabelWithHelp topic="raisonSociale">Raison sociale</LabelWithHelp>
+                  <input
+                    value={orgName}
+                    placeholder="Ex. Atelier Lumière SAS"
+                    onChange={(e) => setOrgName(e.target.value)}
+                  />
                 </label>
                 <label>
-                  SIREN
-                  <input value={siren} onChange={(e) => setSiren(e.target.value)} />
+                  <LabelWithHelp topic="siren">SIREN</LabelWithHelp>
+                  <input
+                    value={siren}
+                    placeholder="9 chiffres"
+                    inputMode="numeric"
+                    onChange={(e) => setSiren(e.target.value)}
+                  />
                 </label>
               </div>
               <div className="form-grid two">
                 <label>
-                  Exercice
-                  <input value={year} onChange={(e) => setYear(e.target.value)} />
+                  <LabelWithHelp topic="exercice">Exercice</LabelWithHelp>
+                  <input
+                    value={year}
+                    placeholder="2026"
+                    onChange={(e) => setYear(e.target.value)}
+                  />
                 </label>
                 <label>
-                  Profil local
+                  <LabelWithHelp topic="profilLocal">Profil local</LabelWithHelp>
                   <input
                     value={displayName}
+                    placeholder="Dirigeant"
                     onChange={(e) => setDisplayName(e.target.value)}
                   />
                 </label>
               </div>
               <div className="form-grid two">
                 <label>
-                  Mot de passe
+                  <LabelWithHelp topic="motDePasse">Mot de passe</LabelWithHelp>
                   <input
                     type="password"
                     value={password}
@@ -161,7 +232,17 @@ export function WelcomeScreen({ onOpened }: Props) {
                   />
                 </label>
                 <label>
-                  Confirmation
+                  <span className="label-with-help">
+                    Confirmation
+                    <FieldHelp
+                      topic={{
+                        term: "Confirmation",
+                        plain:
+                          "Retapez le même mot de passe pour éviter une faute de frappe.",
+                      }}
+                      compact
+                    />
+                  </span>
                   <input
                     type="password"
                     value={password2}
@@ -169,11 +250,14 @@ export function WelcomeScreen({ onOpened }: Props) {
                   />
                 </label>
               </div>
+              {liveHint && !error && (
+                <p className="hint welcome-live-hint">{liveHint}</p>
+              )}
               <div className="btn-row">
                 <button
                   type="button"
                   className="primary"
-                  disabled={busy}
+                  disabled={busy || Boolean(liveHint)}
                   onClick={() => void handleCreate()}
                 >
                   Créer le workspace
@@ -209,7 +293,7 @@ export function WelcomeScreen({ onOpened }: Props) {
                 </div>
               </label>
               <label>
-                Mot de passe
+                <LabelWithHelp topic="motDePasse">Mot de passe</LabelWithHelp>
                 <input
                   type="password"
                   value={openPassword}
