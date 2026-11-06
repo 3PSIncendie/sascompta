@@ -1,0 +1,56 @@
+# Build installateur Windows (NSIS + MSI) — runner windows-latest (WebView2 + MSVC).
+# Artefacts: .exe (NSIS) et .msi sous src-tauri/target/x86_64-pc-windows-msvc/release/bundle/
+
+name: Windows installer
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+  pull_request:
+    paths:
+      - "src-tauri/**"
+      - "src/**"
+      - "package.json"
+      - ".github/workflows/windows-installer.yml"
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install frontend deps
+        run: npm ci
+
+      - name: Build Windows bundles (NSIS + MSI)
+        run: npm run build:windows
+
+      - name: Upload installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: sascompta-windows-installer
+          path: |
+            src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
+            src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi
+          if-no-files-found: error

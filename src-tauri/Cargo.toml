@@ -1,0 +1,67 @@
+[package]
+name = "sascompta"
+version = "0.4.0"
+description = "Comptabilité SAS française — desktop"
+authors = ["SasCompta"]
+edition = "2021"
+rust-version = "1.83"
+default-run = "sascompta"
+
+[lib]
+name = "sascompta_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "sascompta"
+path = "src/main.rs"
+
+[[bin]]
+name = "seed_demo_workspace"
+path = "src/bin/seed_demo_workspace.rs"
+
+[[bin]]
+name = "demo_export_tax"
+path = "src/bin/demo_export_tax.rs"
+
+[[bin]]
+name = "export_demo_tax"
+path = "src/bin/export_demo_tax.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rusqlite = { version = "0.32", features = ["bundled"] }
+argon2 = "0.5"
+password-hash = "0.5"
+rand_core = { version = "0.6", features = ["getrandom"] }
+chrono = { version = "0.4", features = ["serde"] }
+thiserror = "1"
+printpdf = "0.7"
+base64 = "0.22"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
+
+[[bin]]
+name = "demo_export_assets"
+path = "src/bin/demo_export_assets.rs"
+
+[[bin]]
+name = "demo_export_statements"
+path = "src/bin/demo_export_statements.rs"
+
+[[bin]]
+name = "demo_export_closing"
+path = "src/bin/demo_export_closing.rs"

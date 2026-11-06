@@ -1,0 +1,468 @@
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Organization {
+    pub id: i64,
+    pub name: String,
+    pub siren: String,
+    pub legal_form: String,
+    pub vat_regime: String,
+    pub address: Option<String>,
+    pub capital_cents: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalProfile {
+    pub id: i64,
+    pub display_name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FiscalYear {
+    pub id: i64,
+    pub label: String,
+    pub start_date: String,
+    pub end_date: String,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceInfo {
+    pub path: String,
+    pub organization: Organization,
+    pub fiscal_year: FiscalYear,
+    pub profile: LocalProfile,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateWorkspaceInput {
+    pub path: String,
+    pub password: String,
+    pub org_name: String,
+    pub siren: String,
+    pub fiscal_year_label: String,
+    pub start_date: String,
+    pub end_date: String,
+    pub display_name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Account {
+    pub id: i64,
+    pub number: String,
+    pub label: String,
+    pub class: i32,
+    pub account_type: String,
+    pub is_auxiliary: bool,
+    pub is_custom: bool,
+    pub active: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Journal {
+    pub id: i64,
+    pub code: String,
+    pub label: String,
+    pub journal_type: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EntryLineInput {
+    pub account_number: String,
+    pub label: Option<String>,
+    pub debit_cents: i64,
+    pub credit_cents: i64,
+    pub vat_code: Option<String>,
+    pub third_party_id: Option<i64>,
+    pub comp_aux_type: Option<String>,
+    pub comp_aux_num: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EntryLine {
+    pub id: i64,
+    pub entry_id: i64,
+    pub line_no: i32,
+    pub account_number: String,
+    pub account_label: String,
+    pub label: Option<String>,
+    pub debit_cents: i64,
+    pub credit_cents: i64,
+    pub vat_code: Option<String>,
+    pub third_party_id: Option<i64>,
+    pub third_party_code: Option<String>,
+    pub third_party_name: Option<String>,
+    pub comp_aux_type: Option<String>,
+    pub comp_aux_num: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Entry {
+    pub id: i64,
+    pub journal_code: String,
+    pub entry_date: String,
+    pub piece_ref: String,
+    pub label: String,
+    pub status: String,
+    pub fiscal_year_id: i64,
+    pub ecriture_num: Option<String>,
+    pub reversal_of_id: Option<i64>,
+    pub created_at: String,
+    pub posted_at: Option<String>,
+    pub lines: Vec<EntryLine>,
+    pub attachments: Vec<Attachment>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateEntryInput {
+    pub journal_code: String,
+    pub entry_date: String,
+    pub piece_ref: String,
+    pub label: String,
+    pub lines: Vec<EntryLineInput>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Attachment {
+    pub id: i64,
+    pub entry_id: i64,
+    pub file_name: String,
+    pub file_path: String,
+    pub mime_type: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VatCode {
+    pub code: String,
+    pub label: String,
+    pub rate_bp: i32,
+    pub direction: String,
+    pub active: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThirdParty {
+    pub id: i64,
+    pub code: String,
+    pub name: String,
+    pub kind: String,
+    pub account_number: String,
+    pub active: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateThirdPartyInput {
+    pub code: String,
+    pub name: String,
+    pub kind: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LedgerFilter {
+    pub from_date: Option<String>,
+    pub to_date: Option<String>,
+    pub journal_code: Option<String>,
+    pub account_number: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LedgerMovement {
+    pub entry_id: i64,
+    pub entry_date: String,
+    pub journal_code: String,
+    pub piece_ref: String,
+    pub ecriture_num: Option<String>,
+    pub entry_label: String,
+    pub account_number: String,
+    pub account_label: String,
+    pub line_label: Option<String>,
+    pub debit_cents: i64,
+    pub credit_cents: i64,
+    pub vat_code: Option<String>,
+    pub third_party_code: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BalanceRow {
+    pub account_number: String,
+    pub account_label: String,
+    pub class: i32,
+    pub debit_cents: i64,
+    pub credit_cents: i64,
+    pub solde_debit_cents: i64,
+    pub solde_credit_cents: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BalanceReport {
+    pub rows: Vec<BalanceRow>,
+    pub total_debit_cents: i64,
+    pub total_credit_cents: i64,
+    pub ecart_cents: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VatReportLine {
+    pub code: String,
+    pub label: String,
+    pub direction: String,
+    pub rate_bp: i32,
+    pub base_cents: i64,
+    pub vat_cents: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VatReport {
+    pub lines: Vec<VatReportLine>,
+    pub collected_cents: i64,
+    pub deductible_cents: i64,
+    pub net_cents: i64,
+    pub from_date: String,
+    pub to_date: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuxBalanceRow {
+    pub account_number: String,
+    pub account_label: String,
+    pub aux_code: String,
+    pub aux_label: String,
+    pub debit_cents: i64,
+    pub credit_cents: i64,
+    pub solde_debit_cents: i64,
+    pub solde_credit_cents: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuxBalanceReport {
+    pub rows: Vec<AuxBalanceRow>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FixedAsset {
+    pub id: i64,
+    pub code: String,
+    pub label: String,
+    pub account_number: String,
+    pub amort_account: String,
+    pub expense_account: String,
+    pub acquisition_date: String,
+    pub service_date: String,
+    pub base_cents: i64,
+    pub residual_cents: i64,
+    pub useful_life_years: i32,
+    pub method: String,
+    pub active: bool,
+    pub notes: Option<String>,
+    pub annual_dotation_cents: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateFixedAssetInput {
+    pub code: String,
+    pub label: String,
+    pub account_number: String,
+    pub amort_account: Option<String>,
+    pub expense_account: Option<String>,
+    pub acquisition_date: String,
+    pub service_date: String,
+    pub base_cents: i64,
+    pub residual_cents: i64,
+    pub useful_life_years: i32,
+    pub notes: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DepreciationScheduleRow {
+    pub year_index: i32,
+    pub period_label: String,
+    pub amount_cents: i64,
+    pub cumulative_cents: i64,
+    pub net_book_value_cents: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DepreciationRun {
+    pub id: i64,
+    pub asset_id: i64,
+    pub asset_code: String,
+    pub asset_label: String,
+    pub period_label: String,
+    pub period_start: String,
+    pub period_end: String,
+    pub amount_cents: i64,
+    pub entry_id: Option<i64>,
+    pub ecriture_num: Option<String>,
+    pub journal_code: Option<String>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GenerateDepreciationResult {
+    pub period_label: String,
+    pub created: Vec<DepreciationRun>,
+    pub skipped: Vec<String>,
+    pub total_amount_cents: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StatementLine {
+    pub code: String,
+    pub label: String,
+    pub amount_cents: i64,
+    pub accounts: Vec<String>,
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BalanceSheet {
+    pub as_of: String,
+    pub from_date: String,
+    pub to_date: String,
+    pub actif: Vec<StatementLine>,
+    pub passif: Vec<StatementLine>,
+    pub total_actif_cents: i64,
+    pub total_passif_cents: i64,
+    pub ecart_cents: i64,
+    pub resultat_cents: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IncomeStatement {
+    pub from_date: String,
+    pub to_date: String,
+    pub charges: Vec<StatementLine>,
+    pub produits: Vec<StatementLine>,
+    pub total_charges_cents: i64,
+    pub total_produits_cents: i64,
+    pub resultat_cents: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AnnexAssetRow {
+    pub code: String,
+    pub label: String,
+    pub account_number: String,
+    pub gross_cents: i64,
+    pub cumulative_amort_cents: i64,
+    pub net_cents: i64,
+    pub useful_life_years: i32,
+    pub method: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AnnexDebtRow {
+    pub account_number: String,
+    pub label: String,
+    pub amount_cents: i64,
+    pub nature: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AnnualAnnex {
+    pub as_of: String,
+    pub methods: Vec<String>,
+    pub immobilisations: Vec<AnnexAssetRow>,
+    pub dettes: Vec<AnnexDebtRow>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AnnualStatements {
+    pub organization_name: String,
+    pub siren: String,
+    pub bilan: BalanceSheet,
+    pub compte_resultat: IncomeStatement,
+    pub annexe: AnnualAnnex,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChecklistItem {
+    pub code: String,
+    pub label: String,
+    pub ok: bool,
+    pub detail: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClosingChecklist {
+    pub fiscal_year: FiscalYear,
+    pub items: Vec<ChecklistItem>,
+    pub all_ok: bool,
+    pub resultat_cents: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CloseYearResult {
+    pub closed_year: FiscalYear,
+    pub next_year: FiscalYear,
+    pub an_entry_id: i64,
+    pub an_ecriture_num: Option<String>,
+    pub resultat_cents: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PublicationPackMeta {
+    pub organization_name: String,
+    pub siren: String,
+    pub fiscal_year_label: String,
+    pub from_date: String,
+    pub to_date: String,
+    pub fy_status: String,
+    pub resultat_cents: i64,
+    pub total_actif_cents: i64,
+    pub total_passif_cents: i64,
+    pub balance_ecart_cents: i64,
+    pub generated_at: String,
+    pub disclaimer: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClosingEventInfo {
+    pub id: i64,
+    pub fiscal_year_id: i64,
+    pub closed_at: String,
+    pub an_entry_id: Option<i64>,
+    pub next_fiscal_year_id: Option<i64>,
+    pub pack_path: Option<String>,
+    pub notes: Option<String>,
+}
