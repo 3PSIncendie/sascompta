@@ -19,6 +19,30 @@ export const HELP: Record<string, HelpTopic> = {
       "Numéro à 9 chiffres qui identifie votre société auprès de l’administration. On le trouve sur le Kbis.",
     example: "Ex. : 123 456 782 (sans espaces dans le champ)",
   },
+  siret: {
+    term: "SIRET",
+    plain:
+      "SIREN + 5 chiffres (NIC) = 14 chiffres au total. Il identifie un établissement (siège ou secondaire). Utile sur les factures.",
+    example: "Ex. : 123 456 782 00002 — les 9 premiers chiffres = SIREN",
+  },
+  capital: {
+    term: "Capital social",
+    plain:
+      "Somme apportée par les associés à la création (ou après augmentation). Pour une SAS, le montant est libre ; on le retrouve dans les statuts / Kbis.",
+    example: "Ex. : 1 000,00 € ou 10 000,00 €",
+  },
+  adresse: {
+    term: "Adresse du siège",
+    plain:
+      "Adresse du siège social telle qu’elle figure au Kbis. Elle apparaît sur les documents officiels et le pack de comptes annuels.",
+    example: "Ex. : 12 rue des Lilas, 75011 Paris",
+  },
+  formeJuridique: {
+    term: "Forme juridique",
+    plain:
+      "Type de société. SasCompta cible la SAS (plusieurs associés) et la SASU (associé unique). Le fonctionnement comptable est proche.",
+    example: "SAS ou SASU",
+  },
   exercice: {
     term: "Exercice comptable",
     plain:

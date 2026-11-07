@@ -29,6 +29,7 @@ pub fn run() {
             commands::open_workspace,
             commands::create_demo_workspace,
             commands::get_workspace_info,
+            commands::update_organization,
             commands::close_workspace,
             commands::list_accounts,
             commands::create_account,

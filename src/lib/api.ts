@@ -23,6 +23,7 @@ import type {
   LedgerMovement,
   PublicationPackMeta,
   ThirdParty,
+  UpdateOrganizationInput,
   VatCode,
   VatReport,
   WorkspaceInfo,
@@ -36,6 +37,8 @@ export const api = {
   createDemoWorkspace: (path: string) =>
     invoke<WorkspaceInfo>("create_demo_workspace", { path }),
   getWorkspaceInfo: () => invoke<WorkspaceInfo>("get_workspace_info"),
+  updateOrganization: (input: UpdateOrganizationInput) =>
+    invoke<WorkspaceInfo>("update_organization", { input }),
   closeWorkspace: () => invoke<void>("close_workspace"),
 
   listAccounts: () => invoke<Account[]>("list_accounts"),

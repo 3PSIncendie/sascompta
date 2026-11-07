@@ -256,7 +256,9 @@ export function GuideScreen({ workspace, onNavigate }: Props) {
 
         {error && <div className="error">{error}</div>}
 
-        {step === "societe" && <SocieteStep workspace={workspace} />}
+        {step === "societe" && (
+          <SocieteStep workspace={workspace} onNavigate={onNavigate} />
+        )}
         {step === "plan" && <PlanStep checks={checks} onNavigate={onNavigate} />}
         {step === "ecritures" && (
           <EcrituresStep
@@ -312,7 +314,13 @@ export function GuideScreen({ workspace, onNavigate }: Props) {
   );
 }
 
-function SocieteStep({ workspace }: { workspace: WorkspaceInfo }) {
+function SocieteStep({
+  workspace,
+  onNavigate,
+}: {
+  workspace: WorkspaceInfo;
+  onNavigate: (id: NavId) => void;
+}) {
   const org = workspace.organization;
   const fy = workspace.fiscalYear;
   return (
@@ -320,6 +328,8 @@ function SocieteStep({ workspace }: { workspace: WorkspaceInfo }) {
       <p>
         Votre fichier workspace contient déjà la fiche société. Relisez ces
         informations : elles serviront aux exports et au dépôt des comptes.
+        Pour corriger un champ, ouvrez <strong>Ma SAS</strong> → « Modifier les
+        paramètres ».
       </p>
       <div className="meta-grid">
         <div className="meta-item">
@@ -336,6 +346,12 @@ function SocieteStep({ workspace }: { workspace: WorkspaceInfo }) {
         </div>
         <div className="meta-item">
           <span>
+            <LabelHelp topic="siret" label="SIRET" />
+          </span>
+          <strong>{org.siret || "—"}</strong>
+        </div>
+        <div className="meta-item">
+          <span>
             <LabelHelp topic="regimeTva" label="Régime TVA" />
           </span>
           <strong>{org.vatRegime}</strong>
@@ -348,6 +364,15 @@ function SocieteStep({ workspace }: { workspace: WorkspaceInfo }) {
             {fy.label} · {fy.startDate} → {fy.endDate}
           </strong>
         </div>
+      </div>
+      <div className="btn-row">
+        <button
+          type="button"
+          className="secondary"
+          onClick={() => onNavigate("ma-sas")}
+        >
+          Ouvrir Ma SAS pour éditer
+        </button>
       </div>
     </div>
   );

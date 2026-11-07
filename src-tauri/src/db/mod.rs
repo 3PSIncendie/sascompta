@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use thiserror::Error;
 
-pub const SCHEMA_VERSION: i32 = 6;
+pub const SCHEMA_VERSION: i32 = 7;
 pub const DEMO_PASSWORD: &str = "SecretPass1";
 
 #[derive(Debug, Error)]
@@ -180,6 +180,7 @@ pub fn migrate(conn: &Connection) -> DbResult<()> {
 
     assets::migrate_assets(conn)?;
     closing::migrate_closing(conn)?;
+    migrate_organization_siret(conn)?;
 
     let version: i32 = conn
         .query_row(
@@ -202,6 +203,18 @@ pub fn migrate(conn: &Connection) -> DbResult<()> {
     Ok(())
 }
 
+fn migrate_organization_siret(conn: &Connection) -> DbResult<()> {
+    let mut stmt = conn.prepare("PRAGMA table_info(organization)")?;
+    let cols: Vec<String> = stmt
+        .query_map([], |r| r.get::<_, String>(1))?
+        .filter_map(|r| r.ok())
+        .collect();
+    if !cols.iter().any(|c| c == "siret") {
+        conn.execute("ALTER TABLE organization ADD COLUMN siret TEXT", [])?;
+    }
+    Ok(())
+}
+
 pub fn ensure_seeds(conn: &Connection) -> DbResult<()> {
     pcg::seed_journals(conn)?;
     pcg::seed_accounts(conn)?;
@@ -209,12 +222,7 @@ pub fn ensure_seeds(conn: &Connection) -> DbResult<()> {
     Ok(())
 }
 
-fn validate_siren(siren: &str) -> DbResult<()> {
-    let digits: Vec<u32> = siren.chars().filter_map(|c| c.to_digit(10)).collect();
-    if digits.len() != 9 {
-        return Err("SIREN invalide (9 chiffres requis)".into());
-    }
-    // Luhn
+fn luhn_ok(digits: &[u32]) -> bool {
     let mut sum = 0u32;
     for (i, d) in digits.iter().rev().enumerate() {
         let mut v = *d;
@@ -226,8 +234,59 @@ fn validate_siren(siren: &str) -> DbResult<()> {
         }
         sum += v;
     }
-    if sum % 10 != 0 {
+    sum % 10 == 0
+}
+
+fn validate_siren(siren: &str) -> DbResult<()> {
+    let digits: Vec<u32> = siren.chars().filter_map(|c| c.to_digit(10)).collect();
+    if digits.len() != 9 {
+        return Err("SIREN invalide (9 chiffres requis)".into());
+    }
+    if !luhn_ok(&digits) {
         return Err("SIREN invalide (clé de contrôle)".into());
+    }
+    Ok(())
+}
+
+fn normalize_digits(raw: &str) -> String {
+    raw.chars().filter(|c| c.is_ascii_digit()).collect()
+}
+
+fn validate_siret(siret: &str, siren: &str) -> DbResult<()> {
+    let digits: Vec<u32> = siret.chars().filter_map(|c| c.to_digit(10)).collect();
+    if digits.len() != 14 {
+        return Err("SIRET invalide (14 chiffres requis)".into());
+    }
+    if !luhn_ok(&digits) {
+        return Err("SIRET invalide (clé de contrôle)".into());
+    }
+    let siren_digits = normalize_digits(siren);
+    let siret_siren: String = digits.iter().take(9).map(|d| char::from_digit(*d, 10).unwrap()).collect();
+    if siret_siren != siren_digits {
+        return Err("Le SIRET doit commencer par le SIREN saisi".into());
+    }
+    Ok(())
+}
+
+const ALLOWED_LEGAL_FORMS: &[&str] = &["SAS", "SASU"];
+const ALLOWED_VAT_REGIMES: &[&str] = &["reel_mensuel", "reel_trimestriel", "franchise"];
+
+fn validate_date_ymd(label: &str, value: &str) -> DbResult<()> {
+    let parts: Vec<&str> = value.split('-').collect();
+    if parts.len() != 3 {
+        return Err(format!("{label} : format AAAA-MM-JJ attendu").into());
+    }
+    let y: i32 = parts[0]
+        .parse()
+        .map_err(|_| format!("{label} : année invalide"))?;
+    let m: u32 = parts[1]
+        .parse()
+        .map_err(|_| format!("{label} : mois invalide"))?;
+    let d: u32 = parts[2]
+        .parse()
+        .map_err(|_| format!("{label} : jour invalide"))?;
+    if !(1..=12).contains(&m) || !(1..=31).contains(&d) || y < 1990 || y > 2100 {
+        return Err(format!("{label} : date hors plage raisonnable").into());
     }
     Ok(())
 }
@@ -255,8 +314,8 @@ pub fn create_workspace(input: &CreateWorkspaceInput) -> DbResult<WorkspaceInfo>
         params![input.display_name, hash],
     )?;
     conn.execute(
-        "INSERT INTO organization(id, name, siren, legal_form, vat_regime, capital_cents)
-         VALUES (1, ?1, ?2, 'SAS', 'réel normal', 5000000)",
+        "INSERT INTO organization(id, name, siren, siret, legal_form, vat_regime, capital_cents)
+         VALUES (1, ?1, ?2, NULL, 'SAS', 'reel_mensuel', 5000000)",
         params![input.org_name, input.siren],
     )?;
     conn.execute(
@@ -286,22 +345,31 @@ pub fn open_workspace(path: &str, password: &str) -> DbResult<(Connection, Works
     Ok((conn, info))
 }
 
-pub fn load_workspace_info(conn: &Connection, path: &Path) -> DbResult<WorkspaceInfo> {
-    let organization = conn.query_row(
-        "SELECT id, name, siren, legal_form, vat_regime, address, capital_cents FROM organization WHERE id = 1",
+fn map_organization(r: &rusqlite::Row<'_>) -> rusqlite::Result<Organization> {
+    Ok(Organization {
+        id: r.get(0)?,
+        name: r.get(1)?,
+        siren: r.get(2)?,
+        siret: r.get(3)?,
+        legal_form: r.get(4)?,
+        vat_regime: r.get(5)?,
+        address: r.get(6)?,
+        capital_cents: r.get(7)?,
+    })
+}
+
+pub fn load_organization(conn: &Connection) -> DbResult<Organization> {
+    conn.query_row(
+        "SELECT id, name, siren, siret, legal_form, vat_regime, address, capital_cents
+         FROM organization WHERE id = 1",
         [],
-        |r| {
-            Ok(Organization {
-                id: r.get(0)?,
-                name: r.get(1)?,
-                siren: r.get(2)?,
-                legal_form: r.get(3)?,
-                vat_regime: r.get(4)?,
-                address: r.get(5)?,
-                capital_cents: r.get(6)?,
-            })
-        },
-    )?;
+        map_organization,
+    )
+    .map_err(|e| e.into())
+}
+
+pub fn load_workspace_info(conn: &Connection, path: &Path) -> DbResult<WorkspaceInfo> {
+    let organization = load_organization(conn)?;
     let fiscal_year = conn.query_row(
         "SELECT id, label, start_date, end_date, status FROM fiscal_year ORDER BY id DESC LIMIT 1",
         [],
@@ -331,6 +399,119 @@ pub fn load_workspace_info(conn: &Connection, path: &Path) -> DbResult<Workspace
         fiscal_year,
         profile,
     })
+}
+
+/// Met à jour la fiche société, le profil local et (si ouvert) l’exercice courant.
+pub fn update_organization(
+    conn: &Connection,
+    path: &Path,
+    input: &UpdateOrganizationInput,
+) -> DbResult<WorkspaceInfo> {
+    let name = input.name.trim();
+    if name.len() < 2 {
+        return Err("Indiquez la raison sociale (au moins 2 caractères)".into());
+    }
+    let siren = normalize_digits(&input.siren);
+    validate_siren(&siren)?;
+
+    let siret = match input.siret.as_ref().map(|s| s.trim()).filter(|s| !s.is_empty()) {
+        Some(raw) => {
+            let digits = normalize_digits(raw);
+            validate_siret(&digits, &siren)?;
+            Some(digits)
+        }
+        None => None,
+    };
+
+    let legal_form = input.legal_form.trim().to_uppercase();
+    if !ALLOWED_LEGAL_FORMS.contains(&legal_form.as_str()) {
+        return Err("Forme juridique : choisissez SAS ou SASU".into());
+    }
+
+    let vat_regime = input.vat_regime.trim().to_lowercase();
+    if !ALLOWED_VAT_REGIMES.contains(&vat_regime.as_str()) {
+        return Err(
+            "Régime TVA : reel_mensuel, reel_trimestriel ou franchise".into(),
+        );
+    }
+
+    if input.capital_cents < 0 {
+        return Err("Le capital ne peut pas être négatif".into());
+    }
+
+    let display_name = input.display_name.trim();
+    if display_name.len() < 2 {
+        return Err("Indiquez un profil local (au moins 2 caractères)".into());
+    }
+
+    let address = input
+        .address
+        .as_ref()
+        .map(|a| a.trim().to_string())
+        .filter(|a| !a.is_empty());
+
+    let fy_label = input.fiscal_year_label.trim();
+    if fy_label.is_empty() {
+        return Err("Indiquez le libellé d’exercice".into());
+    }
+    validate_date_ymd("Date de début", &input.start_date)?;
+    validate_date_ymd("Date de fin", &input.end_date)?;
+    if input.start_date > input.end_date {
+        return Err("La date de début doit précéder la date de fin".into());
+    }
+
+    let current = load_workspace_info(conn, path)?;
+
+    conn.execute(
+        "UPDATE organization SET
+            name = ?1,
+            siren = ?2,
+            siret = ?3,
+            legal_form = ?4,
+            vat_regime = ?5,
+            address = ?6,
+            capital_cents = ?7
+         WHERE id = 1",
+        params![
+            name,
+            siren,
+            siret,
+            legal_form,
+            vat_regime,
+            address,
+            input.capital_cents
+        ],
+    )?;
+
+    conn.execute(
+        "UPDATE local_profile SET display_name = ?1 WHERE id = 1",
+        params![display_name],
+    )?;
+
+    if current.fiscal_year.status == "open" {
+        let n = conn.execute(
+            "UPDATE fiscal_year SET label = ?1, start_date = ?2, end_date = ?3
+             WHERE id = ?4 AND status = 'open'",
+            params![
+                fy_label,
+                input.start_date,
+                input.end_date,
+                current.fiscal_year.id
+            ],
+        )?;
+        if n == 0 {
+            return Err("Exercice courant introuvable ou non ouvert".into());
+        }
+    } else if fy_label != current.fiscal_year.label
+        || input.start_date != current.fiscal_year.start_date
+        || input.end_date != current.fiscal_year.end_date
+    {
+        return Err(
+            "L’exercice n’est plus ouvert : les dates ne peuvent pas être modifiées".into(),
+        );
+    }
+
+    load_workspace_info(conn, path)
 }
 
 pub fn create_demo_workspace(path: &Path) -> DbResult<WorkspaceInfo> {
@@ -409,5 +590,69 @@ mod tests {
             )
             .unwrap();
         assert!(n >= 10, "expected >=10 posted, got {n}");
+    }
+
+    #[test]
+    fn update_organization_fields() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("org.sascompta");
+        let input = CreateWorkspaceInput {
+            path: path.display().to_string(),
+            password: "SecretPass1".into(),
+            org_name: "Demo SAS".into(),
+            siren: "123456782".into(),
+            fiscal_year_label: "2026".into(),
+            start_date: "2026-01-01".into(),
+            end_date: "2026-12-31".into(),
+            display_name: "Test".into(),
+        };
+        create_workspace(&input).unwrap();
+        let conn = open_connection(&path).unwrap();
+        let updated = update_organization(
+            &conn,
+            &path,
+            &UpdateOrganizationInput {
+                name: "Atelier Lumière SAS".into(),
+                siren: "123456782".into(),
+                siret: Some("12345678200002".into()),
+                legal_form: "SAS".into(),
+                vat_regime: "reel_trimestriel".into(),
+                address: Some("12 rue des Lilas\n75011 Paris".into()),
+                capital_cents: 10_000_00,
+                display_name: "Marie".into(),
+                fiscal_year_label: "2026".into(),
+                start_date: "2026-01-01".into(),
+                end_date: "2026-12-31".into(),
+            },
+        )
+        .unwrap();
+        assert_eq!(updated.organization.name, "Atelier Lumière SAS");
+        assert_eq!(
+            updated.organization.siret.as_deref(),
+            Some("12345678200002")
+        );
+        assert_eq!(updated.organization.vat_regime, "reel_trimestriel");
+        assert_eq!(updated.organization.capital_cents, 10_000_00);
+        assert_eq!(updated.profile.display_name, "Marie");
+        assert!(updated.organization.address.as_ref().unwrap().contains("Lilas"));
+
+        let bad = update_organization(
+            &conn,
+            &path,
+            &UpdateOrganizationInput {
+                name: "X".into(),
+                siren: "123456782".into(),
+                siret: Some("12345678200099".into()), // bad Luhn
+                legal_form: "SAS".into(),
+                vat_regime: "reel_mensuel".into(),
+                address: None,
+                capital_cents: 100,
+                display_name: "Marie".into(),
+                fiscal_year_label: "2026".into(),
+                start_date: "2026-01-01".into(),
+                end_date: "2026-12-31".into(),
+            },
+        );
+        assert!(bad.is_err());
     }
 }
