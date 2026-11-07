@@ -411,7 +411,9 @@ function EcrituresStep({
         Une écriture raconte un fait économique en{" "}
         <LabelHelp topic="debitCredit" label="débit / crédit" />. Les deux
         colonnes doivent être égales. Exemple : vente 120 € TTC = client 120 /
-        prestation 100 + TVA 20.
+        prestation 100 + TVA 20. Sur Écritures, la{" "}
+        <LabelHelp topic="saisieGuidee" label="saisie guidée" /> remplit la TVA
+        (445…) et la contrepartie pour vous.
       </p>
       <div className="summary-strip">
         <span>

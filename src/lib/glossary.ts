@@ -76,6 +76,24 @@ export const HELP: Record<string, HelpTopic> = {
       "En partie double, chaque mouvement a deux côtés qui doivent totaliser la même somme. L’écart doit être à zéro avant validation.",
     example: "Achat 120 € TTC : débit charges + TVA, crédit fournisseur 120 €",
   },
+  saisieGuidee: {
+    term: "Saisie guidée",
+    plain:
+      "Vous indiquez une seule intention (montant HT, compte, TVA ou non). SasCompta propose automatiquement la ligne de TVA (445…) et la contrepartie pour équilibrer. Vous pouvez encore tout modifier.",
+    example: "Vente 100 € HT à 20 % → crédit 706 100, crédit 44571 20, débit 411 120",
+  },
+  montantHt: {
+    term: "Montant HT",
+    plain:
+      "Hors taxes : le prix sans TVA. La TVA se calcule ensuite (ex. 20 % de 100 € = 20 €). Le TTC = HT + TVA.",
+    example: "Facture 120 € TTC à 20 % → HT = 100 €",
+  },
+  contrepartie: {
+    term: "Contrepartie",
+    plain:
+      "Le compte qui « balance » l’opération côté client, fournisseur ou banque. En vente on débite souvent 411 ; en achat on crédite 401.",
+    example: "Vente → 411 Clients ; achat → 401 Fournisseurs ; paiement immédiat → 512 Banque",
+  },
   tva: {
     term: "TVA",
     plain:
@@ -86,6 +104,12 @@ export const HELP: Record<string, HelpTopic> = {
     plain:
       "Étiquette sur une ligne d’écriture pour indiquer le taux et le sens (collectée / déductible). Sert au brouillon CA3.",
     example: "Ex. : T20C = collectée 20 %, T20D = déductible 20 %",
+  },
+  compteTva: {
+    term: "Compte TVA (445…)",
+    plain:
+      "Cases du plan pour la TVA : 44571 = TVA collectée (ventes), 44566 = TVA déductible (achats). La saisie guidée les remplit pour vous.",
+    example: "Vente TTC → crédit 44571 ; achat TTC → débit 44566",
   },
   ca3: {
     term: "CA3",

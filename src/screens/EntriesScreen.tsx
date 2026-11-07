@@ -2,7 +2,16 @@ import { useEffect, useMemo, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { LabelWithHelp } from "../components/FieldHelp";
 import { api } from "../lib/api";
-import { formatEuros, parseEurosToCents } from "../lib/money";
+import {
+  buildGuidedLines,
+  DEFAULT_COUNTERPART,
+  defaultVatCodeFor,
+  eurosStringsFromLines,
+  suggestHtAccounts,
+  vatCodesForKind,
+  type GuidedKind,
+} from "../lib/guidedEntry";
+import { formatEuros, formatRateBp, parseEurosToCents } from "../lib/money";
 import type {
   Account,
   CreateEntryInput,
@@ -21,6 +30,8 @@ const emptyLine = (): EntryLineInput => ({
   thirdPartyId: null,
 });
 
+type EntryMode = "libre" | "guidee";
+
 export function EntriesScreen() {
   const [entries, setEntries] = useState<Entry[]>([]);
   const [journals, setJournals] = useState<Journal[]>([]);
@@ -30,6 +41,7 @@ export function EntriesScreen() {
   const [selected, setSelected] = useState<Entry | null>(null);
   const [editing, setEditing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [mode, setMode] = useState<EntryMode>("guidee");
 
   const [journalCode, setJournalCode] = useState("OD");
   const [entryDate, setEntryDate] = useState("2026-05-01");
@@ -38,6 +50,19 @@ export function EntriesScreen() {
   const [lines, setLines] = useState<EntryLineInput[]>([emptyLine(), emptyLine()]);
   const [debitStr, setDebitStr] = useState<string[]>(["", ""]);
   const [creditStr, setCreditStr] = useState<string[]>(["", ""]);
+
+  const [guidedKind, setGuidedKind] = useState<GuidedKind>("vente");
+  const [guidedHtAccount, setGuidedHtAccount] = useState("706");
+  const [guidedHtStr, setGuidedHtStr] = useState("100,00");
+  const [guidedWithVat, setGuidedWithVat] = useState(true);
+  const [guidedVatCode, setGuidedVatCode] = useState("T20C");
+  const [guidedCounterpart, setGuidedCounterpart] = useState(
+    DEFAULT_COUNTERPART.vente,
+  );
+  const [guidedThirdPartyId, setGuidedThirdPartyId] = useState<number | null>(
+    null,
+  );
+  const [guidedHint, setGuidedHint] = useState<string | null>(null);
 
   async function reload() {
     const [e, j, a, v, t] = await Promise.all([
@@ -64,16 +89,119 @@ export function EntriesScreen() {
     return { d, c, ok: d === c && d > 0 };
   }, [lines]);
 
+  const guidedVatOptions = useMemo(
+    () => vatCodesForKind(guidedKind, vatCodes),
+    [guidedKind, vatCodes],
+  );
+
+  const guidedHtAccounts = useMemo(
+    () => suggestHtAccounts(guidedKind, accounts),
+    [guidedKind, accounts],
+  );
+
+  const selectedVat = guidedVatOptions.find((v) => v.code === guidedVatCode);
+  const preview = useMemo(() => {
+    const ht = parseEurosToCents(guidedHtStr);
+    if (ht <= 0) return null;
+    return buildGuidedLines({
+      kind: guidedKind,
+      htAccount: guidedHtAccount,
+      htCents: ht,
+      withVat: guidedWithVat,
+      vatCode: guidedWithVat ? guidedVatCode : null,
+      rateBp: guidedWithVat ? (selectedVat?.rateBp ?? 0) : 0,
+      counterpartAccount: guidedCounterpart,
+      thirdPartyId: guidedThirdPartyId,
+    });
+  }, [
+    guidedHtStr,
+    guidedKind,
+    guidedHtAccount,
+    guidedWithVat,
+    guidedVatCode,
+    selectedVat?.rateBp,
+    guidedCounterpart,
+    guidedThirdPartyId,
+  ]);
+
+  function applyKindDefaults(kind: GuidedKind) {
+    setGuidedKind(kind);
+    setGuidedCounterpart(DEFAULT_COUNTERPART[kind]);
+    const preferredHt = kind === "vente" ? "706" : "606";
+    const htList = suggestHtAccounts(kind, accounts);
+    setGuidedHtAccount(
+      htList.some((a) => a.number === preferredHt)
+        ? preferredHt
+        : (htList[0]?.number ?? ""),
+    );
+    const def = defaultVatCodeFor(kind, 2000, vatCodes);
+    if (def) setGuidedVatCode(def.code);
+    setJournalCode(kind === "vente" ? "VTE" : "ACH");
+    setGuidedHint(null);
+  }
+
+  function generateFromGuided() {
+    setError(null);
+    const ht = parseEurosToCents(guidedHtStr);
+    if (ht <= 0) {
+      setError("Indiquez un montant HT positif.");
+      return;
+    }
+    if (!guidedHtAccount) {
+      setError("Choisissez le compte de charge ou de produit.");
+      return;
+    }
+    if (!guidedCounterpart) {
+      setError("Choisissez le compte de contrepartie.");
+      return;
+    }
+    if (guidedWithVat) {
+      const code = guidedVatOptions.find((v) => v.code === guidedVatCode);
+      if (!code) {
+        setError("Choisissez un code TVA adapté (collectée ou déductible).");
+        return;
+      }
+    }
+    const result = buildGuidedLines({
+      kind: guidedKind,
+      htAccount: guidedHtAccount,
+      htCents: ht,
+      withVat: guidedWithVat,
+      vatCode: guidedWithVat ? guidedVatCode : null,
+      rateBp: guidedWithVat ? (selectedVat?.rateBp ?? 0) : 0,
+      counterpartAccount: guidedCounterpart,
+      thirdPartyId: guidedThirdPartyId,
+    });
+    setLines(result.lines);
+    const strs = eurosStringsFromLines(result.lines);
+    setDebitStr(strs.debitStr);
+    setCreditStr(strs.creditStr);
+    setMode("libre");
+    const vatPart =
+      result.vatCents > 0
+        ? ` + TVA ${formatEuros(result.vatCents)} (${result.vatAccount})`
+        : " (sans TVA)";
+    setGuidedHint(
+      `Lignes générées : HT ${formatEuros(result.htCents)}${vatPart} → TTC ${formatEuros(result.ttcCents)}. Vous pouvez encore tout modifier ci-dessous.`,
+    );
+  }
+
   function startNew() {
     setSelected(null);
     setEditing(true);
-    setJournalCode("OD");
+    setJournalCode("VTE");
     setEntryDate("2026-05-01");
     setPieceRef("");
     setLabel("");
     setLines([emptyLine(), emptyLine()]);
     setDebitStr(["", ""]);
     setCreditStr(["", ""]);
+    setMode("guidee");
+    applyKindDefaults("vente");
+    setGuidedHtStr("100,00");
+    setGuidedWithVat(true);
+    setGuidedThirdPartyId(null);
+    setGuidedHint(null);
   }
 
   function loadEntry(e: Entry) {
@@ -98,6 +226,8 @@ export function EntriesScreen() {
     setCreditStr(
       ls.map((l) => (l.creditCents ? (l.creditCents / 100).toFixed(2) : "")),
     );
+    setMode("libre");
+    setGuidedHint(null);
   }
 
   function updateLine(i: number, patch: Partial<EntryLineInput>) {
@@ -188,10 +318,15 @@ export function EntriesScreen() {
         débit doit égaler le total crédit avant validation.
       </p>
       <aside className="help-callout">
-        <strong>Exemple simple</strong>
+        <strong>Pour débuter</strong>
         <p>
-          Vente 120 € TTC : débit 411 (client) 120 · crédit 706 (prestation) 100
-          · crédit 44571 (TVA) 20. Puis validez.
+          Préférez la <LabelWithHelp topic="saisieGuidee">saisie guidée</LabelWithHelp>{" "}
+          : une ligne d’intention (montant{" "}
+          <LabelWithHelp topic="montantHt">HT</LabelWithHelp>, compte, TVA oui/non)
+          génère automatiquement la ligne{" "}
+          <LabelWithHelp topic="compteTva">445…</LabelWithHelp> et la{" "}
+          <LabelWithHelp topic="contrepartie">contrepartie</LabelWithHelp>. Tout reste
+          modifiable ensuite.
         </p>
       </aside>
 
@@ -283,6 +418,189 @@ export function EntriesScreen() {
               />
             </label>
           </div>
+
+          {editing && (
+            <div className="guided-panel">
+              <div className="mode-toggle" role="tablist" aria-label="Mode de saisie">
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={mode === "guidee"}
+                  className={mode === "guidee" ? "active" : ""}
+                  onClick={() => setMode("guidee")}
+                >
+                  Saisie guidée
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={mode === "libre"}
+                  className={mode === "libre" ? "active" : ""}
+                  onClick={() => setMode("libre")}
+                >
+                  Saisie libre
+                </button>
+              </div>
+
+              {mode === "guidee" && (
+                <>
+                  <p className="hint">
+                    Remplissez une intention ; les lignes débit/crédit sont proposées
+                    automatiquement, puis éditables.
+                  </p>
+                  <div className="form-grid two">
+                    <label>
+                      Nature
+                      <select
+                        value={guidedKind}
+                        onChange={(e) =>
+                          applyKindDefaults(e.target.value as GuidedKind)
+                        }
+                      >
+                        <option value="vente">Vente (produit)</option>
+                        <option value="achat">Achat (charge)</option>
+                      </select>
+                    </label>
+                    <label>
+                      <LabelWithHelp topic="numeroCompte">
+                        Compte HT
+                      </LabelWithHelp>
+                      <select
+                        value={guidedHtAccount}
+                        onChange={(e) => setGuidedHtAccount(e.target.value)}
+                      >
+                        <option value="">—</option>
+                        {guidedHtAccounts.map((a) => (
+                          <option key={a.number} value={a.number}>
+                            {a.number} — {a.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label>
+                      <LabelWithHelp topic="montantHt">Montant HT</LabelWithHelp>
+                      <input
+                        value={guidedHtStr}
+                        onChange={(e) => setGuidedHtStr(e.target.value)}
+                        inputMode="decimal"
+                        placeholder="100,00"
+                      />
+                    </label>
+                    <label>
+                      <LabelWithHelp topic="contrepartie">
+                        Contrepartie
+                      </LabelWithHelp>
+                      <select
+                        value={guidedCounterpart}
+                        onChange={(e) => setGuidedCounterpart(e.target.value)}
+                      >
+                        {accounts
+                          .filter(
+                            (a) =>
+                              a.number.startsWith("401") ||
+                              a.number.startsWith("411") ||
+                              a.number.startsWith("512") ||
+                              a.number.startsWith("530") ||
+                              a.number === guidedCounterpart,
+                          )
+                          .map((a) => (
+                            <option key={a.number} value={a.number}>
+                              {a.number} — {a.label}
+                            </option>
+                          ))}
+                      </select>
+                    </label>
+                    <label>
+                      <LabelWithHelp topic="tva">TVA</LabelWithHelp>
+                      <select
+                        value={guidedWithVat ? "oui" : "non"}
+                        onChange={(e) =>
+                          setGuidedWithVat(e.target.value === "oui")
+                        }
+                      >
+                        <option value="oui">Oui — calculer et ventiler</option>
+                        <option value="non">Non — franchise / exonéré</option>
+                      </select>
+                    </label>
+                    {guidedWithVat && (
+                      <label>
+                        <LabelWithHelp topic="codeTva">Taux / code</LabelWithHelp>
+                        <select
+                          value={guidedVatCode}
+                          onChange={(e) => setGuidedVatCode(e.target.value)}
+                        >
+                          {guidedVatOptions.map((v) => (
+                            <option key={v.code} value={v.code}>
+                              {v.code} — {formatRateBp(v.rateBp)} ({v.label})
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    )}
+                    <label>
+                      <LabelWithHelp topic="tiers">Tiers (optionnel)</LabelWithHelp>
+                      <select
+                        value={guidedThirdPartyId ?? ""}
+                        onChange={(e) =>
+                          setGuidedThirdPartyId(
+                            e.target.value ? Number(e.target.value) : null,
+                          )
+                        }
+                      >
+                        <option value="">—</option>
+                        {tiers
+                          .filter((t) =>
+                            guidedKind === "vente"
+                              ? t.kind === "customer" || t.accountNumber.startsWith("411")
+                              : t.kind === "supplier" || t.accountNumber.startsWith("401"),
+                          )
+                          .map((t) => (
+                            <option key={t.id} value={t.id}>
+                              {t.code} {t.name}
+                            </option>
+                          ))}
+                      </select>
+                    </label>
+                  </div>
+
+                  {preview && preview.htCents > 0 && (
+                    <div className="summary-strip guided-preview">
+                      <span>
+                        HT <strong>{formatEuros(preview.htCents)}</strong>
+                      </span>
+                      <span>
+                        TVA{" "}
+                        <strong>
+                          {preview.vatCents
+                            ? `${formatEuros(preview.vatCents)} → ${preview.vatAccount}`
+                            : "—"}
+                        </strong>
+                      </span>
+                      <span>
+                        TTC <strong>{formatEuros(preview.ttcCents)}</strong>
+                      </span>
+                      <span>
+                        {preview.lines.length} ligne
+                        {preview.lines.length > 1 ? "s" : ""}
+                      </span>
+                    </div>
+                  )}
+
+                  <div className="btn-row">
+                    <button
+                      type="button"
+                      className="primary"
+                      onClick={generateFromGuided}
+                    >
+                      Générer les lignes
+                    </button>
+                  </div>
+                </>
+              )}
+
+              {guidedHint && <p className="ok">{guidedHint}</p>}
+            </div>
+          )}
 
           <div className="line-editor">
             <div className="line-row" style={{ fontSize: "0.8rem", color: "var(--ink-muted)" }}>
