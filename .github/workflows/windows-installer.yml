@@ -102,3 +102,27 @@ jobs:
           updaterJsonPreferNsis: true
           projectPath: .
           args: --target x86_64-pc-windows-msvc --bundles nsis,msi
+
+      # L’updater desktop fait un GET non authentifié. Sur un dépôt privé, GitHub
+      # répond 404 même si la Release existe → « impossible de vérifier les mises à jour ».
+      - name: Verify latest.json is publicly reachable
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          LATEST_URL: https://github.com/${{ github.repository }}/releases/latest/download/latest.json
+        run: |
+          set -euo pipefail
+          code=""
+          for i in 1 2 3 4 5 6; do
+            code=$(curl -sS -o /tmp/sascompta-latest.json -w "%{http_code}" -L "$LATEST_URL" || echo "000")
+            if [ "$code" = "200" ]; then
+              echo "OK: latest.json public (HTTP 200)"
+              head -c 400 /tmp/sascompta-latest.json || true
+              echo
+              exit 0
+            fi
+            echo "tentative $i: HTTP $code — nouvel essai dans 10s…"
+            sleep 10
+          done
+          echo "::error::latest.json inaccessible sans authentification (HTTP ${code}). L’updater Tauri utilise un GET anonyme vers ${LATEST_URL}. Rendez le dépôt public (Settings → Danger Zone → Change visibility) ou hébergez latest.json + installateurs sur une URL publique, puis republiez le tag."
+          exit 1
