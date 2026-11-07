@@ -7,7 +7,7 @@ Stack : **Tauri 2** + **React** + **TypeScript** + **Vite** + **SQLite** (fichie
 ## Prérequis
 
 - Node 20+
-- Rust **1.83** (`edition = "2021"`)
+- Rust **1.90+** (`edition = "2021"`, `rust-version = "1.90"`)
 
 ## Lancer
 
@@ -23,6 +23,13 @@ Workspace démo : mot de passe `SecretPass1`, Demo SAS, SIREN `123456782`, exerc
 ```bash
 npm run check   # lint + typecheck + vitest + cargo test
 ```
+
+## Auto-update (Windows)
+
+L’app vérifie les mises à jour au démarrage et propose un bouton manuel (barre latérale).
+Les releases signées sont publiées depuis les tags `v*` (GitHub Actions + `latest.json`).
+
+Secrets dépôt à configurer : `TAURI_SIGNING_PRIVATE_KEY` (et optionnellement `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`).
 
 ## CLI
 
