@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { AppShell } from "./components/AppShell";
 import { DeadlineReminders } from "./components/DeadlineReminders";
+import { UpdateChecker } from "./components/UpdateChecker";
 import { WelcomeScreen } from "./screens/WelcomeScreen";
 import { GuideScreen } from "./screens/GuideScreen";
 import { MaSasScreen } from "./screens/MaSasScreen";
@@ -72,6 +73,7 @@ export default function App() {
   if (!workspace) {
     return (
       <div className="app-shell welcome">
+        <UpdateChecker checkOnStartup variant="banner" />
         <WelcomeScreen onOpened={handleOpened} />
       </div>
     );
@@ -84,6 +86,7 @@ export default function App() {
       onNav={setNav}
       onClose={() => void handleClose()}
     >
+      <UpdateChecker checkOnStartup variant="banner" />
       {nav !== "guide" && <DeadlineReminders workspace={workspace} variant="banner" />}
       {nav === "guide" && (
         <GuideScreen workspace={workspace} onNavigate={setNav} />

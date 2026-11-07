@@ -1,4 +1,5 @@
 import { DeadlineBadge } from "./DeadlineReminders";
+import { UpdateChecker } from "./UpdateChecker";
 import type { NavId, WorkspaceInfo } from "../lib/types";
 
 const NAV: { id: NavId; label: string }[] = [
@@ -46,6 +47,7 @@ export function AppShell({ workspace, nav, onNav, onClose, children }: Props) {
           ))}
         </nav>
         <div className="sidebar-footer">
+          <UpdateChecker variant="button" />
           <button
             type="button"
             className="ghost sidebar-close"

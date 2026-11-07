@@ -1,5 +1,10 @@
 # Build installateur Windows (NSIS + MSI) — runner windows-latest (WebView2 + MSVC).
-# Artefacts: .exe (NSIS) et .msi sous src-tauri/target/x86_64-pc-windows-msvc/release/bundle/
+# Artefacts: .exe (NSIS), .msi, signatures .sig.
+# Sur tag v* : GitHub Release via tauri-action (+ latest.json pour l’updater).
+#
+# Secrets requis pour signer les artefacts updater :
+#   TAURI_SIGNING_PRIVATE_KEY          (obligatoire)
+#   TAURI_SIGNING_PRIVATE_KEY_PASSWORD (optionnel, si la clé est protégée)
 
 name: Windows installer
 
@@ -23,7 +28,7 @@ jobs:
   windows:
     runs-on: windows-latest
     permissions:
-      contents: read
+      contents: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -47,15 +52,53 @@ jobs:
       - name: Install frontend deps
         run: npm ci
 
-      - name: Build Windows bundles (NSIS + MSI)
+      - name: Require updater signing secret
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo "::error::Secret TAURI_SIGNING_PRIVATE_KEY manquant. Voir docs/auto-update.md — générer une clé (tauri signer generate) et l’ajouter aux secrets du dépôt."
+            exit 1
+          fi
+
+      - name: Build Windows bundles (push / PR / dispatch)
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: npm run build:windows
 
       - name: Upload installers
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
         uses: actions/upload-artifact@v4
         with:
           name: sascompta-windows-installer
           path: |
             src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
+            src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.sig
             src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi
+            src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.sig
           if-no-files-found: error
           retention-days: 30
+
+      - name: Build + publish GitHub Release (tags v*)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: SasCompta ${{ github.ref_name }}
+          releaseBody: |
+            Installateurs Windows (NSIS + MSI) et artefacts d’auto-update (`latest.json`, signatures `.sig`).
+
+            Après installation, SasCompta vérifie les mises à jour au démarrage ; un bouton manuel est disponible dans la barre latérale.
+          releaseDraft: false
+          prerelease: false
+          includeUpdaterJson: true
+          updaterJsonPreferNsis: true
+          projectPath: .
+          args: --target x86_64-pc-windows-msvc --bundles nsis,msi

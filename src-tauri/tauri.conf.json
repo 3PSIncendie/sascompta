@@ -37,13 +37,27 @@
     "windows": {
       "nsis": {
         "installMode": "currentUser",
-        "languages": ["French", "English"],
+        "languages": [
+          "French",
+          "English"
+        ],
         "displayLanguageSelector": false
       },
       "wix": {
         "language": "fr-FR"
       }
-    }
+    },
+    "createUpdaterArtifacts": true
   },
-  "plugins": {}
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDRGOEMyNjQwNkFENjkyRDMKUldUVGt0WnFRQ2FNVDRXNG5jNy9idEJsL2UxVFRvSVBBSmNBTlRnU3RmQmNteEFDZHY0alR4VUUK",
+      "endpoints": [
+        "https://github.com/3PSIncendie/sascompta/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  }
 }
