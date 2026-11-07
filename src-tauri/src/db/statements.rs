@@ -111,6 +111,13 @@ const RULES: &[MappingRule] = &[
         debit_positive: false,
     },
     MappingRule {
+        prefix: "4452",
+        code: "P-TVA-AL",
+        label: "TVA due par autoliquidation",
+        side: Side::Passif,
+        debit_positive: false,
+    },
+    MappingRule {
         prefix: "445",
         code: "P-TVA-AUT",
         label: "Autres comptes de TVA",
@@ -886,6 +893,7 @@ mod tests {
     fn mapping_longest_prefix() {
         assert_eq!(find_rule("44566").unwrap().code, "A-TVA-D");
         assert_eq!(find_rule("44571").unwrap().code, "P-TVA-C");
+        assert_eq!(find_rule("4452").unwrap().code, "P-TVA-AL");
         assert_eq!(find_rule("215").unwrap().code, "A-IMMO-COR");
         assert_eq!(find_rule("681").unwrap().code, "C-DOT");
         assert_eq!(find_rule("707").unwrap().code, "R-VTE");

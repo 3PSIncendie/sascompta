@@ -103,7 +103,7 @@ export const HELP: Record<string, HelpTopic> = {
   saisieGuidee: {
     term: "Saisie guidée",
     plain:
-      "Vous indiquez une seule intention (montant HT, compte, TVA ou non). SasCompta propose automatiquement la ligne de TVA (445…) et la contrepartie pour équilibrer. Vous pouvez encore tout modifier.",
+      "Vous indiquez une intention (montant HT, compte, régime TVA). SasCompta propose les lignes 445… et la contrepartie. Utile aussi pour l’autoliquidation BTP. Vous pouvez encore tout modifier.",
     example: "Vente 100 € HT à 20 % → crédit 706 100, crédit 44571 20, débit 411 120",
   },
   montantHt: {
@@ -132,8 +132,35 @@ export const HELP: Record<string, HelpTopic> = {
   compteTva: {
     term: "Compte TVA (445…)",
     plain:
-      "Cases du plan pour la TVA : 44571 = TVA collectée (ventes), 44566 = TVA déductible (achats). La saisie guidée les remplit pour vous.",
-    example: "Vente TTC → crédit 44571 ; achat TTC → débit 44566",
+      "Cases du plan pour la TVA : 44571 = collectée (ventes), 44566 = déductible (achats), 4452 = TVA due par autoliquidation (BTP / art. 283). La saisie guidée les remplit pour vous.",
+    example:
+      "Vente TTC → crédit 44571 ; achat TTC → débit 44566 ; sous-traitance → débit 44566 + crédit 4452",
+  },
+  regimeTvaSaisie: {
+    term: "Régime TVA (saisie)",
+    plain:
+      "Comment traiter la TVA sur cette opération : classique (facturée / récupérable), sans TVA, ou autoliquidation BTP (sous-traitance chantier ou travaux facturés HT).",
+    example:
+      "Achat sous-traitant chantier → Autoliquidation sous-traitance ; travaux que vous facturez à un assujetti → Autoliquidation chantier",
+  },
+  autoliquidationBtp: {
+    term: "Autoliquidation TVA BTP (art. 283)",
+    plain:
+      "Pour certains travaux immobiliers entre assujettis, le prestataire facture HT. Le client (donneur d’ordre) calcule lui-même la TVA : il la doit (4452) et, s’il y a droit, la déduit (44566). Mentions obligatoires sur la facture.",
+    example:
+      "Sous-traitance 1 000 € HT à 20 % → débit 604 1 000, débit 44566 200, crédit 4452 200, crédit 401 1 000",
+  },
+  sousTraitanceChantier: {
+    term: "Sous-traitance chantier",
+    plain:
+      "Vous faites appel à un sous-traitant sur un chantier. Sa facture est en général HT (autoliquidation) : vous n’êtes pas débiteur du TTC fournisseur, mais vous autoliquidez la TVA.",
+    example: "Compte charge usuel : 604 Achats de sous-traitance",
+  },
+  chantierEnDirect: {
+    term: "Chantier en direct / travaux BTP",
+    plain:
+      "Vous réalisez vous-même les travaux pour un client assujetti. Vous facturez HT avec mention d’autoliquidation : pas de TVA collectée (44571) de votre côté ; le client s’en charge.",
+    example: "Vente 5 000 € HT → crédit 706 5 000, débit 411 5 000 (code T…R)",
   },
   ca3: {
     term: "CA3",

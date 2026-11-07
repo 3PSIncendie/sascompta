@@ -12,6 +12,21 @@ import type {
 
 type Tab = "ca3" | "aux" | "codes" | "tiers";
 
+function directionLabel(direction: string): string {
+  switch (direction) {
+    case "collected":
+      return "collectée";
+    case "deductible":
+      return "déductible";
+    case "exempt":
+      return "exonéré";
+    case "reverse":
+      return "autoliquidation";
+    default:
+      return direction;
+  }
+}
+
 export function TaxScreen() {
   const [tab, setTab] = useState<Tab>("ca3");
   const [fromDate, setFromDate] = useState("2026-01-01");
@@ -100,8 +115,12 @@ export function TaxScreen() {
       <aside className="help-callout">
         <strong>Rappel</strong>
         <p>
-          SasCompta prépare un brouillon. La déclaration officielle se fait sur
-          le site des impôts. Surveillez les échéances dans le parcours guidé.
+          SasCompta prépare un brouillon (y compris{" "}
+          <LabelWithHelp topic="autoliquidationBtp">
+            autoliquidation BTP
+          </LabelWithHelp>
+          ). La déclaration officielle se fait sur le site des impôts.
+          Surveillez les échéances dans le parcours guidé.
         </p>
       </aside>
 
@@ -182,7 +201,7 @@ export function TaxScreen() {
                   <tr key={l.code}>
                     <td>{l.code}</td>
                     <td>{l.label}</td>
-                    <td>{l.direction}</td>
+                    <td>{directionLabel(l.direction)}</td>
                     <td>{formatRateBp(l.rateBp)}</td>
                     <td className="num">{formatEuros(l.baseCents)}</td>
                     <td className="num">{formatEuros(l.vatCents)}</td>
@@ -251,7 +270,7 @@ export function TaxScreen() {
                   <td>{c.code}</td>
                   <td>{c.label}</td>
                   <td>{formatRateBp(c.rateBp)}</td>
-                  <td>{c.direction}</td>
+                  <td>{directionLabel(c.direction)}</td>
                 </tr>
               ))}
             </tbody>

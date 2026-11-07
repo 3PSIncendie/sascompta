@@ -10,6 +10,24 @@ pub fn seed_vat_codes(conn: &Connection) -> DbResult<()> {
         ("T10D", "TVA 10% déductible", 1000, "deductible"),
         ("T55C", "TVA 5,5% collectée", 550, "collected"),
         ("T55D", "TVA 5,5% déductible", 550, "deductible"),
+        (
+            "T20R",
+            "Autoliquidation 20% (art. 283 BTP)",
+            2000,
+            "reverse",
+        ),
+        (
+            "T10R",
+            "Autoliquidation 10% (art. 283 BTP)",
+            1000,
+            "reverse",
+        ),
+        (
+            "T55R",
+            "Autoliquidation 5,5% (art. 283 BTP)",
+            550,
+            "reverse",
+        ),
         ("TEX", "Exonéré / hors champ", 0, "exempt"),
     ];
     for (code, label, rate, dir) in codes {
@@ -122,7 +140,7 @@ pub fn update_third_party(
 }
 
 /// CA3 draft: base HT from charge/product lines tagged with VAT;
-/// TVA from 44566 (deductible) / 44571 (collected) lines with same code.
+/// TVA from 44566 (deductible) / 44571 (collected) / 4452 (due reverse) lines.
 pub fn vat_report(
     conn: &Connection,
     from_date: &str,
@@ -143,6 +161,10 @@ pub fn vat_report(
                 CASE
                   WHEN v.direction = 'collected' THEN el.credit_cents - el.debit_cents
                   WHEN v.direction = 'deductible' THEN el.debit_cents - el.credit_cents
+                  WHEN v.direction = 'reverse' AND a.class = 6
+                    THEN el.debit_cents - el.credit_cents
+                  WHEN v.direction = 'reverse' AND a.class = 7
+                    THEN el.credit_cents - el.debit_cents
                   ELSE 0
                 END
              ), 0)
@@ -158,33 +180,52 @@ pub fn vat_report(
             |r| r.get(0),
         )?;
 
-        let vat: i64 = conn.query_row(
-            "SELECT COALESCE(SUM(
-                CASE
-                  WHEN v.direction = 'collected' THEN el.credit_cents - el.debit_cents
-                  WHEN v.direction = 'deductible' THEN el.debit_cents - el.credit_cents
-                  ELSE 0
-                END
-             ), 0)
+        let vat_deductible: i64 = conn.query_row(
+            "SELECT COALESCE(SUM(el.debit_cents - el.credit_cents), 0)
              FROM entry_line el
              JOIN entry e ON e.id = el.entry_id
              JOIN account a ON a.id = el.account_id
-             JOIN vat_code v ON v.code = el.vat_code
              WHERE e.status = 'posted'
                AND e.entry_date >= ?1 AND e.entry_date <= ?2
                AND el.vat_code = ?3
-               AND (a.number LIKE '44566%' OR a.number LIKE '44571%')",
+               AND a.number LIKE '44566%'",
             params![from_date, to_date, vc.code],
             |r| r.get(0),
         )?;
+
+        let vat_collected: i64 = conn.query_row(
+            "SELECT COALESCE(SUM(el.credit_cents - el.debit_cents), 0)
+             FROM entry_line el
+             JOIN entry e ON e.id = el.entry_id
+             JOIN account a ON a.id = el.account_id
+             WHERE e.status = 'posted'
+               AND e.entry_date >= ?1 AND e.entry_date <= ?2
+               AND el.vat_code = ?3
+               AND (a.number LIKE '44571%' OR a.number LIKE '4452%')",
+            params![from_date, to_date, vc.code],
+            |r| r.get(0),
+        )?;
+
+        let vat = match vc.direction.as_str() {
+            "collected" => vat_collected,
+            "deductible" => vat_deductible,
+            // Autoliquidation : même montant des deux côtés (achat) ; vente = 0
+            "reverse" => vat_collected.max(vat_deductible),
+            _ => 0,
+        };
 
         if base == 0 && vat == 0 {
             continue;
         }
 
         match vc.direction.as_str() {
-            "collected" => collected += vat,
-            "deductible" => deductible += vat,
+            "collected" => collected += vat_collected,
+            "deductible" => deductible += vat_deductible,
+            "reverse" => {
+                // Achat sous-traitance : due = déductible → net 0 sur cette base
+                collected += vat_collected;
+                deductible += vat_deductible;
+            }
             _ => {}
         }
 
@@ -259,6 +300,7 @@ pub fn export_vat_csv(report: &VatReport) -> String {
         let sens = match l.direction.as_str() {
             "collected" => "collected",
             "deductible" => "deductible",
+            "reverse" => "autoliquidation",
             other => other,
         };
         out.push_str(&format!(
@@ -341,6 +383,83 @@ mod tests {
         let t20d = report.lines.iter().find(|l| l.code == "T20D").unwrap();
         assert_eq!(t20d.base_cents, 680_000);
         assert_eq!(t20d.vat_cents, 136_000);
+    }
+
+    #[test]
+    fn reverse_charge_subcontract_is_neutral_on_net() {
+        use crate::db::ledger;
+        use crate::models::CreateEntryInput;
+        use crate::models::EntryLineInput;
+
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("reverse.sascompta");
+        create_demo_workspace(&path).unwrap();
+        let conn = open_connection(&path).unwrap();
+
+        let before = vat_report(&conn, "2026-01-01", "2026-12-31").unwrap();
+
+        let input = CreateEntryInput {
+            journal_code: "ACH".into(),
+            entry_date: "2026-06-15".into(),
+            piece_ref: "ST-001".into(),
+            label: "Sous-traitance chantier autoliquidation".into(),
+            lines: vec![
+                EntryLineInput {
+                    account_number: "604".into(),
+                    label: None,
+                    debit_cents: 10_000,
+                    credit_cents: 0,
+                    vat_code: Some("T20R".into()),
+                    third_party_id: None,
+                    comp_aux_type: None,
+                    comp_aux_num: None,
+                },
+                EntryLineInput {
+                    account_number: "44566".into(),
+                    label: None,
+                    debit_cents: 2_000,
+                    credit_cents: 0,
+                    vat_code: Some("T20R".into()),
+                    third_party_id: None,
+                    comp_aux_type: None,
+                    comp_aux_num: None,
+                },
+                EntryLineInput {
+                    account_number: "4452".into(),
+                    label: None,
+                    debit_cents: 0,
+                    credit_cents: 2_000,
+                    vat_code: Some("T20R".into()),
+                    third_party_id: None,
+                    comp_aux_type: None,
+                    comp_aux_num: None,
+                },
+                EntryLineInput {
+                    account_number: "401".into(),
+                    label: None,
+                    debit_cents: 0,
+                    credit_cents: 10_000,
+                    vat_code: None,
+                    third_party_id: Some(1),
+                    comp_aux_type: None,
+                    comp_aux_num: None,
+                },
+            ],
+        };
+        let entry = ledger::create_draft(&conn, &input).unwrap();
+        ledger::post_entry(&conn, entry.id).unwrap();
+
+        let after = vat_report(&conn, "2026-01-01", "2026-12-31").unwrap();
+        assert_eq!(
+            after.net_cents, before.net_cents,
+            "autoliquidation achat neutre sur le net"
+        );
+        assert_eq!(after.collected_cents, before.collected_cents + 2_000);
+        assert_eq!(after.deductible_cents, before.deductible_cents + 2_000);
+        let t20r = after.lines.iter().find(|l| l.code == "T20R").unwrap();
+        assert_eq!(t20r.base_cents, 10_000);
+        assert_eq!(t20r.vat_cents, 2_000);
+        assert_eq!(t20r.direction, "reverse");
     }
 
     #[test]
