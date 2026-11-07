@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use thiserror::Error;
 
-pub const SCHEMA_VERSION: i32 = 7;
+pub const SCHEMA_VERSION: i32 = 8;
 pub const DEMO_PASSWORD: &str = "SecretPass1";
 
 #[derive(Debug, Error)]
@@ -121,7 +121,7 @@ pub fn migrate(conn: &Connection) -> DbResult<()> {
             code TEXT PRIMARY KEY,
             label TEXT NOT NULL,
             rate_bp INTEGER NOT NULL,
-            direction TEXT NOT NULL CHECK (direction IN ('collected','deductible','exempt')),
+            direction TEXT NOT NULL CHECK (direction IN ('collected','deductible','exempt','reverse')),
             active INTEGER NOT NULL DEFAULT 1
         );
 
@@ -192,6 +192,11 @@ pub fn migrate(conn: &Connection) -> DbResult<()> {
         .and_then(|v| v.parse().ok())
         .unwrap_or(0);
 
+    // v7 = SIRET (PR #5). v8 = direction reverse (autoliquidation BTP).
+    if version < 8 {
+        migrate_vat_code_reverse(conn)?;
+    }
+
     if version < SCHEMA_VERSION {
         conn.execute(
             "INSERT INTO meta(key, value) VALUES('schema_version', ?1)
@@ -212,6 +217,29 @@ fn migrate_organization_siret(conn: &Connection) -> DbResult<()> {
     if !cols.iter().any(|c| c == "siret") {
         conn.execute("ALTER TABLE organization ADD COLUMN siret TEXT", [])?;
     }
+    Ok(())
+}
+
+/// Élargit la contrainte direction pour accepter `reverse` (autoliquidation BTP).
+fn migrate_vat_code_reverse(conn: &Connection) -> DbResult<()> {
+    // entry_line référence vat_code : il faut désactiver les FK le temps du rebuild.
+    conn.execute_batch(
+        r#"
+        PRAGMA foreign_keys = OFF;
+        CREATE TABLE vat_code_v8 (
+            code TEXT PRIMARY KEY,
+            label TEXT NOT NULL,
+            rate_bp INTEGER NOT NULL,
+            direction TEXT NOT NULL CHECK (direction IN ('collected','deductible','exempt','reverse')),
+            active INTEGER NOT NULL DEFAULT 1
+        );
+        INSERT INTO vat_code_v8(code, label, rate_bp, direction, active)
+          SELECT code, label, rate_bp, direction, active FROM vat_code;
+        DROP TABLE vat_code;
+        ALTER TABLE vat_code_v8 RENAME TO vat_code;
+        PRAGMA foreign_keys = ON;
+        "#,
+    )?;
     Ok(())
 }
 

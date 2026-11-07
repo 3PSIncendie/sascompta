@@ -7,9 +7,12 @@ import {
   DEFAULT_COUNTERPART,
   defaultVatCodeFor,
   eurosStringsFromLines,
+  preferredHtAccount,
   suggestHtAccounts,
   vatCodesForKind,
+  vatModesForKind,
   type GuidedKind,
+  type GuidedVatMode,
 } from "../lib/guidedEntry";
 import { formatEuros, formatRateBp, parseEurosToCents } from "../lib/money";
 import type {
@@ -54,7 +57,7 @@ export function EntriesScreen() {
   const [guidedKind, setGuidedKind] = useState<GuidedKind>("vente");
   const [guidedHtAccount, setGuidedHtAccount] = useState("706");
   const [guidedHtStr, setGuidedHtStr] = useState("100,00");
-  const [guidedWithVat, setGuidedWithVat] = useState(true);
+  const [guidedVatMode, setGuidedVatMode] = useState<GuidedVatMode>("normale");
   const [guidedVatCode, setGuidedVatCode] = useState("T20C");
   const [guidedCounterpart, setGuidedCounterpart] = useState(
     DEFAULT_COUNTERPART.vente,
@@ -89,9 +92,14 @@ export function EntriesScreen() {
     return { d, c, ok: d === c && d > 0 };
   }, [lines]);
 
+  const guidedModeOptions = useMemo(
+    () => vatModesForKind(guidedKind),
+    [guidedKind],
+  );
+
   const guidedVatOptions = useMemo(
-    () => vatCodesForKind(guidedKind, vatCodes),
-    [guidedKind, vatCodes],
+    () => vatCodesForKind(guidedKind, vatCodes, guidedVatMode),
+    [guidedKind, vatCodes, guidedVatMode],
   );
 
   const guidedHtAccounts = useMemo(
@@ -100,6 +108,12 @@ export function EntriesScreen() {
   );
 
   const selectedVat = guidedVatOptions.find((v) => v.code === guidedVatCode);
+  const needsVatCode = guidedVatMode !== "sans";
+  const needsVatRate =
+    guidedVatMode === "normale" ||
+    guidedVatMode === "autoliquidation_sous_traitance" ||
+    guidedVatMode === "autoliquidation_chantier";
+
   const preview = useMemo(() => {
     const ht = parseEurosToCents(guidedHtStr);
     if (ht <= 0) return null;
@@ -107,9 +121,9 @@ export function EntriesScreen() {
       kind: guidedKind,
       htAccount: guidedHtAccount,
       htCents: ht,
-      withVat: guidedWithVat,
-      vatCode: guidedWithVat ? guidedVatCode : null,
-      rateBp: guidedWithVat ? (selectedVat?.rateBp ?? 0) : 0,
+      vatMode: guidedVatMode,
+      vatCode: needsVatCode ? guidedVatCode : null,
+      rateBp: needsVatRate ? (selectedVat?.rateBp ?? 0) : 0,
       counterpartAccount: guidedCounterpart,
       thirdPartyId: guidedThirdPartyId,
     });
@@ -117,27 +131,35 @@ export function EntriesScreen() {
     guidedHtStr,
     guidedKind,
     guidedHtAccount,
-    guidedWithVat,
+    guidedVatMode,
     guidedVatCode,
+    needsVatCode,
+    needsVatRate,
     selectedVat?.rateBp,
     guidedCounterpart,
     guidedThirdPartyId,
   ]);
 
-  function applyKindDefaults(kind: GuidedKind) {
-    setGuidedKind(kind);
-    setGuidedCounterpart(DEFAULT_COUNTERPART[kind]);
-    const preferredHt = kind === "vente" ? "706" : "606";
+  function applyVatModeDefaults(kind: GuidedKind, mode: GuidedVatMode) {
+    setGuidedVatMode(mode);
+    const preferredHt = preferredHtAccount(kind, mode);
     const htList = suggestHtAccounts(kind, accounts);
     setGuidedHtAccount(
       htList.some((a) => a.number === preferredHt)
         ? preferredHt
         : (htList[0]?.number ?? ""),
     );
-    const def = defaultVatCodeFor(kind, 2000, vatCodes);
+    const def = defaultVatCodeFor(kind, 2000, vatCodes, mode);
     if (def) setGuidedVatCode(def.code);
-    setJournalCode(kind === "vente" ? "VTE" : "ACH");
+    else setGuidedVatCode("");
     setGuidedHint(null);
+  }
+
+  function applyKindDefaults(kind: GuidedKind) {
+    setGuidedKind(kind);
+    setGuidedCounterpart(DEFAULT_COUNTERPART[kind]);
+    setJournalCode(kind === "vente" ? "VTE" : "ACH");
+    applyVatModeDefaults(kind, "normale");
   }
 
   function generateFromGuided() {
@@ -155,10 +177,14 @@ export function EntriesScreen() {
       setError("Choisissez le compte de contrepartie.");
       return;
     }
-    if (guidedWithVat) {
+    if (needsVatCode) {
       const code = guidedVatOptions.find((v) => v.code === guidedVatCode);
       if (!code) {
-        setError("Choisissez un code TVA adapté (collectée ou déductible).");
+        setError(
+          guidedVatMode.startsWith("autoliquidation")
+            ? "Choisissez un code d’autoliquidation (T…R)."
+            : "Choisissez un code TVA adapté (collectée ou déductible).",
+        );
         return;
       }
     }
@@ -166,9 +192,9 @@ export function EntriesScreen() {
       kind: guidedKind,
       htAccount: guidedHtAccount,
       htCents: ht,
-      withVat: guidedWithVat,
-      vatCode: guidedWithVat ? guidedVatCode : null,
-      rateBp: guidedWithVat ? (selectedVat?.rateBp ?? 0) : 0,
+      vatMode: guidedVatMode,
+      vatCode: needsVatCode ? guidedVatCode : null,
+      rateBp: needsVatRate ? (selectedVat?.rateBp ?? 0) : 0,
       counterpartAccount: guidedCounterpart,
       thirdPartyId: guidedThirdPartyId,
     });
@@ -177,12 +203,16 @@ export function EntriesScreen() {
     setDebitStr(strs.debitStr);
     setCreditStr(strs.creditStr);
     setMode("libre");
-    const vatPart =
-      result.vatCents > 0
-        ? ` + TVA ${formatEuros(result.vatCents)} (${result.vatAccount})`
-        : " (sans TVA)";
+    let vatPart = " (sans TVA)";
+    if (result.vatMode === "autoliquidation_sous_traitance" && result.vatCents > 0) {
+      vatPart = ` + autoliquidation ${formatEuros(result.vatCents)} (${result.vatAccount} / ${result.vatDueAccount})`;
+    } else if (result.vatMode === "autoliquidation_chantier") {
+      vatPart = " (autoliquidation chantier — HT facturé)";
+    } else if (result.vatCents > 0) {
+      vatPart = ` + TVA ${formatEuros(result.vatCents)} (${result.vatAccount})`;
+    }
     setGuidedHint(
-      `Lignes générées : HT ${formatEuros(result.htCents)}${vatPart} → TTC ${formatEuros(result.ttcCents)}. Vous pouvez encore tout modifier ci-dessous.`,
+      `Lignes générées : HT ${formatEuros(result.htCents)}${vatPart} → contrepartie ${formatEuros(result.ttcCents)}. Vous pouvez encore tout modifier ci-dessous.`,
     );
   }
 
@@ -199,7 +229,6 @@ export function EntriesScreen() {
     setMode("guidee");
     applyKindDefaults("vente");
     setGuidedHtStr("100,00");
-    setGuidedWithVat(true);
     setGuidedThirdPartyId(null);
     setGuidedHint(null);
   }
@@ -321,10 +350,13 @@ export function EntriesScreen() {
         <strong>Pour débuter</strong>
         <p>
           Préférez la <LabelWithHelp topic="saisieGuidee">saisie guidée</LabelWithHelp>{" "}
-          : une ligne d’intention (montant{" "}
-          <LabelWithHelp topic="montantHt">HT</LabelWithHelp>, compte, TVA oui/non)
-          génère automatiquement la ligne{" "}
-          <LabelWithHelp topic="compteTva">445…</LabelWithHelp> et la{" "}
+          : une intention (montant{" "}
+          <LabelWithHelp topic="montantHt">HT</LabelWithHelp>, compte,{" "}
+          <LabelWithHelp topic="regimeTvaSaisie">régime TVA</LabelWithHelp>) génère
+          les lignes{" "}
+          <LabelWithHelp topic="compteTva">445…</LabelWithHelp> adaptées — y compris{" "}
+          <LabelWithHelp topic="autoliquidationBtp">autoliquidation BTP</LabelWithHelp>{" "}
+          — et la{" "}
           <LabelWithHelp topic="contrepartie">contrepartie</LabelWithHelp>. Tout reste
           modifiable ensuite.
         </p>
@@ -511,18 +543,26 @@ export function EntriesScreen() {
                       </select>
                     </label>
                     <label>
-                      <LabelWithHelp topic="tva">TVA</LabelWithHelp>
+                      <LabelWithHelp topic="regimeTvaSaisie">
+                        Régime TVA
+                      </LabelWithHelp>
                       <select
-                        value={guidedWithVat ? "oui" : "non"}
+                        value={guidedVatMode}
                         onChange={(e) =>
-                          setGuidedWithVat(e.target.value === "oui")
+                          applyVatModeDefaults(
+                            guidedKind,
+                            e.target.value as GuidedVatMode,
+                          )
                         }
                       >
-                        <option value="oui">Oui — calculer et ventiler</option>
-                        <option value="non">Non — franchise / exonéré</option>
+                        {guidedModeOptions.map((m) => (
+                          <option key={m.id} value={m.id}>
+                            {m.label}
+                          </option>
+                        ))}
                       </select>
                     </label>
-                    {guidedWithVat && (
+                    {needsVatRate && (
                       <label>
                         <LabelWithHelp topic="codeTva">Taux / code</LabelWithHelp>
                         <select
@@ -536,6 +576,19 @@ export function EntriesScreen() {
                           ))}
                         </select>
                       </label>
+                    )}
+                    {(guidedVatMode === "autoliquidation_sous_traitance" ||
+                      guidedVatMode === "autoliquidation_chantier") && (
+                      <p className="hint" style={{ gridColumn: "1 / -1" }}>
+                        <LabelWithHelp topic="autoliquidationBtp">
+                          Art. 283 CGI
+                        </LabelWithHelp>
+                        {" — "}
+                        {
+                          guidedModeOptions.find((m) => m.id === guidedVatMode)
+                            ?.shortHelp
+                        }
+                      </p>
                     )}
                     <label>
                       <LabelWithHelp topic="tiers">Tiers (optionnel)</LabelWithHelp>
@@ -571,13 +624,18 @@ export function EntriesScreen() {
                       <span>
                         TVA{" "}
                         <strong>
-                          {preview.vatCents
-                            ? `${formatEuros(preview.vatCents)} → ${preview.vatAccount}`
-                            : "—"}
+                          {preview.vatDueAccount && preview.vatCents
+                            ? `${formatEuros(preview.vatCents)} → ${preview.vatAccount} / ${preview.vatDueAccount}`
+                            : preview.vatCents
+                              ? `${formatEuros(preview.vatCents)} → ${preview.vatAccount}`
+                              : preview.vatMode === "autoliquidation_chantier"
+                                ? "autoliquidation client"
+                                : "—"}
                         </strong>
                       </span>
                       <span>
-                        TTC <strong>{formatEuros(preview.ttcCents)}</strong>
+                        Contrepartie{" "}
+                        <strong>{formatEuros(preview.ttcCents)}</strong>
                       </span>
                       <span>
                         {preview.lines.length} ligne

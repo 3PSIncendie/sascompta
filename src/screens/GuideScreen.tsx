@@ -437,8 +437,10 @@ function EcrituresStep({
         <LabelHelp topic="debitCredit" label="débit / crédit" />. Les deux
         colonnes doivent être égales. Exemple : vente 120 € TTC = client 120 /
         prestation 100 + TVA 20. Sur Écritures, la{" "}
-        <LabelHelp topic="saisieGuidee" label="saisie guidée" /> remplit la TVA
-        (445…) et la contrepartie pour vous.
+        <LabelHelp topic="saisieGuidee" label="saisie guidée" /> propose aussi
+        l’
+        <LabelHelp topic="autoliquidationBtp" label="autoliquidation BTP" />{" "}
+        (sous-traitance chantier ou travaux facturés HT).
       </p>
       <div className="summary-strip">
         <span>
