@@ -2,10 +2,25 @@ export interface Organization {
   id: number;
   name: string;
   siren: string;
+  siret: string | null;
   legalForm: string;
   vatRegime: string;
   address: string | null;
   capitalCents: number;
+}
+
+export interface UpdateOrganizationInput {
+  name: string;
+  siren: string;
+  siret?: string | null;
+  legalForm: string;
+  vatRegime: string;
+  address?: string | null;
+  capitalCents: number;
+  displayName: string;
+  fiscalYearLabel: string;
+  startDate: string;
+  endDate: string;
 }
 
 export interface LocalProfile {

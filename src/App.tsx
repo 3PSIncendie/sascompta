@@ -27,9 +27,10 @@ function previewWorkspace(): WorkspaceInfo | null {
       id: 1,
       name: "Atelier Lumière SAS",
       siren: "123456782",
+      siret: "12345678200002",
       legalForm: "SAS",
       vatRegime: "reel_mensuel",
-      address: null,
+      address: "12 rue des Lilas\n75011 Paris",
       capitalCents: 1_000_00,
     },
     fiscalYear: {
@@ -91,7 +92,12 @@ export default function App() {
       {nav === "guide" && (
         <GuideScreen workspace={workspace} onNavigate={setNav} />
       )}
-      {nav === "ma-sas" && <MaSasScreen workspace={workspace} />}
+      {nav === "ma-sas" && (
+        <MaSasScreen
+          workspace={workspace}
+          onWorkspaceChange={setWorkspace}
+        />
+      )}
       {nav === "plan" && <ChartScreen />}
       {nav === "journaux" && <JournalsScreen />}
       {nav === "ecritures" && <EntriesScreen />}

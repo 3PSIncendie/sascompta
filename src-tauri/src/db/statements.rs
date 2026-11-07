@@ -560,21 +560,7 @@ pub fn build_annex(conn: &Connection, filter: &LedgerFilter) -> DbResult<AnnualA
 }
 
 pub fn build_annual_pack(conn: &Connection, filter: &LedgerFilter) -> DbResult<AnnualStatements> {
-    let org: Organization = conn.query_row(
-        "SELECT id, name, siren, legal_form, vat_regime, address, capital_cents FROM organization WHERE id = 1",
-        [],
-        |r| {
-            Ok(Organization {
-                id: r.get(0)?,
-                name: r.get(1)?,
-                siren: r.get(2)?,
-                legal_form: r.get(3)?,
-                vat_regime: r.get(4)?,
-                address: r.get(5)?,
-                capital_cents: r.get(6)?,
-            })
-        },
-    )?;
+    let org = super::load_organization(conn)?;
     Ok(AnnualStatements {
         organization_name: org.name,
         siren: org.siren,

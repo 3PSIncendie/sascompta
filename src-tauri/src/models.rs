@@ -6,10 +6,27 @@ pub struct Organization {
     pub id: i64,
     pub name: String,
     pub siren: String,
+    pub siret: Option<String>,
     pub legal_form: String,
     pub vat_regime: String,
     pub address: Option<String>,
     pub capital_cents: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateOrganizationInput {
+    pub name: String,
+    pub siren: String,
+    pub siret: Option<String>,
+    pub legal_form: String,
+    pub vat_regime: String,
+    pub address: Option<String>,
+    pub capital_cents: i64,
+    pub display_name: String,
+    pub fiscal_year_label: String,
+    pub start_date: String,
+    pub end_date: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

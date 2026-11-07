@@ -52,6 +52,17 @@ pub fn get_workspace_info(state: State<'_, AppState>) -> Result<WorkspaceInfo, S
 }
 
 #[tauri::command]
+pub fn update_organization(
+    state: State<'_, AppState>,
+    input: UpdateOrganizationInput,
+) -> Result<WorkspaceInfo, String> {
+    let path_guard = state.path.lock().map_err(|e| e.to_string())?;
+    let path = path_guard.as_ref().ok_or("Aucun workspace ouvert")?.clone();
+    drop(path_guard);
+    db::with_conn(&state, |conn| db::update_organization(conn, &path, &input)).map_err(map_err)
+}
+
+#[tauri::command]
 pub fn close_workspace(state: State<'_, AppState>) -> Result<(), String> {
     *state.conn.lock().map_err(|e| e.to_string())? = None;
     *state.path.lock().map_err(|e| e.to_string())? = None;
