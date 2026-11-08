@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import {
   checkForAppUpdate,
   downloadAndInstallUpdate,
+  formatUpdaterCheckError,
   isTauriRuntime,
   type UpdateStatus,
 } from "../lib/updater";
@@ -92,9 +93,7 @@ export function UpdateChecker({
         setStatus({ kind: "up-to-date" });
       }
     } catch (err) {
-      const message =
-        err instanceof Error ? err.message : "Impossible de vérifier les mises à jour.";
-      setStatus({ kind: "error", message });
+      setStatus({ kind: "error", message: formatUpdaterCheckError(err) });
     }
   }
 
