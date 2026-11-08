@@ -410,4 +410,11 @@ export type NavId =
   | "tva"
   | "immos"
   | "etats"
-  | "cloture";
+  | "cloture"
+  | "devis"
+  | "factures"
+  | "relances"
+  | "einvoice"
+  | "salaries"
+  | "conges"
+  | "paie";

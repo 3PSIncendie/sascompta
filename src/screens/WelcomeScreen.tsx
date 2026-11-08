@@ -39,7 +39,7 @@ function validateCreate(input: {
 }
 
 export function WelcomeScreen({ onOpened }: Props) {
-  const [mode, setMode] = useState<"create" | "open">("create");
+  const [mode, setMode] = useState<"idle" | "create" | "open">("idle");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -150,22 +150,58 @@ export function WelcomeScreen({ onOpened }: Props) {
   }
 
   return (
-    <div className="welcome-wrap">
-      <div className="welcome-card">
-        <section className="welcome-hero">
-          <p className="eyebrow light">Compta SAS locale</p>
-          <h1>SasCompta</h1>
-          <p>
-            Créez votre société, suivez le parcours guidé, et tenez une
-            comptabilité claire — même sans formation avancée.
+    <div className="welcome-stage">
+      <div className="welcome-atmosphere" aria-hidden />
+      <div className="welcome-viewport">
+        <header className="welcome-brand-block">
+          <h1 className="welcome-brand">SasCompta</h1>
+          <p className="welcome-headline">
+            La compta SAS, claire et locale.
           </p>
-          <ul className="welcome-points">
-            <li>Parcours en 5 étapes</li>
-            <li>Aide sur chaque jargon</li>
-            <li>Rappels TVA &amp; clôture</li>
-          </ul>
-        </section>
-        <section className="welcome-forms">
+          <p className="welcome-support">
+            Un fichier sur votre machine, un parcours guidé, zéro cloud
+            imposé.
+          </p>
+          <div className="welcome-cta">
+            <button
+              type="button"
+              className="primary"
+              disabled={busy}
+              onClick={() => {
+                setError(null);
+                setMode("create");
+              }}
+            >
+              Créer une société
+            </button>
+            <button
+              type="button"
+              className="secondary"
+              disabled={busy}
+              onClick={() => {
+                setError(null);
+                setMode("open");
+              }}
+            >
+              Ouvrir
+            </button>
+            <button
+              type="button"
+              className="ghost welcome-demo"
+              disabled={busy}
+              onClick={() => void handleDemo()}
+            >
+              Workspace démo
+            </button>
+          </div>
+        </header>
+      </div>
+
+      {mode !== "idle" && (
+        <section
+          className="welcome-form-panel"
+          aria-label={mode === "create" ? "Créer une société" : "Ouvrir"}
+        >
           <div className="tabs">
             <button
               type="button"
@@ -180,6 +216,16 @@ export function WelcomeScreen({ onOpened }: Props) {
               onClick={() => setMode("open")}
             >
               Ouvrir
+            </button>
+            <button
+              type="button"
+              className="ghost"
+              onClick={() => {
+                setMode("idle");
+                setError(null);
+              }}
+            >
+              Fermer
             </button>
           </div>
 
@@ -262,14 +308,6 @@ export function WelcomeScreen({ onOpened }: Props) {
                 >
                   Créer le workspace
                 </button>
-                <button
-                  type="button"
-                  className="secondary"
-                  disabled={busy}
-                  onClick={() => void handleDemo()}
-                >
-                  Workspace démo
-                </button>
               </div>
             </div>
           ) : (
@@ -315,7 +353,7 @@ export function WelcomeScreen({ onOpened }: Props) {
 
           {error && <div className="error">{error}</div>}
         </section>
-      </div>
+      )}
     </div>
   );
 }

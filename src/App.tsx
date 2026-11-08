@@ -13,6 +13,7 @@ import { TaxScreen } from "./screens/TaxScreen";
 import { AssetsScreen } from "./screens/AssetsScreen";
 import { StatementsScreen } from "./screens/StatementsScreen";
 import { ClosingScreen } from "./screens/ClosingScreen";
+import { ComingSoonScreen } from "./screens/ComingSoonScreen";
 import { api } from "./lib/api";
 import { loadGuideProgress } from "./lib/guideProgress";
 import type { NavId, WorkspaceInfo } from "./lib/types";
@@ -109,6 +110,55 @@ export default function App() {
         <ClosingScreen
           workspace={workspace}
           onWorkspaceChange={setWorkspace}
+        />
+      )}
+      {nav === "devis" && (
+        <ComingSoonScreen
+          group="Commercial"
+          title="Devis"
+          blurb="Chiffrez vos propositions clients, puis transformez-les en facture sans re-saisie."
+        />
+      )}
+      {nav === "factures" && (
+        <ComingSoonScreen
+          group="Commercial"
+          title="Factures"
+          blurb="Factures, acomptes et avoirs avec écritures VTE automatiques en brouillon."
+        />
+      )}
+      {nav === "relances" && (
+        <ComingSoonScreen
+          group="Commercial"
+          title="Relances"
+          blurb="File de relances basée sur l’échéance et le statut de paiement."
+        />
+      )}
+      {nav === "einvoice" && (
+        <ComingSoonScreen
+          group="Commercial"
+          title="E-facture"
+          blurb="Factur-X local, file d’attente PDP et imports structurés — sans prétendre être une PDP."
+        />
+      )}
+      {nav === "salaries" && (
+        <ComingSoonScreen
+          group="RH"
+          title="Salariés"
+          blurb="Dossiers salariés et contrats (CDI, CDD, apprentissage) pour une petite SAS."
+        />
+      )}
+      {nav === "conges" && (
+        <ComingSoonScreen
+          group="RH"
+          title="Congés"
+          blurb="Pose, solde et validation simple des congés."
+        />
+      )}
+      {nav === "paie" && (
+        <ComingSoonScreen
+          group="RH"
+          title="Paie"
+          blurb="Bulletins simplifiés, charges et écritures OD en brouillon, export DSN-oriented."
         />
       )}
     </AppShell>
