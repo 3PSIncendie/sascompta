@@ -1,5 +1,7 @@
+import { useEffect, useState } from "react";
 import { DeadlineBadge } from "./DeadlineReminders";
 import { UpdateChecker } from "./UpdateChecker";
+import { PACKAGE_VERSION, resolveAppVersion } from "../lib/appVersion";
 import type { NavId, WorkspaceInfo } from "../lib/types";
 
 const NAV: { id: NavId; label: string }[] = [
@@ -24,6 +26,18 @@ interface Props {
 }
 
 export function AppShell({ workspace, nav, onNav, onClose, children }: Props) {
+  const [version, setVersion] = useState(PACKAGE_VERSION);
+
+  useEffect(() => {
+    let cancelled = false;
+    void resolveAppVersion().then((v) => {
+      if (!cancelled) setVersion(v);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   return (
     <div className="app-shell">
       <aside className="sidebar">
@@ -55,6 +69,7 @@ export function AppShell({ workspace, nav, onNav, onClose, children }: Props) {
           >
             Fermer le workspace
           </button>
+          <p className="sidebar-version">Version {version}</p>
         </div>
       </aside>
       <main className="main">{children}</main>
