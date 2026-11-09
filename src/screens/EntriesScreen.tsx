@@ -399,11 +399,9 @@ export function EntriesScreen() {
             {entries.map((e) => (
               <tr
                 key={e.id}
+                className={selected?.id === e.id ? "selected" : undefined}
                 onClick={() => loadEntry(e)}
-                style={{
-                  cursor: "pointer",
-                  background: selected?.id === e.id ? "#f0e9dc" : undefined,
-                }}
+                style={{ cursor: "pointer" }}
               >
                 <td>{e.entryDate}</td>
                 <td>{e.journalCode}</td>

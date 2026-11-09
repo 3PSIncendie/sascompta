@@ -4,6 +4,7 @@ use super::ledger;
 use super::DbResult;
 use crate::models::*;
 use chrono::Utc;
+use printpdf::path::PaintMode;
 use printpdf::*;
 use rusqlite::{params, Connection, OptionalExtension};
 use std::fs::File;
@@ -1221,22 +1222,19 @@ fn build_vte_lines_from_invoice(inv: &Invoice) -> DbResult<Vec<EntryLineInput>> 
     Ok(lines)
 }
 
+/// Texte PDF Helvetica / WinAnsi : accents FR + euro conservés, tirets typographiques normalisés.
 fn ascii_safe(s: &str) -> String {
     s.chars()
         .map(|c| match c {
-            'à' | 'â' | 'ä' => 'a',
-            'é' | 'è' | 'ê' | 'ë' => 'e',
-            'î' | 'ï' => 'i',
-            'ô' | 'ö' => 'o',
-            'ù' | 'û' | 'ü' => 'u',
-            'ç' => 'c',
-            '€' => 'E',
-            'À' | 'Â' | 'Ä' => 'A',
-            'É' | 'È' | 'Ê' | 'Ë' => 'E',
-            'Î' | 'Ï' => 'I',
-            'Ô' | 'Ö' => 'O',
-            'Ù' | 'Û' | 'Ü' => 'U',
-            'Ç' => 'C',
+            '—' | '–' | '−' => '-',
+            '·' | '•' => '-',
+            '’' | '‘' | '‛' => '\'',
+            '“' | '”' | '„' => '"',
+            '…' => '.',
+            '«' | '»' => '"',
+            'à' | 'â' | 'ä' | 'é' | 'è' | 'ê' | 'ë' | 'î' | 'ï' | 'ô' | 'ö' | 'ù' | 'û' | 'ü'
+            | 'ç' | 'À' | 'Â' | 'Ä' | 'É' | 'È' | 'Ê' | 'Ë' | 'Î' | 'Ï' | 'Ô' | 'Ö' | 'Ù' | 'Û'
+            | 'Ü' | 'Ç' | '€' => c,
             c if c.is_ascii() => c,
             _ => '?',
         })
@@ -1247,142 +1245,432 @@ fn cents_fr(cents: i64) -> String {
     crate::db::tax::format_cents_csv(cents)
 }
 
-pub fn export_quote_pdf(
-    conn: &Connection,
-    quote_id: i64,
-    path: &Path,
-) -> DbResult<()> {
-    let quote = get_quote(conn, quote_id)?;
-    let org = crate::db::load_organization(conn)?;
-    let (doc, page1, layer1) = PdfDocument::new("SasCompta Devis", Mm(210.0), Mm(297.0), "L1");
+fn money_fr(cents: i64) -> String {
+    format!("{} €", cents_fr(cents))
+}
+
+fn format_date_fr(iso: &str) -> String {
+    // YYYY-MM-DD -> DD/MM/YYYY
+    let b = iso.as_bytes();
+    if b.len() >= 10 && b[4] == b'-' && b[7] == b'-' {
+        format!("{}/{}/{}", &iso[8..10], &iso[5..7], &iso[0..4])
+    } else {
+        iso.to_string()
+    }
+}
+
+fn qty_fr(quantity_milli: i64) -> String {
+    if quantity_milli % 1000 == 0 {
+        format!("{}", quantity_milli / 1000)
+    } else {
+        let whole = quantity_milli / 1000;
+        let frac = (quantity_milli % 1000).abs();
+        format!("{whole},{frac:03}").trim_end_matches('0').trim_end_matches(',').to_string()
+    }
+}
+
+fn vat_pct_fr(bp: i32) -> String {
+    if bp % 100 == 0 {
+        format!("{} %", bp / 100)
+    } else {
+        format!("{},{:02} %", bp / 100, bp % 100)
+    }
+}
+
+fn ink_color() -> Color {
+    Color::Rgb(Rgb::new(0.114, 0.114, 0.106, None))
+}
+
+fn muted_color() -> Color {
+    Color::Rgb(Rgb::new(0.388, 0.388, 0.376, None))
+}
+
+fn header_fill() -> Color {
+    Color::Rgb(Rgb::new(0.114, 0.114, 0.106, None))
+}
+
+fn rule_color() -> Color {
+    Color::Rgb(Rgb::new(0.863, 0.863, 0.851, None))
+}
+
+fn white_color() -> Color {
+    Color::Rgb(Rgb::new(1.0, 1.0, 1.0, None))
+}
+
+fn fill_rect(layer: &PdfLayerReference, x0: f32, y0: f32, x1: f32, y1: f32, color: Color) {
+    layer.set_fill_color(color);
+    let mut rect = Rect::new(Mm(x0), Mm(y0), Mm(x1), Mm(y1));
+    rect = rect.with_mode(PaintMode::Fill);
+    layer.add_rect(rect);
+}
+
+fn load_party(conn: &Connection, id: i64) -> DbResult<ThirdParty> {
+    conn.query_row(
+        "SELECT id, code, name, kind, account_number, active, siret, email, address, routing_id
+         FROM third_party WHERE id = ?1",
+        params![id],
+        |r| {
+            Ok(ThirdParty {
+                id: r.get(0)?,
+                code: r.get(1)?,
+                name: r.get(2)?,
+                kind: r.get(3)?,
+                account_number: r.get(4)?,
+                active: r.get::<_, i32>(5)? != 0,
+                siret: r.get(6)?,
+                email: r.get(7)?,
+                address: r.get(8)?,
+                routing_id: r.get(9)?,
+            })
+        },
+    )
+    .map_err(|_| "Tiers introuvable".into())
+}
+
+struct PdfLineView<'a> {
+    label: &'a str,
+    description: Option<&'a str>,
+    quantity_milli: i64,
+    unit_price_cents: i64,
+    ht_cents: i64,
+    vat_rate_bp: i32,
+}
+
+struct CommercialPdf<'a> {
+    title: &'a str,
+    number: &'a str,
+    meta: Vec<(&'a str, String)>,
+    org: &'a Organization,
+    client: &'a ThirdParty,
+    lines: Vec<PdfLineView<'a>>,
+    ht_cents: i64,
+    vat_cents: i64,
+    ttc_cents: i64,
+    notes: Option<&'a str>,
+    legal_mentions: Option<&'a str>,
+    footer_left: String,
+}
+
+/// Layout calqué sur le modèle facture 3PSI / Qonto (sans bandeau gris RIB en bas).
+fn render_commercial_pdf(doc_title: &str, spec: &CommercialPdf<'_>, path: &Path) -> DbResult<()> {
+    let (doc, page1, layer1) = PdfDocument::new(doc_title, Mm(210.0), Mm(297.0), "L1");
     let font = doc
         .add_builtin_font(BuiltinFont::Helvetica)
         .map_err(|e| format!("PDF font: {e}"))?;
+    let font_bold = doc
+        .add_builtin_font(BuiltinFont::HelveticaBold)
+        .map_err(|e| format!("PDF font bold: {e}"))?;
+
+    let margin_l = 12.7_f32;
+    let margin_r = 12.7_f32;
+    let page_w = 210.0_f32;
+    let content_r = page_w - margin_r;
+    // Colonnes tableau (mm) — calées sur le modèle référence
+    let col_desc_r = 103.0_f32;
+    let col_qty_r = 119.5_f32;
+    let col_unit_r = 146.5_f32;
+    let col_vat_r = 165.5_f32;
+
     let mut layer = doc.get_page(page1).get_layer(layer1);
-    let mut y = 280.0;
+    let mut page_idx = 1usize;
+    let mut y = 284.0_f32;
 
-    layer.use_text(ascii_safe(&org.name), 14.0, Mm(15.0), Mm(y), &font);
-    y -= 6.0;
-    if let Some(addr) = &org.address {
-        for line in addr.lines() {
-            layer.use_text(ascii_safe(line), 9.0, Mm(15.0), Mm(y), &font);
-            y -= 4.5;
-        }
-    }
-    layer.use_text(
-        ascii_safe(&format!(
-            "SIREN {}{}",
-            org.siren,
-            org.siret
-                .as_ref()
-                .map(|s| format!(" — SIRET {s}"))
-                .unwrap_or_default()
-        )),
-        8.0,
-        Mm(15.0),
-        Mm(y),
-        &font,
-    );
-    y -= 12.0;
-
-    layer.use_text(
-        ascii_safe(&format!("DEVIS {}", quote.number)),
-        16.0,
-        Mm(15.0),
-        Mm(y),
-        &font,
-    );
-    y -= 7.0;
-    layer.use_text(
-        ascii_safe(&format!(
-            "Date {}  |  Statut {}  |  Client {} ({})",
-            quote.issue_date, quote.status, quote.third_party_name, quote.third_party_code
-        )),
-        9.0,
-        Mm(15.0),
-        Mm(y),
-        &font,
-    );
-    y -= 5.0;
-    if let Some(vu) = &quote.valid_until {
+    let draw_footer = |layer: &PdfLayerReference, page_idx: usize, total_hint: &str| {
+        layer.set_fill_color(ink_color());
         layer.use_text(
-            ascii_safe(&format!("Validite jusqu'au {vu}")),
-            9.0,
-            Mm(15.0),
-            Mm(y),
+            ascii_safe(&spec.footer_left),
+            7.5,
+            Mm(margin_l),
+            Mm(14.0),
             &font,
         );
-        y -= 5.0;
-    }
-    y -= 4.0;
-
-    layer.use_text(ascii_safe("Lignes"), 11.0, Mm(15.0), Mm(y), &font);
-    y -= 6.0;
-    for line in &quote.lines {
-        if y < 40.0 {
-            let (p, l) = doc.add_page(Mm(210.0), Mm(297.0), "L");
-            layer = doc.get_page(p).get_layer(l);
-            y = 280.0;
-        }
-        let qty = line.quantity_milli as f64 / 1000.0;
-        let row = format!(
-            "{}. {}  {} {} x {} = {} HT  TVA {}%",
-            line.line_no,
-            line.label,
-            qty,
-            line.unit,
-            cents_fr(line.unit_price_cents),
-            cents_fr(line.ht_cents),
-            format_rate(line.vat_rate_bp),
+        layer.set_fill_color(muted_color());
+        let right = format!("{} - {}", spec.number, total_hint);
+        // Approximer alignement droite
+        let approx = (right.len() as f32) * 1.35;
+        layer.use_text(
+            ascii_safe(&right),
+            7.5,
+            Mm((content_r - approx).max(margin_l)),
+            Mm(10.0),
+            &font,
         );
-        layer.use_text(ascii_safe(&row), 8.0, Mm(15.0), Mm(y), &font);
-        y -= 5.0;
-        if let Some(desc) = &line.description {
-            for chunk in wrap_text(desc, 95) {
-                if y < 40.0 {
-                    let (p, l) = doc.add_page(Mm(210.0), Mm(297.0), "L");
-                    layer = doc.get_page(p).get_layer(l);
-                    y = 280.0;
-                }
-                layer.use_text(ascii_safe(&chunk), 7.0, Mm(20.0), Mm(y), &font);
-                y -= 4.0;
-            }
+        let _ = page_idx;
+    };
+
+    let start_page = |layer: &mut PdfLayerReference,
+                      doc: &PdfDocumentReference,
+                      page_idx: &mut usize,
+                      y: &mut f32,
+                      full_header: bool|
+     -> DbResult<()> {
+        if !full_header {
+            let (p, l) = doc.add_page(Mm(210.0), Mm(297.0), "L");
+            *layer = doc.get_page(p).get_layer(l);
+            *page_idx += 1;
+            *y = 280.0;
+            layer.set_fill_color(ink_color());
+            layer.use_text(
+                ascii_safe(&format!("{} {}", spec.title, spec.number)),
+                11.0,
+                Mm(margin_l),
+                Mm(*y),
+                &font_bold,
+            );
+            *y -= 10.0;
+        }
+        Ok(())
+    };
+
+    // ——— En-tête titre + méta ———
+    layer.set_fill_color(ink_color());
+    layer.use_text(ascii_safe(spec.title), 24.0, Mm(margin_l), Mm(y), &font_bold);
+    y -= 16.0;
+
+    for (label, value) in &spec.meta {
+        if y < 40.0 {
+            draw_footer(&layer, page_idx, &format!("{page_idx}/?"));
+            start_page(&mut layer, &doc, &mut page_idx, &mut y, false)?;
+        }
+        layer.set_fill_color(ink_color());
+        layer.use_text(ascii_safe(label), 7.5, Mm(margin_l), Mm(y), &font_bold);
+        // Valeur à droite du label sur la même ligne visuelle (comme le modèle)
+        let label_w = (label.chars().count() as f32) * 1.55 + 4.0;
+        layer.use_text(
+            ascii_safe(value),
+            11.0,
+            Mm(margin_l + label_w.max(42.0)),
+            Mm(y - 0.8),
+            &font,
+        );
+        y -= 7.2;
+    }
+
+    y -= 8.0;
+
+    // ——— Parties : émetteur (gauche) / client (droite) ———
+    let party_top = y;
+    let mid_x = 110.0_f32;
+    layer.set_fill_color(ink_color());
+    layer.use_text(ascii_safe(&spec.org.name), 9.0, Mm(margin_l), Mm(party_top), &font_bold);
+    layer.use_text(
+        ascii_safe(&spec.client.name),
+        9.0,
+        Mm(mid_x),
+        Mm(party_top),
+        &font_bold,
+    );
+    y = party_top - 5.5;
+    let mut y_left = y;
+    let mut y_right = y;
+
+    if let Some(addr) = &spec.org.address {
+        for line in addr.lines() {
+            layer.use_text(ascii_safe(line), 7.5, Mm(margin_l), Mm(y_left), &font);
+            y_left -= 4.8;
         }
     }
-    y -= 6.0;
+    if let Some(addr) = &spec.client.address {
+        for line in addr.lines() {
+            layer.use_text(ascii_safe(line), 7.5, Mm(mid_x), Mm(y_right), &font);
+            y_right -= 4.8;
+        }
+    }
+    // Pas d'email org en modèle données — on ignore si absent
+    if let Some(email) = &spec.client.email {
+        layer.use_text(ascii_safe(email), 7.5, Mm(mid_x), Mm(y_right), &font);
+        y_right -= 4.8;
+    }
+    let org_id = spec
+        .org
+        .siret
+        .clone()
+        .unwrap_or_else(|| spec.org.siren.clone());
+    layer.use_text(ascii_safe(&org_id), 7.5, Mm(margin_l), Mm(y_left), &font);
+    y_left -= 4.8;
+    if let Some(siret) = &spec.client.siret {
+        layer.use_text(ascii_safe(siret), 7.5, Mm(mid_x), Mm(y_right), &font);
+        y_right -= 4.8;
+    }
+
+    y = y_left.min(y_right) - 10.0;
+
+    // ——— En-tête tableau sombre ———
+    let header_h = 6.5_f32;
+    let header_top = y;
+    let header_bot = y - header_h;
+    fill_rect(
+        &layer,
+        margin_l,
+        header_bot,
+        content_r,
+        header_top,
+        header_fill(),
+    );
+    layer.set_fill_color(white_color());
+    let head_y = header_bot + 2.0;
+    layer.use_text("Description", 7.5, Mm(margin_l + 1.5), Mm(head_y), &font_bold);
+    layer.use_text("Qté", 7.5, Mm(col_desc_r + 2.0), Mm(head_y), &font_bold);
+    layer.use_text("Prix unitaire", 7.5, Mm(col_qty_r + 1.5), Mm(head_y), &font_bold);
+    layer.use_text("TVA (%)", 7.5, Mm(col_unit_r + 1.5), Mm(head_y), &font_bold);
+    layer.use_text("Total HT", 7.5, Mm(col_vat_r + 2.0), Mm(head_y), &font_bold);
+    y = header_bot - 6.0;
+
+    // ——— Lignes ———
+    for line in &spec.lines {
+        let desc_chunks = {
+            let mut chunks = vec![line.label.to_string()];
+            if let Some(desc) = line.description {
+                for dline in desc.lines() {
+                    chunks.extend(wrap_text(dline, 52));
+                }
+            }
+            chunks
+        };
+        let block_h = (desc_chunks.len() as f32) * 4.6 + 3.0;
+        if y - block_h < 28.0 {
+            draw_footer(&layer, page_idx, &format!("{page_idx}/+"));
+            start_page(&mut layer, &doc, &mut page_idx, &mut y, false)?;
+            // mini header
+            fill_rect(
+                &layer,
+                margin_l,
+                y - header_h,
+                content_r,
+                y,
+                header_fill(),
+            );
+            layer.set_fill_color(white_color());
+            let hy = y - header_h + 2.0;
+            layer.use_text("Description", 7.5, Mm(margin_l + 1.5), Mm(hy), &font_bold);
+            layer.use_text("Qté", 7.5, Mm(col_desc_r + 2.0), Mm(hy), &font_bold);
+            layer.use_text("Prix unitaire", 7.5, Mm(col_qty_r + 1.5), Mm(hy), &font_bold);
+            layer.use_text("TVA (%)", 7.5, Mm(col_unit_r + 1.5), Mm(hy), &font_bold);
+            layer.use_text("Total HT", 7.5, Mm(col_vat_r + 2.0), Mm(hy), &font_bold);
+            y -= header_h + 6.0;
+        }
+
+        let row_y = y;
+        layer.set_fill_color(ink_color());
+        let mut dy = row_y;
+        for (i, chunk) in desc_chunks.iter().enumerate() {
+            layer.use_text(ascii_safe(chunk), 7.5, Mm(margin_l + 1.0), Mm(dy), &font);
+            if i == 0 {
+                // montants alignés sur la 1re ligne
+                layer.use_text(
+                    ascii_safe(&qty_fr(line.quantity_milli)),
+                    7.5,
+                    Mm(col_desc_r + 2.0),
+                    Mm(dy),
+                    &font,
+                );
+                layer.use_text(
+                    ascii_safe(&money_fr(line.unit_price_cents)),
+                    7.5,
+                    Mm(col_qty_r + 1.5),
+                    Mm(dy),
+                    &font,
+                );
+                layer.use_text(
+                    ascii_safe(&vat_pct_fr(line.vat_rate_bp)),
+                    7.5,
+                    Mm(col_unit_r + 1.5),
+                    Mm(dy),
+                    &font,
+                );
+                layer.use_text(
+                    ascii_safe(&money_fr(line.ht_cents)),
+                    7.5,
+                    Mm(col_vat_r + 2.0),
+                    Mm(dy),
+                    &font,
+                );
+            }
+            dy -= 4.6;
+        }
+        y = dy - 2.0;
+    }
+
+    // Règle sous les lignes
+    fill_rect(&layer, margin_l, y + 1.5, content_r, y + 2.0, rule_color());
+    y -= 8.0;
+
+    // ——— Totaux (à droite) ———
+    let totals_label_x = 120.0_f32;
+    let totals_value_x = 165.0_f32;
+    layer.set_fill_color(ink_color());
+    layer.use_text("Total HT", 7.5, Mm(totals_label_x), Mm(y), &font_bold);
     layer.use_text(
-        ascii_safe(&format!(
-            "Total HT {}   TVA {}   Total TTC {}",
-            cents_fr(quote.ht_cents),
-            cents_fr(quote.vat_cents),
-            cents_fr(quote.ttc_cents),
-        )),
-        11.0,
-        Mm(15.0),
+        ascii_safe(&money_fr(spec.ht_cents)),
+        7.5,
+        Mm(totals_value_x),
         Mm(y),
         &font,
     );
-    y -= 8.0;
-    if let Some(notes) = &quote.notes {
-        layer.use_text(ascii_safe(&format!("Notes: {notes}")), 8.0, Mm(15.0), Mm(y), &font);
-        y -= 5.0;
-    }
-    if let Some(legal) = &quote.legal_mentions {
-        for chunk in wrap_text(legal, 95) {
-            if y < 20.0 {
-                break;
-            }
-            layer.use_text(ascii_safe(&chunk), 7.0, Mm(15.0), Mm(y), &font);
-            y -= 4.0;
-        }
-    }
-    y -= 8.0;
+    y -= 8.5;
     layer.use_text(
-        ascii_safe("Document genere par SasCompta — devis commercial, sans valeur de facture."),
-        7.0,
-        Mm(15.0),
+        "Montant total de la TVA",
+        7.5,
+        Mm(totals_label_x),
+        Mm(y),
+        &font_bold,
+    );
+    layer.use_text(
+        ascii_safe(&money_fr(spec.vat_cents)),
+        7.5,
+        Mm(totals_value_x),
         Mm(y),
         &font,
+    );
+    y -= 10.0;
+
+    // Barre sombre Total TTC (sans RIB)
+    let ttc_h = 8.5_f32;
+    fill_rect(
+        &layer,
+        totals_label_x - 1.0,
+        y - 2.0,
+        content_r,
+        y - 2.0 + ttc_h,
+        header_fill(),
+    );
+    layer.set_fill_color(white_color());
+    layer.use_text("Total TTC", 7.5, Mm(totals_label_x), Mm(y), &font_bold);
+    layer.use_text(
+        ascii_safe(&money_fr(spec.ttc_cents)),
+        7.5,
+        Mm(totals_value_x),
+        Mm(y),
+        &font_bold,
+    );
+    y -= 14.0;
+
+    layer.set_fill_color(ink_color());
+    if let Some(notes) = spec.notes {
+        for chunk in wrap_text(notes, 95) {
+            if y < 28.0 {
+                break;
+            }
+            layer.use_text(ascii_safe(&chunk), 7.5, Mm(margin_l), Mm(y), &font);
+            y -= 4.6;
+        }
+        y -= 2.0;
+    }
+    if let Some(legal) = spec.legal_mentions {
+        for chunk in wrap_text(legal, 95) {
+            if y < 28.0 {
+                break;
+            }
+            layer.use_text(ascii_safe(&chunk), 7.5, Mm(margin_l), Mm(y), &font);
+            y -= 4.6;
+        }
+    }
+
+    // Pied de page léger — PAS de bandeau gris « Détails du paiement » / RIB
+    draw_footer(
+        &layer,
+        page_idx,
+        &format!("{page_idx}/{page_idx}"),
     );
 
     if let Some(parent) = path.parent() {
@@ -1391,6 +1679,61 @@ pub fn export_quote_pdf(
     doc.save(&mut BufWriter::new(File::create(path)?))
         .map_err(|e| format!("PDF save: {e}"))?;
     Ok(())
+}
+
+pub fn export_quote_pdf(
+    conn: &Connection,
+    quote_id: i64,
+    path: &Path,
+) -> DbResult<()> {
+    let quote = get_quote(conn, quote_id)?;
+    let org = crate::db::load_organization(conn)?;
+    let client = load_party(conn, quote.third_party_id)?;
+
+    let mut meta = vec![
+        ("Numéro de devis", quote.number.clone()),
+        ("Date d'émission", format_date_fr(&quote.issue_date)),
+    ];
+    if let Some(vu) = &quote.valid_until {
+        meta.push(("Valable jusqu'au", format_date_fr(vu)));
+    }
+    meta.push(("Statut", quote.status.clone()));
+
+    let lines: Vec<PdfLineView<'_>> = quote
+        .lines
+        .iter()
+        .map(|l| PdfLineView {
+            label: &l.label,
+            description: l.description.as_deref(),
+            quantity_milli: l.quantity_milli,
+            unit_price_cents: l.unit_price_cents,
+            ht_cents: l.ht_cents,
+            vat_rate_bp: l.vat_rate_bp,
+        })
+        .collect();
+
+    let footer_left = format!(
+        "{}, {} - {}",
+        org.name,
+        org.legal_form,
+        org.siren
+    );
+
+    let spec = CommercialPdf {
+        title: "Devis",
+        number: &quote.number,
+        meta,
+        org: &org,
+        client: &client,
+        lines,
+        ht_cents: quote.ht_cents,
+        vat_cents: quote.vat_cents,
+        ttc_cents: quote.ttc_cents,
+        notes: quote.notes.as_deref(),
+        legal_mentions: quote.legal_mentions.as_deref(),
+        footer_left,
+    };
+    render_commercial_pdf("SasCompta Devis", &spec, path)
 }
 
 pub fn export_invoice_pdf(
@@ -1400,169 +1743,74 @@ pub fn export_invoice_pdf(
 ) -> DbResult<()> {
     let inv = get_invoice(conn, invoice_id)?;
     let org = crate::db::load_organization(conn)?;
+    let client = load_party(conn, inv.third_party_id)?;
     let title = match inv.kind.as_str() {
-        "deposit" => "FACTURE D'ACOMPTE",
-        "balance" => "FACTURE DE SOLDE",
-        "credit_note" => "AVOIR",
-        _ => "FACTURE",
+        "deposit" => "Facture d'acompte",
+        "balance" => "Facture de solde",
+        "credit_note" => "Avoir",
+        _ => "Facture",
     };
     let number = inv
         .number
         .clone()
         .unwrap_or_else(|| format!("BROUILLON-{}", inv.id));
-    let (doc, page1, layer1) = PdfDocument::new("SasCompta Facture", Mm(210.0), Mm(297.0), "L1");
-    let font = doc
-        .add_builtin_font(BuiltinFont::Helvetica)
-        .map_err(|e| format!("PDF font: {e}"))?;
-    let mut layer = doc.get_page(page1).get_layer(layer1);
-    let mut y = 280.0;
 
-    layer.use_text(ascii_safe(&org.name), 14.0, Mm(15.0), Mm(y), &font);
-    y -= 6.0;
-    if let Some(addr) = &org.address {
-        for line in addr.lines() {
-            layer.use_text(ascii_safe(line), 9.0, Mm(15.0), Mm(y), &font);
-            y -= 4.5;
-        }
-    }
-    layer.use_text(
-        ascii_safe(&format!(
-            "SIREN {}{}",
-            org.siren,
-            org.siret
-                .as_ref()
-                .map(|s| format!(" — SIRET {s}"))
-                .unwrap_or_default()
-        )),
-        8.0,
-        Mm(15.0),
-        Mm(y),
-        &font,
-    );
-    y -= 12.0;
-    layer.use_text(
-        ascii_safe(&format!("{title} {number}")),
-        16.0,
-        Mm(15.0),
-        Mm(y),
-        &font,
-    );
-    y -= 7.0;
-    layer.use_text(
-        ascii_safe(&format!(
-            "Date {}  |  Statut {}  |  Client {} ({})",
-            inv.issue_date, inv.status, inv.third_party_name, inv.third_party_code
-        )),
-        9.0,
-        Mm(15.0),
-        Mm(y),
-        &font,
-    );
-    y -= 5.0;
+    let mut meta = vec![
+        ("Numéro de facture", number.clone()),
+        ("Date d'émission", format_date_fr(&inv.issue_date)),
+    ];
     if let Some(due) = &inv.due_date {
-        layer.use_text(
-            ascii_safe(&format!("Echeance {due}")),
-            9.0,
-            Mm(15.0),
-            Mm(y),
-            &font,
-        );
-        y -= 5.0;
+        meta.push(("Date d'échéance", format_date_fr(due)));
+    }
+    if let Some(qid) = inv.quote_id {
+        if let Ok(q) = get_quote_header(conn, qid) {
+            meta.push(("Numéro du devis associé", q.number));
+        }
     }
     if let Some(parent) = inv.parent_invoice_id {
-        layer.use_text(
-            ascii_safe(&format!("Document lie a facture #{parent}")),
-            8.0,
-            Mm(15.0),
-            Mm(y),
-            &font,
-        );
-        y -= 5.0;
+        meta.push(("Document lié", format!("#{parent}")));
     }
-    y -= 4.0;
-    layer.use_text(ascii_safe("Lignes"), 11.0, Mm(15.0), Mm(y), &font);
-    y -= 6.0;
-    for line in &inv.lines {
-        if y < 40.0 {
-            let (p, l) = doc.add_page(Mm(210.0), Mm(297.0), "L");
-            layer = doc.get_page(p).get_layer(l);
-            y = 280.0;
-        }
-        let qty = line.quantity_milli as f64 / 1000.0;
-        let row = format!(
-            "{}. {}  {} {} x {} = {} HT  TVA {}%",
-            line.line_no,
-            line.label,
-            qty,
-            line.unit,
-            cents_fr(line.unit_price_cents),
-            cents_fr(line.ht_cents),
-            format_rate(line.vat_rate_bp),
-        );
-        layer.use_text(ascii_safe(&row), 8.0, Mm(15.0), Mm(y), &font);
-        y -= 5.0;
-        if let Some(desc) = &line.description {
-            for chunk in wrap_text(desc, 95) {
-                if y < 40.0 {
-                    let (p, l) = doc.add_page(Mm(210.0), Mm(297.0), "L");
-                    layer = doc.get_page(p).get_layer(l);
-                    y = 280.0;
-                }
-                layer.use_text(ascii_safe(&chunk), 7.0, Mm(20.0), Mm(y), &font);
-                y -= 4.0;
-            }
-        }
-    }
-    y -= 6.0;
-    layer.use_text(
-        ascii_safe(&format!(
-            "Total HT {}   TVA {}   Total TTC {}",
-            cents_fr(inv.ht_cents),
-            cents_fr(inv.vat_cents),
-            cents_fr(inv.ttc_cents),
-        )),
-        11.0,
-        Mm(15.0),
-        Mm(y),
-        &font,
-    );
-    y -= 8.0;
-    if let Some(notes) = &inv.notes {
-        layer.use_text(ascii_safe(&format!("Notes: {notes}")), 8.0, Mm(15.0), Mm(y), &font);
-        y -= 5.0;
-    }
-    if let Some(legal) = &inv.legal_mentions {
-        for chunk in wrap_text(legal, 95) {
-            if y < 20.0 {
-                break;
-            }
-            layer.use_text(ascii_safe(&chunk), 7.0, Mm(15.0), Mm(y), &font);
-            y -= 4.0;
-        }
-    }
-    y -= 8.0;
-    layer.use_text(
-        ascii_safe("Document genere par SasCompta."),
-        7.0,
-        Mm(15.0),
-        Mm(y),
-        &font,
+
+    let lines: Vec<PdfLineView<'_>> = inv
+        .lines
+        .iter()
+        .map(|l| PdfLineView {
+            label: &l.label,
+            description: l.description.as_deref(),
+            quantity_milli: l.quantity_milli,
+            unit_price_cents: l.unit_price_cents,
+            ht_cents: l.ht_cents,
+            vat_rate_bp: l.vat_rate_bp,
+        })
+        .collect();
+
+    let footer_left = format!(
+        "{}, {} - {}",
+        org.name,
+        org.legal_form,
+        org.siren
     );
 
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    doc.save(&mut BufWriter::new(File::create(path)?))
-        .map_err(|e| format!("PDF save: {e}"))?;
+    let spec = CommercialPdf {
+        title,
+        number: &number,
+        meta,
+        org: &org,
+        client: &client,
+        lines,
+        ht_cents: inv.ht_cents,
+        vat_cents: inv.vat_cents,
+        ttc_cents: inv.ttc_cents,
+        notes: inv.notes.as_deref(),
+        legal_mentions: inv.legal_mentions.as_deref(),
+        footer_left,
+    };
+    render_commercial_pdf("SasCompta Facture", &spec, path)?;
     conn.execute(
         "UPDATE invoice SET pdf_path = ?1, updated_at = ?2 WHERE id = ?3",
         params![path.display().to_string(), now_iso(), invoice_id],
     )?;
     Ok(())
-}
-
-fn format_rate(bp: i32) -> String {
-    format!("{}.{:02}", bp / 100, bp % 100)
 }
 
 fn wrap_text(s: &str, width: usize) -> Vec<String> {
