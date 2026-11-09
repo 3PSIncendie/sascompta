@@ -497,6 +497,23 @@ p {
   gap: 0.55rem;
 }
 
+.welcome-open-actions {
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.welcome-form-panel select {
+  width: 100%;
+  margin-top: 0.35rem;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid var(--line);
+  border-radius: calc(var(--radius) - 2px);
+  background: var(--surface-2, #fff);
+  color: var(--ink);
+  font: inherit;
+}
+
 .tabs {
   display: flex;
   gap: 0.35rem;

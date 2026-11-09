@@ -58,7 +58,9 @@ pub struct WorkspaceInfo {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateWorkspaceInput {
-    pub path: String,
+    /// Si omis / vide : fichier créé sous le dossier app data (workspaces/).
+    #[serde(default)]
+    pub path: Option<String>,
     pub password: String,
     pub org_name: String,
     pub siren: String,
@@ -66,6 +68,17 @@ pub struct CreateWorkspaceInput {
     pub start_date: String,
     pub end_date: String,
     pub display_name: String,
+}
+
+/// Entrée du registre local (sociétés déjà créées / ouvertes sur cette machine).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KnownWorkspace {
+    pub id: String,
+    pub name: String,
+    pub siren: String,
+    pub path: String,
+    pub last_opened_at: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

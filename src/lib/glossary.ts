@@ -56,9 +56,9 @@ export const HELP: Record<string, HelpTopic> = {
     example: "Ex. : Marie, Dirigeant, Expert-comptable",
   },
   motDePasse: {
-    term: "Mot de passe workspace",
+    term: "Mot de passe société",
     plain:
-      "Protège le fichier .sascompta sur votre disque. Sans lui, personne ne peut ouvrir la compta. À conserver en lieu sûr.",
+      "Protège le fichier de votre société sur ce disque. Sans lui, personne ne peut ouvrir la compta. À conserver en lieu sûr.",
   },
   planComptable: {
     term: "Plan comptable (PCG)",

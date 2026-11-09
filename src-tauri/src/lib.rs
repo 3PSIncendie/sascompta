@@ -1,6 +1,7 @@
 mod commands;
 pub mod db;
 mod models;
+mod registry;
 mod security;
 
 use db::AppState;
@@ -25,6 +26,8 @@ pub fn run() {
         })
         .manage(AppState::new())
         .invoke_handler(tauri::generate_handler![
+            commands::list_known_workspaces,
+            commands::forget_known_workspace,
             commands::create_workspace,
             commands::open_workspace,
             commands::create_demo_workspace,
