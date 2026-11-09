@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { save } from "@tauri-apps/plugin-dialog";
 import { LabelWithHelp } from "../components/FieldHelp";
+import { NewThirdPartyModal } from "../components/NewThirdPartyModal";
 import { api } from "../lib/api";
 import { formatEuros, formatRateBp } from "../lib/money";
 import type {
@@ -36,9 +37,7 @@ export function TaxScreen() {
   const [codes, setCodes] = useState<VatCode[]>([]);
   const [tiers, setTiers] = useState<ThirdParty[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [newCode, setNewCode] = useState("");
-  const [newName, setNewName] = useState("");
-  const [newKind, setNewKind] = useState("supplier");
+  const [createOpen, setCreateOpen] = useState(false);
 
   async function refresh() {
     setError(null);
@@ -84,22 +83,6 @@ export function TaxScreen() {
     if (!path) return;
     try {
       await api.exportAuxCsv(fromDate, toDate, String(path));
-    } catch (e) {
-      setError(String(e));
-    }
-  }
-
-  async function addTier() {
-    setError(null);
-    try {
-      await api.createThirdParty({
-        code: newCode,
-        name: newName,
-        kind: newKind,
-      });
-      setNewCode("");
-      setNewName("");
-      await refresh();
     } catch (e) {
       setError(String(e));
     }
@@ -281,24 +264,16 @@ export function TaxScreen() {
       {tab === "tiers" && (
         <>
           <div className="toolbar">
-            <label>
-              Code
-              <input value={newCode} onChange={(e) => setNewCode(e.target.value)} />
-            </label>
-            <label>
-              Nom
-              <input value={newName} onChange={(e) => setNewName(e.target.value)} />
-            </label>
-            <label>
-              Type
-              <select value={newKind} onChange={(e) => setNewKind(e.target.value)}>
-                <option value="supplier">Fournisseur</option>
-                <option value="customer">Client</option>
-              </select>
-            </label>
-            <button type="button" className="primary" onClick={() => void addTier()}>
-              Ajouter
+            <button
+              type="button"
+              className="primary"
+              onClick={() => setCreateOpen(true)}
+            >
+              Nouveau tiers
             </button>
+            <span className="muted small">
+              Même formulaire que sur devis / factures (SIRET, adresse, e-mail).
+            </span>
           </div>
           <div className="table-wrap">
             <table>
@@ -308,6 +283,8 @@ export function TaxScreen() {
                   <th>Nom</th>
                   <th>Type</th>
                   <th>Compte</th>
+                  <th>SIRET</th>
+                  <th>E-mail</th>
                 </tr>
               </thead>
               <tbody>
@@ -317,11 +294,23 @@ export function TaxScreen() {
                     <td>{t.name}</td>
                     <td>{t.kind === "supplier" ? "Fournisseur" : "Client"}</td>
                     <td>{t.accountNumber}</td>
+                    <td>{t.siret || "—"}</td>
+                    <td>{t.email || "—"}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
+          <NewThirdPartyModal
+            open={createOpen}
+            onClose={() => setCreateOpen(false)}
+            onCreated={() => {
+              void refresh();
+            }}
+            existing={tiers}
+            defaultKind="customer"
+            allowAnyKind
+          />
         </>
       )}
     </div>

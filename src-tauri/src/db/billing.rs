@@ -66,6 +66,7 @@ pub fn migrate_billing(conn: &Connection) -> DbResult<()> {
             quote_id INTEGER NOT NULL REFERENCES quote(id) ON DELETE CASCADE,
             line_no INTEGER NOT NULL,
             label TEXT NOT NULL,
+            description TEXT,
             quantity_milli INTEGER NOT NULL DEFAULT 1000 CHECK (quantity_milli > 0),
             unit TEXT NOT NULL DEFAULT 'u',
             unit_price_cents INTEGER NOT NULL DEFAULT 0,
@@ -111,6 +112,7 @@ pub fn migrate_billing(conn: &Connection) -> DbResult<()> {
             invoice_id INTEGER NOT NULL REFERENCES invoice(id) ON DELETE CASCADE,
             line_no INTEGER NOT NULL,
             label TEXT NOT NULL,
+            description TEXT,
             quantity_milli INTEGER NOT NULL DEFAULT 1000 CHECK (quantity_milli > 0),
             unit TEXT NOT NULL DEFAULT 'u',
             unit_price_cents INTEGER NOT NULL DEFAULT 0,
@@ -141,6 +143,7 @@ pub fn migrate_billing(conn: &Connection) -> DbResult<()> {
         );
         "#,
     )?;
+    enrich_billing_line_description(conn)?;
     Ok(())
 }
 
@@ -160,6 +163,34 @@ fn enrich_third_party(conn: &Connection) -> DbResult<()> {
         ),
     ] {
         if !cols.iter().any(|c| c == col) {
+            conn.execute(ddl, [])?;
+        }
+    }
+    Ok(())
+}
+
+fn table_columns(conn: &Connection, table: &str) -> DbResult<Vec<String>> {
+    let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+    let cols: Vec<String> = stmt
+        .query_map([], |r| r.get::<_, String>(1))?
+        .filter_map(|r| r.ok())
+        .collect();
+    Ok(cols)
+}
+
+fn enrich_billing_line_description(conn: &Connection) -> DbResult<()> {
+    for (table, ddl) in [
+        (
+            "quote_line",
+            "ALTER TABLE quote_line ADD COLUMN description TEXT",
+        ),
+        (
+            "invoice_line",
+            "ALTER TABLE invoice_line ADD COLUMN description TEXT",
+        ),
+    ] {
+        let cols = table_columns(conn, table)?;
+        if !cols.iter().any(|c| c == "description") {
             conn.execute(ddl, [])?;
         }
     }
@@ -300,7 +331,7 @@ fn map_quote_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Quote> {
 
 fn load_quote_lines(conn: &Connection, quote_id: i64) -> DbResult<Vec<QuoteLine>> {
     let mut stmt = conn.prepare(
-        "SELECT id, quote_id, line_no, label, quantity_milli, unit, unit_price_cents,
+        "SELECT id, quote_id, line_no, label, description, quantity_milli, unit, unit_price_cents,
                 ht_cents, vat_rate_bp, vat_code, account_number
          FROM quote_line WHERE quote_id = ?1 ORDER BY line_no",
     )?;
@@ -310,13 +341,14 @@ fn load_quote_lines(conn: &Connection, quote_id: i64) -> DbResult<Vec<QuoteLine>
             quote_id: r.get(1)?,
             line_no: r.get(2)?,
             label: r.get(3)?,
-            quantity_milli: r.get(4)?,
-            unit: r.get(5)?,
-            unit_price_cents: r.get(6)?,
-            ht_cents: r.get(7)?,
-            vat_rate_bp: r.get(8)?,
-            vat_code: r.get(9)?,
-            account_number: r.get(10)?,
+            description: r.get(4)?,
+            quantity_milli: r.get(5)?,
+            unit: r.get(6)?,
+            unit_price_cents: r.get(7)?,
+            ht_cents: r.get(8)?,
+            vat_rate_bp: r.get(9)?,
+            vat_code: r.get(10)?,
+            account_number: r.get(11)?,
         })
     })?;
     Ok(rows.filter_map(|r| r.ok()).collect())
@@ -382,6 +414,12 @@ fn validate_vat_mode(mode: &str) -> DbResult<()> {
     }
 }
 
+fn normalize_description(raw: &Option<String>) -> Option<String> {
+    raw.as_ref()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
 fn insert_quote_lines(
     conn: &Connection,
     quote_id: i64,
@@ -390,7 +428,7 @@ fn insert_quote_lines(
     for (i, (line, _)) in lines.iter().enumerate() {
         let label = line.label.trim();
         if label.is_empty() {
-            return Err("Libellé de ligne requis".into());
+            return Err("Titre de ligne requis".into());
         }
         if line.quantity_milli <= 0 {
             return Err("Quantité invalide".into());
@@ -400,15 +438,17 @@ fn insert_quote_lines(
         } else {
             line.account_number.trim()
         };
+        let description = normalize_description(&line.description);
         conn.execute(
             "INSERT INTO quote_line(
-                quote_id, line_no, label, quantity_milli, unit, unit_price_cents,
+                quote_id, line_no, label, description, quantity_milli, unit, unit_price_cents,
                 ht_cents, vat_rate_bp, vat_code, account_number
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             params![
                 quote_id,
                 (i + 1) as i32,
                 label,
+                description,
                 line.quantity_milli,
                 if line.unit.trim().is_empty() {
                     "u"
@@ -590,7 +630,7 @@ fn map_invoice_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Invoice> {
 
 fn load_invoice_lines(conn: &Connection, invoice_id: i64) -> DbResult<Vec<InvoiceLine>> {
     let mut stmt = conn.prepare(
-        "SELECT id, invoice_id, line_no, label, quantity_milli, unit, unit_price_cents,
+        "SELECT id, invoice_id, line_no, label, description, quantity_milli, unit, unit_price_cents,
                 ht_cents, vat_rate_bp, vat_code, account_number, analytic_code
          FROM invoice_line WHERE invoice_id = ?1 ORDER BY line_no",
     )?;
@@ -600,14 +640,15 @@ fn load_invoice_lines(conn: &Connection, invoice_id: i64) -> DbResult<Vec<Invoic
             invoice_id: r.get(1)?,
             line_no: r.get(2)?,
             label: r.get(3)?,
-            quantity_milli: r.get(4)?,
-            unit: r.get(5)?,
-            unit_price_cents: r.get(6)?,
-            ht_cents: r.get(7)?,
-            vat_rate_bp: r.get(8)?,
-            vat_code: r.get(9)?,
-            account_number: r.get(10)?,
-            analytic_code: r.get(11)?,
+            description: r.get(4)?,
+            quantity_milli: r.get(5)?,
+            unit: r.get(6)?,
+            unit_price_cents: r.get(7)?,
+            ht_cents: r.get(8)?,
+            vat_rate_bp: r.get(9)?,
+            vat_code: r.get(10)?,
+            account_number: r.get(11)?,
+            analytic_code: r.get(12)?,
         })
     })?;
     Ok(rows.filter_map(|r| r.ok()).collect())
@@ -712,20 +753,22 @@ fn insert_invoice_lines(
     for (i, line) in lines.iter().enumerate() {
         let label = line.label.trim();
         if label.is_empty() {
-            return Err("Libellé de ligne requis".into());
+            return Err("Titre de ligne requis".into());
         }
         if line.quantity_milli <= 0 {
             return Err("Quantité invalide".into());
         }
+        let description = normalize_description(&line.description);
         conn.execute(
             "INSERT INTO invoice_line(
-                invoice_id, line_no, label, quantity_milli, unit, unit_price_cents,
+                invoice_id, line_no, label, description, quantity_milli, unit, unit_price_cents,
                 ht_cents, vat_rate_bp, vat_code, account_number, analytic_code
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             params![
                 invoice_id,
                 (i + 1) as i32,
                 label,
+                description,
                 line.quantity_milli,
                 if line.unit.trim().is_empty() {
                     "u"
@@ -913,6 +956,7 @@ pub fn create_credit_note(conn: &Connection, invoice_id: i64) -> DbResult<Invoic
         .iter()
         .map(|l| InvoiceLineInput {
             label: format!("Avoir — {}", l.label),
+            description: l.description.clone(),
             quantity_milli: l.quantity_milli,
             unit: l.unit.clone(),
             unit_price_cents: l.unit_price_cents,
@@ -973,6 +1017,7 @@ pub fn create_deposit_invoice(
         legal_mentions: parent.legal_mentions.clone(),
         lines: vec![InvoiceLineInput {
             label: "Acompte".into(),
+            description: None,
             quantity_milli: 1000,
             unit: "u".into(),
             unit_price_cents: amount_ht_cents,
@@ -1027,13 +1072,14 @@ pub fn convert_quote_to_invoice(conn: &Connection, quote_id: i64) -> DbResult<In
     for line in &quote.lines {
         conn.execute(
             "INSERT INTO invoice_line(
-                invoice_id, line_no, label, quantity_milli, unit, unit_price_cents,
+                invoice_id, line_no, label, description, quantity_milli, unit, unit_price_cents,
                 ht_cents, vat_rate_bp, vat_code, account_number
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             params![
                 invoice_id,
                 line.line_no,
                 line.label,
+                line.description,
                 line.quantity_milli,
                 line.unit,
                 line.unit_price_cents,
@@ -1291,6 +1337,17 @@ pub fn export_quote_pdf(
         );
         layer.use_text(ascii_safe(&row), 8.0, Mm(15.0), Mm(y), &font);
         y -= 5.0;
+        if let Some(desc) = &line.description {
+            for chunk in wrap_text(desc, 95) {
+                if y < 40.0 {
+                    let (p, l) = doc.add_page(Mm(210.0), Mm(297.0), "L");
+                    layer = doc.get_page(p).get_layer(l);
+                    y = 280.0;
+                }
+                layer.use_text(ascii_safe(&chunk), 7.0, Mm(20.0), Mm(y), &font);
+                y -= 4.0;
+            }
+        }
     }
     y -= 6.0;
     layer.use_text(
@@ -1444,6 +1501,17 @@ pub fn export_invoice_pdf(
         );
         layer.use_text(ascii_safe(&row), 8.0, Mm(15.0), Mm(y), &font);
         y -= 5.0;
+        if let Some(desc) = &line.description {
+            for chunk in wrap_text(desc, 95) {
+                if y < 40.0 {
+                    let (p, l) = doc.add_page(Mm(210.0), Mm(297.0), "L");
+                    layer = doc.get_page(p).get_layer(l);
+                    y = 280.0;
+                }
+                layer.use_text(ascii_safe(&chunk), 7.0, Mm(20.0), Mm(y), &font);
+                y -= 4.0;
+            }
+        }
     }
     y -= 6.0;
     layer.use_text(
@@ -1540,6 +1608,9 @@ pub fn seed_demo_quotes(conn: &Connection) -> DbResult<()> {
         lines: vec![
             QuoteLineInput {
                 label: "Centrale détection addressable".into(),
+                description: Some(
+                    "Fourniture centrale + boucles adressables\nMise en service incluse".into(),
+                ),
                 quantity_milli: 1000,
                 unit: "u".into(),
                 unit_price_cents: 250_000,
@@ -1550,6 +1621,7 @@ pub fn seed_demo_quotes(conn: &Connection) -> DbResult<()> {
             },
             QuoteLineInput {
                 label: "Main d'oeuvre pose".into(),
+                description: Some("Pose et câblage sur site".into()),
                 quantity_milli: 8000,
                 unit: "h".into(),
                 unit_price_cents: 6_500,
@@ -1577,6 +1649,7 @@ pub fn seed_demo_quotes(conn: &Connection) -> DbResult<()> {
         legal_mentions: None,
         lines: vec![InvoiceLineInput {
             label: "Contrat maintenance annuelle".into(),
+            description: Some("Visites périodiques + rapport".into()),
             quantity_milli: 1000,
             unit: "u".into(),
             unit_price_cents: 120_000,
@@ -2135,6 +2208,7 @@ mod tests {
                 legal_mentions: None,
                 lines: vec![InvoiceLineInput {
                     label: "Prestation".into(),
+                    description: None,
                     quantity_milli: 1000,
                     unit: "u".into(),
                     unit_price_cents: 10_000,

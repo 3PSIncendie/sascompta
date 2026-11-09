@@ -147,8 +147,8 @@ export default function App() {
           onWorkspaceChange={setWorkspace}
         />
       )}
-      {nav === "devis" && <QuotesScreen />}
-      {nav === "factures" && <InvoicesScreen />}
+      {nav === "devis" && <QuotesScreen onNavigate={setNav} />}
+      {nav === "factures" && <InvoicesScreen onNavigate={setNav} />}
       {nav === "relances" && <RemindersScreen />}
       {nav === "einvoice" && <EInvoiceScreen />}
       {nav === "salaries" && <EmployeesScreen />}

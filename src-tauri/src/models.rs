@@ -509,6 +509,8 @@ pub struct QuoteLine {
     pub quote_id: i64,
     pub line_no: i32,
     pub label: String,
+    #[serde(default)]
+    pub description: Option<String>,
     pub quantity_milli: i64,
     pub unit: String,
     pub unit_price_cents: i64,
@@ -522,6 +524,8 @@ pub struct QuoteLine {
 #[serde(rename_all = "camelCase")]
 pub struct QuoteLineInput {
     pub label: String,
+    #[serde(default)]
+    pub description: Option<String>,
     pub quantity_milli: i64,
     pub unit: String,
     pub unit_price_cents: i64,
@@ -574,6 +578,8 @@ pub struct InvoiceLine {
     pub invoice_id: i64,
     pub line_no: i32,
     pub label: String,
+    #[serde(default)]
+    pub description: Option<String>,
     pub quantity_milli: i64,
     pub unit: String,
     pub unit_price_cents: i64,
@@ -621,6 +627,8 @@ pub struct Invoice {
 #[serde(rename_all = "camelCase")]
 pub struct InvoiceLineInput {
     pub label: String,
+    #[serde(default)]
+    pub description: Option<String>,
     pub quantity_milli: i64,
     pub unit: String,
     pub unit_price_cents: i64,

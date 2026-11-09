@@ -56,6 +56,7 @@ describe("billing quotes helpers", () => {
   it("buildCreateInput mappe les lignes brouillon", () => {
     const line = emptyDraftLine(2000, "T20C");
     line.label = "Prestation";
+    line.description = "Détail A\nDétail B";
     line.quantity = "2";
     line.unitPriceEuros = "100,00";
     const input = buildCreateInput({
@@ -71,6 +72,7 @@ describe("billing quotes helpers", () => {
     expect(input.lines[0].quantityMilli).toBe(2000);
     expect(input.lines[0].unitPriceCents).toBe(10_000);
     expect(input.lines[0].htCents).toBe(20_000);
+    expect(input.lines[0].description).toBe("Détail A\nDétail B");
     expect(input.notes).toBe("note");
   });
 });

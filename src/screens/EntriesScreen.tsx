@@ -1,12 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { LabelWithHelp } from "../components/FieldHelp";
+import { ThirdPartySelect } from "../components/ThirdPartySelect";
 import { api } from "../lib/api";
 import {
   buildGuidedLines,
   DEFAULT_COUNTERPART,
+  defaultJournalForGuided,
   defaultVatCodeFor,
   eurosStringsFromLines,
+  FRAIS_SETTLEMENT_OPTIONS,
   preferredHtAccount,
   suggestHtAccounts,
   vatCodesForKind,
@@ -157,9 +160,19 @@ export function EntriesScreen() {
 
   function applyKindDefaults(kind: GuidedKind) {
     setGuidedKind(kind);
-    setGuidedCounterpart(DEFAULT_COUNTERPART[kind]);
-    setJournalCode(kind === "vente" ? "VTE" : "ACH");
+    const counterpart = DEFAULT_COUNTERPART[kind];
+    setGuidedCounterpart(counterpart);
+    setJournalCode(defaultJournalForGuided(kind, counterpart));
     applyVatModeDefaults(kind, "normale");
+  }
+
+  function applyFraisSettlement(account: string) {
+    setGuidedCounterpart(account);
+    setJournalCode(defaultJournalForGuided("frais", account));
+    const opt = FRAIS_SETTLEMENT_OPTIONS.find((o) => o.account === account);
+    if (opt && !opt.needsSupplier) {
+      setGuidedThirdPartyId(null);
+    }
   }
 
   function generateFromGuided() {
@@ -490,7 +503,8 @@ export function EntriesScreen() {
                         }
                       >
                         <option value="vente">Vente (produit)</option>
-                        <option value="achat">Achat (charge)</option>
+                        <option value="achat">Achat (marchandises / fournitures)</option>
+                        <option value="frais">Frais (charge + TVA)</option>
                       </select>
                     </label>
                     <label>
@@ -518,30 +532,65 @@ export function EntriesScreen() {
                         placeholder="100,00"
                       />
                     </label>
-                    <label>
-                      <LabelWithHelp topic="contrepartie">
-                        Contrepartie
-                      </LabelWithHelp>
-                      <select
-                        value={guidedCounterpart}
-                        onChange={(e) => setGuidedCounterpart(e.target.value)}
-                      >
-                        {accounts
-                          .filter(
-                            (a) =>
-                              a.number.startsWith("401") ||
-                              a.number.startsWith("411") ||
-                              a.number.startsWith("512") ||
-                              a.number.startsWith("530") ||
-                              a.number === guidedCounterpart,
-                          )
-                          .map((a) => (
-                            <option key={a.number} value={a.number}>
-                              {a.number} — {a.label}
+                    {guidedKind === "frais" ? (
+                      <label>
+                        Règlement
+                        <select
+                          value={
+                            FRAIS_SETTLEMENT_OPTIONS.find((o) =>
+                              guidedCounterpart.startsWith(o.account),
+                            )?.account ?? guidedCounterpart
+                          }
+                          onChange={(e) => applyFraisSettlement(e.target.value)}
+                        >
+                          {FRAIS_SETTLEMENT_OPTIONS.map((o) => (
+                            <option key={o.account} value={o.account}>
+                              {o.label}
                             </option>
                           ))}
-                      </select>
-                    </label>
+                        </select>
+                      </label>
+                    ) : (
+                      <label>
+                        <LabelWithHelp topic="contrepartie">
+                          Contrepartie
+                        </LabelWithHelp>
+                        <select
+                          value={guidedCounterpart}
+                          onChange={(e) => {
+                            setGuidedCounterpart(e.target.value);
+                            setJournalCode(
+                              defaultJournalForGuided(
+                                guidedKind,
+                                e.target.value,
+                              ),
+                            );
+                          }}
+                        >
+                          {accounts
+                            .filter(
+                              (a) =>
+                                a.number.startsWith("401") ||
+                                a.number.startsWith("411") ||
+                                a.number.startsWith("512") ||
+                                a.number.startsWith("530") ||
+                                a.number === guidedCounterpart,
+                            )
+                            .map((a) => (
+                              <option key={a.number} value={a.number}>
+                                {a.number} — {a.label}
+                              </option>
+                            ))}
+                        </select>
+                      </label>
+                    )}
+                    {guidedKind === "frais" && (
+                      <p className="hint" style={{ gridColumn: "1 / -1" }}>
+                        Journal auto : <strong>{journalCode}</strong> — ACH si
+                        fournisseur 401, OD si banque / caisse. Lignes
+                        équilibrées HT + TVA déductible + contrepartie.
+                      </p>
+                    )}
                     <label>
                       <LabelWithHelp topic="regimeTvaSaisie">
                         Régime TVA
@@ -592,27 +641,29 @@ export function EntriesScreen() {
                     )}
                     <label>
                       <LabelWithHelp topic="tiers">Tiers (optionnel)</LabelWithHelp>
-                      <select
-                        value={guidedThirdPartyId ?? ""}
-                        onChange={(e) =>
-                          setGuidedThirdPartyId(
-                            e.target.value ? Number(e.target.value) : null,
-                          )
+                      <ThirdPartySelect
+                        value={guidedThirdPartyId}
+                        onChange={setGuidedThirdPartyId}
+                        tiers={tiers}
+                        onCreated={(tier) => {
+                          setTiers((prev) =>
+                            prev.some((t) => t.id === tier.id)
+                              ? prev
+                              : [...prev, tier],
+                          );
+                          setGuidedThirdPartyId(tier.id);
+                        }}
+                        kind={
+                          guidedKind === "vente"
+                            ? "customer"
+                            : guidedKind === "frais" &&
+                                !guidedCounterpart.startsWith("401")
+                              ? "any"
+                              : "supplier"
                         }
-                      >
-                        <option value="">—</option>
-                        {tiers
-                          .filter((t) =>
-                            guidedKind === "vente"
-                              ? t.kind === "customer" || t.accountNumber.startsWith("411")
-                              : t.kind === "supplier" || t.accountNumber.startsWith("401"),
-                          )
-                          .map((t) => (
-                            <option key={t.id} value={t.id}>
-                              {t.code} {t.name}
-                            </option>
-                          ))}
-                      </select>
+                        allowEmpty
+                        compact
+                      />
                     </label>
                   </div>
 
@@ -694,24 +745,23 @@ export function EntriesScreen() {
                     </option>
                   ))}
                 </select>
-                <select
-                  value={l.thirdPartyId ?? ""}
+                <ThirdPartySelect
+                  value={l.thirdPartyId}
                   disabled={!editing}
-                  onChange={(e) =>
-                    updateLine(i, {
-                      thirdPartyId: e.target.value
-                        ? Number(e.target.value)
-                        : null,
-                    })
-                  }
-                >
-                  <option value="">—</option>
-                  {tiers.map((t) => (
-                    <option key={t.id} value={t.id}>
-                      {t.code} {t.name}
-                    </option>
-                  ))}
-                </select>
+                  onChange={(id) => updateLine(i, { thirdPartyId: id })}
+                  tiers={tiers}
+                  onCreated={(tier) => {
+                    setTiers((prev) =>
+                      prev.some((t) => t.id === tier.id)
+                        ? prev
+                        : [...prev, tier],
+                    );
+                    updateLine(i, { thirdPartyId: tier.id });
+                  }}
+                  kind="any"
+                  allowEmpty
+                  compact
+                />
                 <select
                   value={l.vatCode ?? ""}
                   disabled={!editing}
