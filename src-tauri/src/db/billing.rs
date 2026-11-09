@@ -1399,19 +1399,20 @@ fn build_vte_lines_from_invoice(inv: &Invoice) -> DbResult<Vec<EntryLineInput>> 
     Ok(lines)
 }
 
-/// Texte PDF Helvetica / WinAnsi : accents FR + euro conservés, tirets typographiques normalisés.
+/// Texte PDF Helvetica / WinAnsi : accents FR + euro + séparateurs FR conservés.
 fn ascii_safe(s: &str) -> String {
     s.chars()
         .map(|c| match c {
             '—' | '–' | '−' => '-',
-            '·' | '•' => '-',
+            '•' => '·',
             '’' | '‘' | '‛' => '\'',
             '“' | '”' | '„' => '"',
             '…' => '.',
             '«' | '»' => '"',
-            'à' | 'â' | 'ä' | 'é' | 'è' | 'ê' | 'ë' | 'î' | 'ï' | 'ô' | 'ö' | 'ù' | 'û' | 'ü'
-            | 'ç' | 'À' | 'Â' | 'Ä' | 'É' | 'È' | 'Ê' | 'Ë' | 'Î' | 'Ï' | 'Ô' | 'Ö' | 'Ù' | 'Û'
-            | 'Ü' | 'Ç' | '€' => c,
+            '\u{202F}' => '\u{00A0}', // espace fine → nbsp WinAnsi
+            '·' | '\u{00A0}' | 'à' | 'â' | 'ä' | 'é' | 'è' | 'ê' | 'ë' | 'î' | 'ï' | 'ô' | 'ö'
+            | 'ù' | 'û' | 'ü' | 'ç' | 'À' | 'Â' | 'Ä' | 'É' | 'È' | 'Ê' | 'Ë' | 'Î' | 'Ï' | 'Ô'
+            | 'Ö' | 'Ù' | 'Û' | 'Ü' | 'Ç' | '€' => c,
             c if c.is_ascii() => c,
             _ => '?',
         })
@@ -1422,8 +1423,97 @@ fn cents_fr(cents: i64) -> String {
     crate::db::tax::format_cents_csv(cents)
 }
 
+/// Montant FR type référence 3PSI : `3 500,00 €`.
+/// Espaces ASCII : Helvetica/printpdf ignore les nbsp WinAnsi dans `use_text`.
 fn money_fr(cents: i64) -> String {
-    format!("{} €", cents_fr(cents))
+    let raw = cents_fr(cents);
+    let (sign, body) = if let Some(rest) = raw.strip_prefix('-') {
+        ("-", rest)
+    } else {
+        ("", raw.as_str())
+    };
+    let (int_part, dec) = body.split_once(',').unwrap_or((body, "00"));
+    let grouped = group_thousands(int_part);
+    format!("{sign}{grouped},{dec} €")
+}
+
+fn group_thousands(digits: &str) -> String {
+    let chars: Vec<char> = digits.chars().collect();
+    let mut out = String::new();
+    for (i, c) in chars.iter().enumerate() {
+        if i > 0 && (chars.len() - i) % 3 == 0 {
+            out.push(' ');
+        }
+        out.push(*c);
+    }
+    out
+}
+
+fn approx_width_mm(s: &str, size_pt: f32) -> f32 {
+    let mut w_pt = 0.0_f32;
+    for c in s.chars() {
+        let factor = match c {
+            'i' | 'l' | 'I' | 'j' | 't' | 'f' | 'r' | '.' | ',' | ' ' | '\u{00A0}' | '\'' => 0.28,
+            'm' | 'w' | 'M' | 'W' => 0.83,
+            '%' | '@' | '/' => 0.72,
+            '€' | '·' => 0.55,
+            _ => 0.55,
+        };
+        w_pt += factor * size_pt;
+    }
+    w_pt * 25.4 / 72.0
+}
+
+fn draw_text_right(
+    layer: &PdfLayerReference,
+    text: &str,
+    size_pt: f32,
+    right_x_mm: f32,
+    y_mm: f32,
+    font: &IndirectFontRef,
+) {
+    let safe = ascii_safe(text);
+    let x = right_x_mm - approx_width_mm(&safe, size_pt);
+    layer.use_text(safe, size_pt, Mm(x), Mm(y_mm), font);
+}
+
+fn spaced_siren(siren: &str) -> String {
+    let digits: String = siren.chars().filter(|c| c.is_ascii_digit()).collect();
+    if digits.len() == 9 {
+        format!("{} {} {}", &digits[0..3], &digits[3..6], &digits[6..9])
+    } else if siren.is_empty() {
+        String::new()
+    } else {
+        siren.to_string()
+    }
+}
+
+fn city_from_address(address: Option<&str>) -> Option<String> {
+    let last = address?
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .last()?;
+    // « 75008 Paris, FR » / « 75011 Paris » → Paris
+    let mut tokens = last
+        .split(|c: char| c == ',' || c.is_whitespace())
+        .filter(|t| !t.is_empty())
+        .filter(|t| !t.chars().all(|c| c.is_ascii_digit()))
+        .filter(|t| t.len() > 1 && t.to_ascii_uppercase() != "FR");
+    tokens.next().map(|s| s.to_string())
+}
+
+fn commercial_footer_left(org: &Organization) -> String {
+    let city = city_from_address(org.address.as_deref());
+    let siren = spaced_siren(&org.siren);
+    match city {
+        Some(c) if !siren.is_empty() => {
+            format!("{}, {} · {} {}", org.name, org.legal_form, c, siren)
+        }
+        Some(c) => format!("{}, {} · {}", org.name, org.legal_form, c),
+        None if !siren.is_empty() => format!("{}, {} · {}", org.name, org.legal_form, siren),
+        None => format!("{}, {}", org.name, org.legal_form),
+    }
 }
 
 fn format_date_fr(iso: &str) -> String {
@@ -1456,10 +1546,6 @@ fn vat_pct_fr(bp: i32) -> String {
 
 fn ink_color() -> Color {
     Color::Rgb(Rgb::new(0.114, 0.114, 0.106, None))
-}
-
-fn muted_color() -> Color {
-    Color::Rgb(Rgb::new(0.388, 0.388, 0.376, None))
 }
 
 fn header_fill() -> Color {
@@ -1528,7 +1614,7 @@ struct CommercialPdf<'a> {
     footer_left: String,
 }
 
-/// Layout calqué sur le modèle facture 3PSI / Qonto (sans bandeau gris RIB en bas).
+/// Layout calqué sur le modèle devis/facture 3PSI (sans bandeau « Détails du paiement » / RIB).
 fn render_commercial_pdf(doc_title: &str, spec: &CommercialPdf<'_>, path: &Path) -> DbResult<()> {
     let (doc, page1, layer1) = PdfDocument::new(doc_title, Mm(210.0), Mm(297.0), "L1");
     let font = doc
@@ -1539,39 +1625,68 @@ fn render_commercial_pdf(doc_title: &str, spec: &CommercialPdf<'_>, path: &Path)
         .map_err(|e| format!("PDF font bold: {e}"))?;
 
     let margin_l = 12.7_f32;
-    let margin_r = 12.7_f32;
+    let margin_r = 11.6_f32;
     let page_w = 210.0_f32;
     let content_r = page_w - margin_r;
-    // Colonnes tableau (mm) — calées sur le modèle référence
-    let col_desc_r = 103.0_f32;
-    let col_qty_r = 119.5_f32;
-    let col_unit_r = 146.5_f32;
-    let col_vat_r = 165.5_f32;
+    // Colonnes tableau (mm) — bords droits calés sur la référence 3PSI
+    let col_desc_r = 103.2_f32;
+    let col_qty_right = 118.0_f32;
+    let col_unit_right = 145.0_f32;
+    let col_vat_right = 164.0_f32;
+    let col_ht_right = 195.3_f32;
+    let meta_value_x = 52.0_f32;
+    let mid_x = 108.7_f32;
+    let totals_label_x = 123.3_f32;
+    let line_leading = 4.76_f32;
+    let footer_band_h = 23.2_f32;
 
     let mut layer = doc.get_page(page1).get_layer(layer1);
     let mut page_idx = 1usize;
-    let mut y = 284.0_f32;
+    // Marge haute type référence (~24 mm sous le bord)
+    let mut y = 273.0_f32;
 
-    let draw_footer = |layer: &PdfLayerReference, page_idx: usize, total_hint: &str| {
-        layer.set_fill_color(ink_color());
+    let draw_table_header = |layer: &PdfLayerReference, y_top: f32, header_h: f32| {
+        let header_bot = y_top - header_h;
+        // Cellules distinctes comme le modèle Qonto/3PSI
+        let edges = [
+            margin_l,
+            col_desc_r,
+            119.6_f32,
+            146.6_f32,
+            165.6_f32,
+            content_r,
+        ];
+        for win in edges.windows(2) {
+            fill_rect(layer, win[0], header_bot, win[1], y_top, header_fill());
+        }
+        layer.set_fill_color(white_color());
+        let head_y = header_bot + 2.0;
+        layer.use_text(
+            "Description",
+            7.5,
+            Mm(margin_l + 3.0),
+            Mm(head_y),
+            &font_bold,
+        );
+        draw_text_right(layer, "Qté", 7.5, col_qty_right, head_y, &font_bold);
+        draw_text_right(layer, "Prix unitaire", 7.5, col_unit_right, head_y, &font_bold);
+        draw_text_right(layer, "TVA (%)", 7.5, col_vat_right, head_y, &font_bold);
+        draw_text_right(layer, "Total HT", 7.5, col_ht_right, head_y, &font_bold);
+    };
+
+    let draw_footer = |layer: &PdfLayerReference, page_idx: usize, total_pages: &str| {
+        // Bandeau bas sombre (identité) — distinct du bandeau RIB volontairement omis
+        fill_rect(layer, 0.0, 0.0, page_w, footer_band_h, header_fill());
+        layer.set_fill_color(white_color());
         layer.use_text(
             ascii_safe(&spec.footer_left),
             7.5,
             Mm(margin_l),
-            Mm(14.0),
+            Mm(16.2),
             &font,
         );
-        layer.set_fill_color(muted_color());
-        let right = format!("{} - {}", spec.number, total_hint);
-        // Approximer alignement droite
-        let approx = (right.len() as f32) * 1.35;
-        layer.use_text(
-            ascii_safe(&right),
-            7.5,
-            Mm((content_r - approx).max(margin_l)),
-            Mm(10.0),
-            &font,
-        );
+        let right = format!("{} · {}", spec.number, total_pages);
+        draw_text_right(layer, &right, 7.5, content_r, 9.8, &font);
         let _ = page_idx;
     };
 
@@ -1602,32 +1717,29 @@ fn render_commercial_pdf(doc_title: &str, spec: &CommercialPdf<'_>, path: &Path)
     // ——— En-tête titre + méta ———
     layer.set_fill_color(ink_color());
     layer.use_text(ascii_safe(spec.title), 24.0, Mm(margin_l), Mm(y), &font_bold);
-    y -= 16.0;
+    y -= 16.2;
 
     for (label, value) in &spec.meta {
-        if y < 40.0 {
+        if y < footer_band_h + 18.0 {
             draw_footer(&layer, page_idx, &format!("{page_idx}/?"));
             start_page(&mut layer, &doc, &mut page_idx, &mut y, false)?;
         }
         layer.set_fill_color(ink_color());
         layer.use_text(ascii_safe(label), 7.5, Mm(margin_l), Mm(y), &font_bold);
-        // Valeur à droite du label sur la même ligne visuelle (comme le modèle)
-        let label_w = (label.chars().count() as f32) * 1.55 + 4.0;
         layer.use_text(
             ascii_safe(value),
-            11.0,
-            Mm(margin_l + label_w.max(42.0)),
-            Mm(y - 0.8),
+            7.5,
+            Mm(meta_value_x),
+            Mm(y),
             &font,
         );
-        y -= 7.2;
+        y -= 5.3;
     }
 
-    y -= 8.0;
+    y -= 10.0;
 
     // ——— Parties : émetteur (gauche) / client (droite) ———
     let party_top = y;
-    let mid_x = 110.0_f32;
     layer.set_fill_color(ink_color());
     layer.use_text(ascii_safe(&spec.org.name), 9.0, Mm(margin_l), Mm(party_top), &font_bold);
     layer.use_text(
@@ -1637,26 +1749,24 @@ fn render_commercial_pdf(doc_title: &str, spec: &CommercialPdf<'_>, path: &Path)
         Mm(party_top),
         &font_bold,
     );
-    y = party_top - 5.5;
-    let mut y_left = y;
-    let mut y_right = y;
+    let mut y_left = party_top - 6.5;
+    let mut y_right = party_top - 6.5;
 
     if let Some(addr) = &spec.org.address {
         for line in addr.lines() {
             layer.use_text(ascii_safe(line), 7.5, Mm(margin_l), Mm(y_left), &font);
-            y_left -= 4.8;
+            y_left -= line_leading;
         }
     }
     if let Some(addr) = &spec.client.address {
         for line in addr.lines() {
             layer.use_text(ascii_safe(line), 7.5, Mm(mid_x), Mm(y_right), &font);
-            y_right -= 4.8;
+            y_right -= line_leading;
         }
     }
-    // Pas d'email org en modèle données — on ignore si absent
     if let Some(email) = &spec.client.email {
         layer.use_text(ascii_safe(email), 7.5, Mm(mid_x), Mm(y_right), &font);
-        y_right -= 4.8;
+        y_right -= line_leading;
     }
     let org_id = spec
         .org
@@ -1664,34 +1774,18 @@ fn render_commercial_pdf(doc_title: &str, spec: &CommercialPdf<'_>, path: &Path)
         .clone()
         .unwrap_or_else(|| spec.org.siren.clone());
     layer.use_text(ascii_safe(&org_id), 7.5, Mm(margin_l), Mm(y_left), &font);
-    y_left -= 4.8;
+    y_left -= line_leading;
     if let Some(siret) = &spec.client.siret {
         layer.use_text(ascii_safe(siret), 7.5, Mm(mid_x), Mm(y_right), &font);
-        y_right -= 4.8;
+        y_right -= line_leading;
     }
 
-    y = y_left.min(y_right) - 10.0;
+    y = y_left.min(y_right) - 12.0;
 
     // ——— En-tête tableau sombre ———
-    let header_h = 6.5_f32;
-    let header_top = y;
-    let header_bot = y - header_h;
-    fill_rect(
-        &layer,
-        margin_l,
-        header_bot,
-        content_r,
-        header_top,
-        header_fill(),
-    );
-    layer.set_fill_color(white_color());
-    let head_y = header_bot + 2.0;
-    layer.use_text("Description", 7.5, Mm(margin_l + 1.5), Mm(head_y), &font_bold);
-    layer.use_text("Qté", 7.5, Mm(col_desc_r + 2.0), Mm(head_y), &font_bold);
-    layer.use_text("Prix unitaire", 7.5, Mm(col_qty_r + 1.5), Mm(head_y), &font_bold);
-    layer.use_text("TVA (%)", 7.5, Mm(col_unit_r + 1.5), Mm(head_y), &font_bold);
-    layer.use_text("Total HT", 7.5, Mm(col_vat_r + 2.0), Mm(head_y), &font_bold);
-    y = header_bot - 6.0;
+    let header_h = 6.35_f32;
+    draw_table_header(&layer, y, header_h);
+    y = y - header_h - 6.0;
 
     // ——— Lignes ———
     for line in &spec.lines {
@@ -1704,84 +1798,89 @@ fn render_commercial_pdf(doc_title: &str, spec: &CommercialPdf<'_>, path: &Path)
             }
             chunks
         };
-        let block_h = (desc_chunks.len() as f32) * 4.6 + 3.0;
-        if y - block_h < 28.0 {
+        let block_h = (desc_chunks.len() as f32) * line_leading + 3.0;
+        if y - block_h < footer_band_h + 12.0 {
             draw_footer(&layer, page_idx, &format!("{page_idx}/+"));
             start_page(&mut layer, &doc, &mut page_idx, &mut y, false)?;
-            // mini header
-            fill_rect(
-                &layer,
-                margin_l,
-                y - header_h,
-                content_r,
-                y,
-                header_fill(),
-            );
-            layer.set_fill_color(white_color());
-            let hy = y - header_h + 2.0;
-            layer.use_text("Description", 7.5, Mm(margin_l + 1.5), Mm(hy), &font_bold);
-            layer.use_text("Qté", 7.5, Mm(col_desc_r + 2.0), Mm(hy), &font_bold);
-            layer.use_text("Prix unitaire", 7.5, Mm(col_qty_r + 1.5), Mm(hy), &font_bold);
-            layer.use_text("TVA (%)", 7.5, Mm(col_unit_r + 1.5), Mm(hy), &font_bold);
-            layer.use_text("Total HT", 7.5, Mm(col_vat_r + 2.0), Mm(hy), &font_bold);
-            y -= header_h + 6.0;
+            draw_table_header(&layer, y, header_h);
+            y = y - header_h - 6.0;
         }
 
         let row_y = y;
+        let last_y = row_y - ((desc_chunks.len().saturating_sub(1)) as f32) * line_leading;
+        let amount_y = (row_y + last_y) / 2.0;
+
         layer.set_fill_color(ink_color());
         let mut dy = row_y;
-        for (i, chunk) in desc_chunks.iter().enumerate() {
-            layer.use_text(ascii_safe(chunk), 7.5, Mm(margin_l + 1.0), Mm(dy), &font);
-            if i == 0 {
-                // montants alignés sur la 1re ligne
-                layer.use_text(
-                    ascii_safe(&qty_fr(line.quantity_milli)),
-                    7.5,
-                    Mm(col_desc_r + 2.0),
-                    Mm(dy),
-                    &font,
-                );
-                layer.use_text(
-                    ascii_safe(&money_fr(line.unit_price_cents)),
-                    7.5,
-                    Mm(col_qty_r + 1.5),
-                    Mm(dy),
-                    &font,
-                );
-                layer.use_text(
-                    ascii_safe(&vat_pct_fr(line.vat_rate_bp)),
-                    7.5,
-                    Mm(col_unit_r + 1.5),
-                    Mm(dy),
-                    &font,
-                );
-                layer.use_text(
-                    ascii_safe(&money_fr(line.ht_cents)),
-                    7.5,
-                    Mm(col_vat_r + 2.0),
-                    Mm(dy),
-                    &font,
-                );
-            }
-            dy -= 4.6;
+        for chunk in &desc_chunks {
+            layer.use_text(
+                ascii_safe(chunk),
+                7.5,
+                Mm(margin_l + 3.0),
+                Mm(dy),
+                &font,
+            );
+            dy -= line_leading;
         }
+        draw_text_right(
+            &layer,
+            &qty_fr(line.quantity_milli),
+            7.5,
+            col_qty_right,
+            amount_y,
+            &font,
+        );
+        draw_text_right(
+            &layer,
+            &money_fr(line.unit_price_cents),
+            7.5,
+            col_unit_right,
+            amount_y,
+            &font,
+        );
+        draw_text_right(
+            &layer,
+            &vat_pct_fr(line.vat_rate_bp),
+            7.5,
+            col_vat_right,
+            amount_y,
+            &font,
+        );
+        draw_text_right(
+            &layer,
+            &money_fr(line.ht_cents),
+            7.5,
+            col_ht_right,
+            amount_y,
+            &font,
+        );
         y = dy - 2.0;
     }
 
-    // Règle sous les lignes
-    fill_rect(&layer, margin_l, y + 1.5, content_r, y + 2.0, rule_color());
+    // Règle sous les lignes (segments colonnes)
+    let rule_y = y + 1.5;
+    let edges = [
+        margin_l,
+        col_desc_r,
+        119.6_f32,
+        146.6_f32,
+        165.6_f32,
+        content_r,
+    ];
+    for win in edges.windows(2) {
+        fill_rect(&layer, win[0], rule_y, win[1], rule_y + 0.26, rule_color());
+    }
     y -= 8.0;
 
     // ——— Totaux (à droite) ———
-    let totals_label_x = 120.0_f32;
-    let totals_value_x = 165.0_f32;
     layer.set_fill_color(ink_color());
     layer.use_text("Total HT", 7.5, Mm(totals_label_x), Mm(y), &font_bold);
-    layer.use_text(
-        ascii_safe(&money_fr(spec.ht_cents)),
+    draw_text_right(
+        &layer,
+        &money_fr(spec.ht_cents),
         7.5,
-        Mm(totals_value_x),
-        Mm(y),
+        col_ht_right,
+        y,
         &font,
     );
     y -= 8.5;
@@ -1792,11 +1891,12 @@ fn render_commercial_pdf(doc_title: &str, spec: &CommercialPdf<'_>, path: &Path)
         Mm(y),
         &font_bold,
     );
-    layer.use_text(
-        ascii_safe(&money_fr(spec.vat_cents)),
+    draw_text_right(
+        &layer,
+        &money_fr(spec.vat_cents),
         7.5,
-        Mm(totals_value_x),
-        Mm(y),
+        col_ht_right,
+        y,
         &font,
     );
     y -= 10.0;
@@ -1805,7 +1905,7 @@ fn render_commercial_pdf(doc_title: &str, spec: &CommercialPdf<'_>, path: &Path)
     let ttc_h = 8.5_f32;
     fill_rect(
         &layer,
-        totals_label_x - 1.0,
+        totals_label_x - 2.0,
         y - 2.0,
         content_r,
         y - 2.0 + ttc_h,
@@ -1813,11 +1913,12 @@ fn render_commercial_pdf(doc_title: &str, spec: &CommercialPdf<'_>, path: &Path)
     );
     layer.set_fill_color(white_color());
     layer.use_text("Total TTC", 7.5, Mm(totals_label_x), Mm(y), &font_bold);
-    layer.use_text(
-        ascii_safe(&money_fr(spec.ttc_cents)),
+    draw_text_right(
+        &layer,
+        &money_fr(spec.ttc_cents),
         7.5,
-        Mm(totals_value_x),
-        Mm(y),
+        col_ht_right,
+        y,
         &font_bold,
     );
     y -= 14.0;
@@ -1825,25 +1926,26 @@ fn render_commercial_pdf(doc_title: &str, spec: &CommercialPdf<'_>, path: &Path)
     layer.set_fill_color(ink_color());
     if let Some(notes) = spec.notes {
         for chunk in wrap_text(notes, 95) {
-            if y < 28.0 {
+            if y < footer_band_h + 8.0 {
                 break;
             }
             layer.use_text(ascii_safe(&chunk), 7.5, Mm(margin_l), Mm(y), &font);
-            y -= 4.6;
+            y -= line_leading;
         }
         y -= 2.0;
     }
     if let Some(legal) = spec.legal_mentions {
         for chunk in wrap_text(legal, 95) {
-            if y < 28.0 {
+            if y < footer_band_h + 8.0 {
                 break;
             }
             layer.use_text(ascii_safe(&chunk), 7.5, Mm(margin_l), Mm(y), &font);
-            y -= 4.6;
+            y -= line_leading;
         }
     }
 
-    // Pied de page léger — PAS de bandeau gris « Détails du paiement » / RIB
+    let _ = y;
+    // Pied de page — PAS de bandeau « Détails du paiement » / RIB
     draw_footer(
         &layer,
         page_idx,
@@ -1872,9 +1974,8 @@ pub fn export_quote_pdf(
         ("Date d'émission", format_date_fr(&quote.issue_date)),
     ];
     if let Some(vu) = &quote.valid_until {
-        meta.push(("Valable jusqu'au", format_date_fr(vu)));
+        meta.push(("Date d'expiration", format_date_fr(vu)));
     }
-    meta.push(("Statut", quote.status.clone()));
 
     let lines: Vec<PdfLineView<'_>> = quote
         .lines
@@ -1889,12 +1990,7 @@ pub fn export_quote_pdf(
         })
         .collect();
 
-    let footer_left = format!(
-        "{}, {} - {}",
-        org.name,
-        org.legal_form,
-        org.siren
-    );
+    let footer_left = commercial_footer_left(&org);
 
     let spec = CommercialPdf {
         title: "Devis",
@@ -1961,12 +2057,7 @@ pub fn export_invoice_pdf(
         })
         .collect();
 
-    let footer_left = format!(
-        "{}, {} - {}",
-        org.name,
-        org.legal_form,
-        org.siren
-    );
+    let footer_left = commercial_footer_left(&org);
 
     let spec = CommercialPdf {
         title,
@@ -2016,10 +2107,17 @@ pub fn seed_demo_quotes(conn: &Connection) -> DbResult<()> {
         [],
         |r| r.get(0),
     )?;
+    // Adresse émetteur pour pied de page / bloc parties (aperçu PDF)
+    let _ = conn.execute(
+        "UPDATE organization SET address = '12 rue de la Démo\n75001 Paris, FR',
+         siret = COALESCE(siret, '12345678200012')
+         WHERE id = 1",
+        [],
+    );
     // enrich demo client
     let _ = conn.execute(
         "UPDATE third_party SET siret = '12345678200045', email = 'contact@gamma.fr',
-         address = '8 avenue du Marche\n69001 Lyon'
+         address = '8 avenue du Marche\n69001 Lyon, FR'
          WHERE id = ?1",
         params![client_id],
     );
@@ -2461,6 +2559,18 @@ mod tests {
         export_quote_pdf(&conn, q.id, &pdf).unwrap();
         assert!(pdf.exists());
         assert!(pdf.metadata().unwrap().len() > 100);
+        // Helpers calés sur la référence 3PSI
+        assert_eq!(money_fr(350_000), "3 500,00 €");
+        assert_eq!(spaced_siren("933627960"), "933 627 960");
+        assert_eq!(
+            city_from_address(Some("60 rue François 1er\n75008 Paris, FR")).as_deref(),
+            Some("Paris")
+        );
+        assert!(
+            commercial_footer_left(&crate::db::load_organization(&conn).unwrap())
+                .contains('·'),
+            "pied de page avec point médian"
+        );
     }
 
     #[test]
