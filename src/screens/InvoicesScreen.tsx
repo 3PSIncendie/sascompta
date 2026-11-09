@@ -17,6 +17,7 @@ import {
   statusLabel,
   summarizeInvoiceDraft,
 } from "../modules/billing/invoices";
+import { PAYMENT_METHODS } from "../modules/billing/payments";
 import type {
   BillingVatMode,
   Invoice,
@@ -57,6 +58,13 @@ export function InvoicesScreen() {
     emptyDraftLine(2000, "T20C"),
   ]);
   const [depositHt, setDepositHt] = useState("500.00");
+  const [payInvoiceId, setPayInvoiceId] = useState<number | null>(null);
+  const [payAmount, setPayAmount] = useState("");
+  const [payMethod, setPayMethod] = useState("virement");
+  const [payDate, setPayDate] = useState(
+    () => new Date().toISOString().slice(0, 10),
+  );
+  const [payRef, setPayRef] = useState("");
 
   const totals = useMemo(
     () => summarizeInvoiceDraft(lines, vatMode, parseEurosToCents),
@@ -344,6 +352,63 @@ export function InvoicesScreen() {
     try {
       const cn = await api.createCreditNote(inv.id);
       setStatus(`Avoir brouillon #${cn.id} créé.`);
+      await refresh();
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function openPayment(inv: Invoice) {
+    const due = Math.max(0, inv.ttcCents - inv.paidCents);
+    setPayInvoiceId(inv.id);
+    setPayAmount((due / 100).toFixed(2));
+    setPayMethod("virement");
+    setPayDate(new Date().toISOString().slice(0, 10));
+    setPayRef("");
+    setError(null);
+  }
+
+  async function onRecordPayment() {
+    if (payInvoiceId == null) return;
+    const amount = parseEurosToCents(payAmount);
+    if (amount <= 0) {
+      setError("Montant d'encaissement invalide.");
+      return;
+    }
+    if (PREVIEW || !isTauriRuntime()) {
+      setInvoices((prev) =>
+        prev.map((x) => {
+          if (x.id !== payInvoiceId) return x;
+          const paid = x.paidCents + amount;
+          return {
+            ...x,
+            paidCents: paid,
+            status: paid >= x.ttcCents ? "paid" : "partially_paid",
+          };
+        }),
+      );
+      setStatus(
+        `Encaissement ${formatEuros(amount)} — brouillon BQ + lettrage soft (aperçu).`,
+      );
+      setPayInvoiceId(null);
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const p = await api.recordPayment({
+        invoiceId: payInvoiceId,
+        paidOn: payDate,
+        amountCents: amount,
+        method: payMethod,
+        bankRef: payRef.trim() || null,
+      });
+      setStatus(
+        `Paiement #${p.id} — BQ brouillon #${p.entryId ?? "?"} · lettrage ${p.lettre ?? "—"}.`,
+      );
+      setPayInvoiceId(null);
       await refresh();
     } catch (err) {
       setError(String(err));
@@ -736,6 +801,64 @@ export function InvoicesScreen() {
         </span>
       </div>
 
+      {payInvoiceId != null ? (
+        <div className="toolbar payment-bar">
+          <strong>Encaisser facture #{payInvoiceId}</strong>
+          <label>
+            Date
+            <input
+              type="date"
+              value={payDate}
+              onChange={(e) => setPayDate(e.target.value)}
+            />
+          </label>
+          <label>
+            Montant TTC
+            <input
+              value={payAmount}
+              onChange={(e) => setPayAmount(e.target.value)}
+              style={{ maxWidth: "8rem" }}
+            />
+          </label>
+          <label>
+            Mode
+            <select
+              value={payMethod}
+              onChange={(e) => setPayMethod(e.target.value)}
+            >
+              {PAYMENT_METHODS.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Réf. banque
+            <input
+              value={payRef}
+              onChange={(e) => setPayRef(e.target.value)}
+              placeholder="VIR-…"
+            />
+          </label>
+          <button
+            type="button"
+            className="primary"
+            disabled={busy}
+            onClick={() => void onRecordPayment()}
+          >
+            Enregistrer (BQ + lettrage)
+          </button>
+          <button
+            type="button"
+            className="ghost"
+            onClick={() => setPayInvoiceId(null)}
+          >
+            Annuler
+          </button>
+        </div>
+      ) : null}
+
       <div className="table-wrap">
         <table>
           <thead>
@@ -746,6 +869,7 @@ export function InvoicesScreen() {
               <th>Client</th>
               <th>Statut</th>
               <th className="num">TTC</th>
+              <th className="num">Payé</th>
               <th>VTE</th>
               <th>Actions</th>
             </tr>
@@ -753,7 +877,7 @@ export function InvoicesScreen() {
           <tbody>
             {invoices.length === 0 ? (
               <tr>
-                <td colSpan={8} className="muted">
+                <td colSpan={9} className="muted">
                   Aucune facture — créez-en une ou transformez un devis accepté.
                 </td>
               </tr>
@@ -776,6 +900,7 @@ export function InvoicesScreen() {
                     </span>
                   </td>
                   <td className="num">{formatEuros(inv.ttcCents)}</td>
+                  <td className="num">{formatEuros(inv.paidCents)}</td>
                   <td>
                     {inv.entryId ? (
                       <span className="hint">#{inv.entryId}</span>
@@ -823,6 +948,17 @@ export function InvoicesScreen() {
                             >
                               VTE brouillon
                             </button>
+                            {inv.kind !== "credit_note" &&
+                              inv.paidCents < inv.ttcCents && (
+                                <button
+                                  type="button"
+                                  className="primary"
+                                  disabled={busy}
+                                  onClick={() => openPayment(inv)}
+                                >
+                                  Encaisser
+                                </button>
+                              )}
                             {inv.kind !== "credit_note" && (
                               <button
                                 type="button"
