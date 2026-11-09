@@ -1927,7 +1927,7 @@ mod tests {
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(version, "9");
+        assert_eq!(version, crate::db::SCHEMA_VERSION.to_string());
 
         let quotes = list_quotes(&conn).unwrap();
         assert!(!quotes.is_empty());

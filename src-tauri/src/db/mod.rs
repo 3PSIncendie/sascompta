@@ -2,6 +2,7 @@ pub mod assets;
 pub mod billing;
 pub mod chart;
 pub mod closing;
+pub mod hr;
 pub mod ledger;
 pub mod pcg;
 pub mod reporting;
@@ -15,7 +16,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use thiserror::Error;
 
-pub const SCHEMA_VERSION: i32 = 9;
+pub const SCHEMA_VERSION: i32 = 10;
 pub const DEMO_PASSWORD: &str = "SecretPass1";
 
 #[derive(Debug, Error)]
@@ -183,6 +184,7 @@ pub fn migrate(conn: &Connection) -> DbResult<()> {
     closing::migrate_closing(conn)?;
     migrate_organization_siret(conn)?;
     billing::migrate_billing(conn)?;
+    hr::migrate_hr(conn)?;
 
     let version: i32 = conn
         .query_row(
@@ -199,6 +201,7 @@ pub fn migrate(conn: &Connection) -> DbResult<()> {
         migrate_vat_code_reverse(conn)?;
     }
     // v9 = commercial (devis/factures) + tiers enrichis — via billing::migrate_billing
+    // v10 = RH (salariés / contrats / congés / bulletins) — via hr::migrate_hr
 
     if version < SCHEMA_VERSION {
         conn.execute(
@@ -570,6 +573,7 @@ pub fn create_demo_workspace(path: &Path) -> DbResult<WorkspaceInfo> {
     // Dotation 2026 via plan linéaire → OD posted (remplace l'ancien OD-01 hardcodé)
     let _ = assets::generate_period_depreciation(&conn, "2026", "2026-01-01", "2026-12-31")?;
     billing::seed_demo_quotes(&conn)?;
+    hr::seed_demo_hr(&conn)?;
     load_workspace_info(&conn, path)
 }
 

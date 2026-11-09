@@ -60,6 +60,7 @@ pub fn seed_accounts(conn: &Connection) -> DbResult<()> {
         ("626", "Frais postaux et de télécommunications", 6, "expense", false),
         ("627", "Services bancaires et assimilés", 6, "expense", false),
         ("641", "Rémunérations du personnel", 6, "expense", false),
+        ("645", "Charges de sécurité sociale et de prévoyance", 6, "expense", false),
         ("681", "Dotations aux amortissements et provisions", 6, "expense", false),
         ("701", "Ventes de produits finis", 7, "revenue", false),
         ("706", "Prestations de services", 7, "revenue", false),

@@ -17,6 +17,9 @@ import { ComingSoonScreen } from "./screens/ComingSoonScreen";
 import { QuotesScreen } from "./screens/QuotesScreen";
 import { InvoicesScreen } from "./screens/InvoicesScreen";
 import { RemindersScreen } from "./screens/RemindersScreen";
+import { EmployeesScreen } from "./screens/EmployeesScreen";
+import { LeaveScreen } from "./screens/LeaveScreen";
+import { PayrollScreen } from "./screens/PayrollScreen";
 import { api } from "./lib/api";
 import { loadGuideProgress } from "./lib/guideProgress";
 import type { NavId, WorkspaceInfo } from "./lib/types";
@@ -154,27 +157,9 @@ export default function App() {
           blurb="Factur-X local, file d’attente PDP et imports structurés — sans prétendre être une PDP."
         />
       )}
-      {nav === "salaries" && (
-        <ComingSoonScreen
-          group="RH"
-          title="Salariés"
-          blurb="Dossiers salariés et contrats (CDI, CDD, apprentissage) pour une petite SAS."
-        />
-      )}
-      {nav === "conges" && (
-        <ComingSoonScreen
-          group="RH"
-          title="Congés"
-          blurb="Pose, solde et validation simple des congés."
-        />
-      )}
-      {nav === "paie" && (
-        <ComingSoonScreen
-          group="RH"
-          title="Paie"
-          blurb="Bulletins simplifiés, charges et écritures OD en brouillon, export DSN-oriented."
-        />
-      )}
+      {nav === "salaries" && <EmployeesScreen />}
+      {nav === "conges" && <LeaveScreen />}
+      {nav === "paie" && <PayrollScreen />}
     </AppShell>
   );
 }

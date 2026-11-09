@@ -614,3 +614,145 @@ export type NavId =
   | "salaries"
   | "conges"
   | "paie";
+
+export type ContractKind = "cdi" | "cdd" | "apprentice";
+export type ContractStatus = "draft" | "active" | "ended";
+export type LeaveStatus = "pending" | "approved" | "refused" | "cancelled";
+export type PayslipStatus = "draft" | "validated";
+
+export interface Employee {
+  id: number;
+  code: string;
+  firstName: string;
+  lastName: string;
+  birthDate?: string | null;
+  address?: string | null;
+  email?: string | null;
+  ibanRef?: string | null;
+  active: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateEmployeeInput {
+  code: string;
+  firstName: string;
+  lastName: string;
+  birthDate?: string | null;
+  address?: string | null;
+  email?: string | null;
+  ibanRef?: string | null;
+  active?: boolean;
+}
+
+export interface EmploymentContract {
+  id: number;
+  employeeId: number;
+  employeeCode: string;
+  employeeName: string;
+  kind: ContractKind | string;
+  startDate: string;
+  endDate?: string | null;
+  jobTitle: string;
+  weeklyHoursBp: number;
+  grossMonthlyCents: number;
+  conventionRef?: string | null;
+  status: ContractStatus | string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateContractInput {
+  employeeId: number;
+  kind: string;
+  startDate: string;
+  endDate?: string | null;
+  jobTitle: string;
+  weeklyHoursBp: number;
+  grossMonthlyCents: number;
+  conventionRef?: string | null;
+  status?: string;
+}
+
+export interface LeaveBalance {
+  employeeId: number;
+  employeeCode: string;
+  employeeName: string;
+  year: number;
+  acquiredDaysBp: number;
+  takenDaysBp: number;
+  remainingDaysBp: number;
+}
+
+export interface LeaveRequest {
+  id: number;
+  employeeId: number;
+  employeeCode: string;
+  employeeName: string;
+  fromDate: string;
+  toDate: string;
+  daysBp: number;
+  status: LeaveStatus | string;
+  notes?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateLeaveRequestInput {
+  employeeId: number;
+  fromDate: string;
+  toDate: string;
+  daysBp: number;
+  notes?: string | null;
+}
+
+export interface SocialRateTable {
+  id: number;
+  validFrom: string;
+  payloadJson: string;
+  label: string;
+  createdAt: string;
+}
+
+export interface PayslipLine {
+  id: number;
+  payslipId: number;
+  lineNo: number;
+  code: string;
+  label: string;
+  baseCents: number;
+  rateBp: number;
+  employeeCents: number;
+  employerCents: number;
+}
+
+export interface Payslip {
+  id: number;
+  employeeId: number;
+  employeeCode: string;
+  employeeName: string;
+  contractId?: number | null;
+  periodYm: string;
+  status: PayslipStatus | string;
+  grossCents: number;
+  employeeChargesCents: number;
+  employerChargesCents: number;
+  netCents: number;
+  pasRateBp?: number | null;
+  pasCents: number;
+  entryId?: number | null;
+  pdfPath?: string | null;
+  notes?: string | null;
+  createdAt: string;
+  updatedAt: string;
+  lines: PayslipLine[];
+}
+
+export interface DsnExportRun {
+  id: number;
+  periodYm: string;
+  status: string;
+  path?: string | null;
+  checklistJson: string;
+  createdAt: string;
+}
