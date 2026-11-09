@@ -3,7 +3,17 @@ import { DeadlineReminders } from "../components/DeadlineReminders";
 import { FieldHelp, LabelWithHelp } from "../components/FieldHelp";
 import { api } from "../lib/api";
 import { formatEuros, parseEurosToCents } from "../lib/money";
-import type { UpdateOrganizationInput, WorkspaceInfo } from "../lib/types";
+import { isTauriRuntime } from "../lib/updater";
+import {
+  OBLIGATION_PHASES,
+  phaseLabel,
+  previewEinvoiceProfile,
+} from "../modules/billing/einvoice";
+import type {
+  EinvoicePartyProfile,
+  UpdateOrganizationInput,
+  WorkspaceInfo,
+} from "../lib/types";
 
 const VAT_OPTIONS = [
   { value: "reel_mensuel", label: "Réel mensuel (CA3 chaque mois)" },
@@ -117,6 +127,16 @@ export function MaSasScreen({
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [eiProfile, setEiProfile] = useState<EinvoicePartyProfile | null>(null);
+  const [eiPhase, setEiPhase] = useState("receive_only");
+  const [eiReceiveFrom, setEiReceiveFrom] = useState("2026-09-01");
+  const [eiEmitFrom, setEiEmitFrom] = useState("2027-09-01");
+  const [eiVatNumber, setEiVatNumber] = useState("");
+  const [eiRoutingId, setEiRoutingId] = useState("");
+  const [pdpProvider, setPdpProvider] = useState("");
+  const [pdpApiBase, setPdpApiBase] = useState("");
+  const [pdpTechId, setPdpTechId] = useState("");
+  const [eiStatus, setEiStatus] = useState<string | null>(null);
 
   useEffect(() => {
     if (editing) return;
@@ -132,6 +152,86 @@ export function MaSasScreen({
     setStartDate(fy.startDate);
     setEndDate(fy.endDate);
   }, [org, fy, profile, editing]);
+
+  useEffect(() => {
+    void (async () => {
+      if (isPreview || !isTauriRuntime()) {
+        const p = previewEinvoiceProfile();
+        setEiProfile(p);
+        setEiPhase(p.obligationPhase);
+        setEiReceiveFrom(p.obligationReceiveFrom ?? "");
+        setEiEmitFrom(p.obligationEmitFrom ?? "");
+        setEiVatNumber(p.vatNumber ?? "");
+        setEiRoutingId(p.routingId ?? "");
+        setPdpProvider(p.pdpProvider ?? "");
+        setPdpApiBase(p.pdpApiBase ?? "");
+        setPdpTechId(p.pdpTechId ?? "");
+        return;
+      }
+      try {
+        const p = await api.getEinvoiceProfile();
+        setEiProfile(p);
+        setEiPhase(p.obligationPhase);
+        setEiReceiveFrom(p.obligationReceiveFrom ?? "");
+        setEiEmitFrom(p.obligationEmitFrom ?? "");
+        setEiVatNumber(p.vatNumber ?? "");
+        setEiRoutingId(p.routingId ?? "");
+        setPdpProvider(p.pdpProvider ?? "");
+        setPdpApiBase(p.pdpApiBase ?? "");
+        setPdpTechId(p.pdpTechId ?? "");
+      } catch {
+        /* profil optionnel */
+      }
+    })();
+  }, [isPreview, workspace.path]);
+
+  async function saveEinvoiceProfile() {
+    setEiStatus(null);
+    if (isPreview || !isTauriRuntime()) {
+      setEiStatus("Profil e-facture mis à jour (aperçu).");
+      setEiProfile((prev) =>
+        prev
+          ? {
+              ...prev,
+              obligationPhase: eiPhase,
+              obligationReceiveFrom: eiReceiveFrom,
+              obligationEmitFrom: eiEmitFrom,
+              vatNumber: eiVatNumber,
+              routingId: eiRoutingId,
+              pdpProvider,
+              pdpApiBase,
+              pdpTechId,
+            }
+          : prev,
+      );
+      return;
+    }
+    setBusy(true);
+    try {
+      const p = await api.updateEinvoiceProfile({
+        siret: (org.siret ?? siret).replace(/\s/g, "") || null,
+        siren: org.siren,
+        vatNumber: eiVatNumber.trim() || null,
+        legalName: org.name,
+        addressStructured: org.address,
+        routingScheme: "SIRET",
+        routingId: eiRoutingId.trim() || org.siret,
+        obligationPhase: eiPhase,
+        obligationReceiveFrom: eiReceiveFrom || null,
+        obligationEmitFrom: eiEmitFrom || null,
+        pdpProvider: pdpProvider.trim() || null,
+        pdpApiBase: pdpApiBase.trim() || null,
+        pdpTechId: pdpTechId.trim() || null,
+        certificateRef: null,
+      });
+      setEiProfile(p);
+      setEiStatus("Profil e-facture / PDP stub enregistré.");
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
 
   const liveHint = useMemo(
     () =>
@@ -503,6 +603,104 @@ export function MaSasScreen({
           </form>
         )}
       </div>
+
+      <div className="panel nested-panel" style={{ marginTop: "1.25rem" }}>
+        <header className="panel-head">
+          <div>
+            <h2>E-facture &amp; PDP (stub)</h2>
+            <p className="muted">
+              Profil d’obligation paramétrable + opérateur PDP technique. Aucun
+              envoi réseau : la file « E-facture » simule les acks en local.
+            </p>
+          </div>
+        </header>
+        {eiStatus ? <p className="hint">{eiStatus}</p> : null}
+        {eiProfile ? (
+          <p className="muted small">
+            Phase actuelle : <strong>{phaseLabel(eiProfile.obligationPhase)}</strong>
+            {normalizeVat(org.vatRegime) === "franchise"
+              ? " — franchise : privilégiez « franchise_receive »."
+              : null}
+          </p>
+        ) : null}
+        <div className="form-grid two">
+          <label>
+            Phase d’obligation
+            <select value={eiPhase} onChange={(e) => setEiPhase(e.target.value)}>
+              {OBLIGATION_PHASES.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            N° TVA intracommunautaire
+            <input
+              value={eiVatNumber}
+              onChange={(e) => setEiVatNumber(e.target.value)}
+              placeholder="FR…"
+            />
+          </label>
+          <label>
+            Réception à partir du
+            <input
+              type="date"
+              value={eiReceiveFrom}
+              onChange={(e) => setEiReceiveFrom(e.target.value)}
+            />
+          </label>
+          <label>
+            Émission à partir du
+            <input
+              type="date"
+              value={eiEmitFrom}
+              onChange={(e) => setEiEmitFrom(e.target.value)}
+            />
+          </label>
+          <label>
+            Identifiant de routage (SIRET)
+            <input
+              value={eiRoutingId}
+              onChange={(e) => setEiRoutingId(e.target.value)}
+            />
+          </label>
+          <label>
+            Opérateur PDP (stub)
+            <input
+              value={pdpProvider}
+              onChange={(e) => setPdpProvider(e.target.value)}
+              placeholder="Nom commercial stub"
+            />
+          </label>
+          <label>
+            URL API PDP (non appelée)
+            <input
+              value={pdpApiBase}
+              onChange={(e) => setPdpApiBase(e.target.value)}
+              placeholder="https://…"
+            />
+          </label>
+          <label>
+            Identifiant technique PDP
+            <input
+              value={pdpTechId}
+              onChange={(e) => setPdpTechId(e.target.value)}
+            />
+          </label>
+        </div>
+        <div className="btn-row" style={{ marginTop: "0.75rem" }}>
+          <button
+            type="button"
+            className="primary"
+            disabled={busy}
+            onClick={() => void saveEinvoiceProfile()}
+          >
+            Enregistrer profil e-facture
+          </button>
+        </div>
+      </div>
+
       <DeadlineReminders workspace={workspace} />
     </div>
   );

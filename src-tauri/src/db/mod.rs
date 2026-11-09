@@ -2,6 +2,7 @@ pub mod assets;
 pub mod billing;
 pub mod chart;
 pub mod closing;
+pub mod einvoice;
 pub mod hr;
 pub mod ledger;
 pub mod pcg;
@@ -16,7 +17,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use thiserror::Error;
 
-pub const SCHEMA_VERSION: i32 = 10;
+pub const SCHEMA_VERSION: i32 = 11;
 pub const DEMO_PASSWORD: &str = "SecretPass1";
 
 #[derive(Debug, Error)]
@@ -185,6 +186,7 @@ pub fn migrate(conn: &Connection) -> DbResult<()> {
     migrate_organization_siret(conn)?;
     billing::migrate_billing(conn)?;
     hr::migrate_hr(conn)?;
+    einvoice::migrate_einvoice(conn)?;
 
     let version: i32 = conn
         .query_row(
@@ -202,6 +204,7 @@ pub fn migrate(conn: &Connection) -> DbResult<()> {
     }
     // v9 = commercial (devis/factures) + tiers enrichis — via billing::migrate_billing
     // v10 = RH (salariés / contrats / congés / bulletins) — via hr::migrate_hr
+    // v11 = e-facture (profil, queue, e-reporting) — via einvoice::migrate_einvoice
 
     if version < SCHEMA_VERSION {
         conn.execute(

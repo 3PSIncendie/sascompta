@@ -13,10 +13,10 @@ import { TaxScreen } from "./screens/TaxScreen";
 import { AssetsScreen } from "./screens/AssetsScreen";
 import { StatementsScreen } from "./screens/StatementsScreen";
 import { ClosingScreen } from "./screens/ClosingScreen";
-import { ComingSoonScreen } from "./screens/ComingSoonScreen";
 import { QuotesScreen } from "./screens/QuotesScreen";
 import { InvoicesScreen } from "./screens/InvoicesScreen";
 import { RemindersScreen } from "./screens/RemindersScreen";
+import { EInvoiceScreen } from "./screens/EInvoiceScreen";
 import { EmployeesScreen } from "./screens/EmployeesScreen";
 import { LeaveScreen } from "./screens/LeaveScreen";
 import { PayrollScreen } from "./screens/PayrollScreen";
@@ -150,13 +150,7 @@ export default function App() {
       {nav === "devis" && <QuotesScreen />}
       {nav === "factures" && <InvoicesScreen />}
       {nav === "relances" && <RemindersScreen />}
-      {nav === "einvoice" && (
-        <ComingSoonScreen
-          group="Commercial"
-          title="E-facture"
-          blurb="Factur-X local, file d’attente PDP et imports structurés — sans prétendre être une PDP."
-        />
-      )}
+      {nav === "einvoice" && <EInvoiceScreen />}
       {nav === "salaries" && <EmployeesScreen />}
       {nav === "conges" && <LeaveScreen />}
       {nav === "paie" && <PayrollScreen />}

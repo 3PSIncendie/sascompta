@@ -1,6 +1,6 @@
 /** Calendrier local des échéances déclaratives (indicatives, SAS FR). */
 
-export type DeadlineKind = "tva" | "cloture" | "depot" | "ag";
+export type DeadlineKind = "tva" | "cloture" | "depot" | "ag" | "einvoice";
 
 export type DeadlineItem = {
   id: string;
@@ -145,6 +145,18 @@ export function buildDeadlines(input: DeadlineInput): DeadlineItem[] {
     detail:
       "Dépôt du bilan / compte de résultat / annexe (souvent via guichet unique).",
     severity: severityFor(today, depotDue),
+  });
+
+  // Calendrier e-facture indicatif (paramétrable dans Ma SAS — non juridique)
+  const receiveDue = `${parseYmd(today).getFullYear()}-09-01`;
+  items.push({
+    id: `einvoice-receive-${receiveDue}`,
+    kind: "einvoice",
+    title: "E-facture — phase réception (indicatif)",
+    dueDate: receiveDue,
+    detail:
+      "Préparez imports CII/UBL et la file inbound. Dates ajustables dans Ma SAS ; SasCompta n’est pas une PDP.",
+    severity: severityFor(today, receiveDue),
   });
 
   return items.sort((a, b) => a.dueDate.localeCompare(b.dueDate));

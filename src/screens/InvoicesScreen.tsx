@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { save } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import { api } from "../lib/api";
 import { formatEuros, parseEurosToCents } from "../lib/money";
 import { isTauriRuntime } from "../lib/updater";
@@ -460,6 +460,33 @@ export function InvoicesScreen() {
       setStatus(`PDF exporté : ${path}`);
     } catch (err) {
       setError(String(err));
+    }
+  }
+
+  async function onFacturx(inv: Invoice) {
+    if (PREVIEW || !isTauriRuntime()) {
+      setStatus(
+        "Factur-X BASIC (XML CII + PDF) — disponible en bureau ; file E-facture.",
+      );
+      return;
+    }
+    const dest = await open({
+      directory: true,
+      multiple: false,
+      title: "Dossier d’export Factur-X",
+    });
+    if (!dest || Array.isArray(dest)) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const q = await api.exportFacturx(inv.id, String(dest));
+      setStatus(
+        `Factur-X file #${q.id} — ${q.summary ?? "XML+PDF locaux (pas de dépôt réseau)"}`,
+      );
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -988,6 +1015,17 @@ export function InvoicesScreen() {
                       >
                         PDF
                       </button>
+                      {inv.status !== "draft" &&
+                        inv.status !== "cancelled" && (
+                          <button
+                            type="button"
+                            className="ghost"
+                            disabled={busy}
+                            onClick={() => void onFacturx(inv)}
+                          >
+                            Factur-X
+                          </button>
+                        )}
                     </div>
                   </td>
                 </tr>

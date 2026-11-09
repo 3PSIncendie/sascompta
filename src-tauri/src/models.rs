@@ -861,3 +861,81 @@ pub struct DsnExportRun {
     pub checklist_json: String,
     pub created_at: String,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EinvoicePartyProfile {
+    pub organization_id: i64,
+    pub siret: Option<String>,
+    pub siren: Option<String>,
+    pub vat_number: Option<String>,
+    pub legal_name: Option<String>,
+    pub address_structured: Option<String>,
+    pub routing_scheme: Option<String>,
+    pub routing_id: Option<String>,
+    pub obligation_phase: String,
+    pub obligation_receive_from: Option<String>,
+    pub obligation_emit_from: Option<String>,
+    pub pdp_provider: Option<String>,
+    pub pdp_api_base: Option<String>,
+    pub pdp_tech_id: Option<String>,
+    pub certificate_ref: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateEinvoiceProfileInput {
+    pub siret: Option<String>,
+    pub siren: Option<String>,
+    pub vat_number: Option<String>,
+    pub legal_name: Option<String>,
+    pub address_structured: Option<String>,
+    pub routing_scheme: Option<String>,
+    pub routing_id: Option<String>,
+    pub obligation_phase: String,
+    pub obligation_receive_from: Option<String>,
+    pub obligation_emit_from: Option<String>,
+    pub pdp_provider: Option<String>,
+    pub pdp_api_base: Option<String>,
+    pub pdp_tech_id: Option<String>,
+    pub certificate_ref: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EinvoiceQueueItem {
+    pub id: i64,
+    pub direction: String,
+    pub invoice_id: Option<i64>,
+    pub entry_id: Option<i64>,
+    pub payload_path: Option<String>,
+    pub format: String,
+    pub lifecycle_status: String,
+    pub last_error: Option<String>,
+    pub attempts: i32,
+    pub summary: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EreportingBatch {
+    pub id: i64,
+    pub period_from: String,
+    pub period_to: String,
+    pub kind: String,
+    pub status: String,
+    pub payload_path: Option<String>,
+    pub entry_count: i64,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateEreportingBatchInput {
+    pub period_from: String,
+    pub period_to: String,
+    pub kind: String,
+    pub dest_path: String,
+}

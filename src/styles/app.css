@@ -824,6 +824,35 @@ button.linkish {
   box-shadow: none;
 }
 
+.einvoice-profile-card {
+  margin-bottom: 1rem;
+}
+
+.pill-status.status-ei-queued,
+.pill-status.status-ei-local_ready {
+  background: rgba(18, 181, 201, 0.15);
+  color: var(--accent-ink);
+  border-color: transparent;
+}
+
+.pill-status.status-ei-acked,
+.pill-status.status-ei-validated {
+  background: rgba(34, 120, 90, 0.14);
+  color: #1a6b4a;
+  border-color: transparent;
+}
+
+.pill-status.status-ei-error,
+.pill-status.status-ei-refused {
+  background: rgba(155, 44, 44, 0.12);
+  color: var(--danger);
+  border-color: transparent;
+}
+
+.small {
+  font-size: 0.85rem;
+}
+
 .hint {
   color: var(--ink-muted);
   font-size: 0.9rem;

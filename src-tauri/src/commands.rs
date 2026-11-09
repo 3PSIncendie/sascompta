@@ -873,6 +873,74 @@ pub fn mark_reminder_sent(
 }
 
 #[tauri::command]
+pub fn get_einvoice_profile(
+    state: State<'_, AppState>,
+) -> Result<EinvoicePartyProfile, String> {
+    db::with_conn(&state, db::einvoice::get_party_profile).map_err(map_err)
+}
+
+#[tauri::command]
+pub fn update_einvoice_profile(
+    state: State<'_, AppState>,
+    input: UpdateEinvoiceProfileInput,
+) -> Result<EinvoicePartyProfile, String> {
+    db::with_conn(&state, |c| db::einvoice::upsert_party_profile(c, &input)).map_err(map_err)
+}
+
+#[tauri::command]
+pub fn list_einvoice_queue(
+    state: State<'_, AppState>,
+) -> Result<Vec<EinvoiceQueueItem>, String> {
+    db::with_conn(&state, db::einvoice::list_queue).map_err(map_err)
+}
+
+#[tauri::command]
+pub fn export_facturx(
+    state: State<'_, AppState>,
+    invoice_id: i64,
+    dest_dir: String,
+) -> Result<EinvoiceQueueItem, String> {
+    db::with_conn(&state, |c| {
+        db::einvoice::export_facturx(c, invoice_id, std::path::Path::new(&dest_dir))
+    })
+    .map_err(map_err)
+}
+
+#[tauri::command]
+pub fn import_einvoice_file(
+    state: State<'_, AppState>,
+    path: String,
+) -> Result<EinvoiceQueueItem, String> {
+    db::with_conn(&state, |c| {
+        db::einvoice::import_structured_invoice(c, std::path::Path::new(&path))
+    })
+    .map_err(map_err)
+}
+
+#[tauri::command]
+pub fn pdp_stub_submit(
+    state: State<'_, AppState>,
+    queue_id: i64,
+) -> Result<EinvoiceQueueItem, String> {
+    db::with_conn(&state, |c| db::einvoice::pdp_stub_submit(c, queue_id)).map_err(map_err)
+}
+
+#[tauri::command]
+pub fn list_ereporting_batches(
+    state: State<'_, AppState>,
+) -> Result<Vec<EreportingBatch>, String> {
+    db::with_conn(&state, db::einvoice::list_ereporting_batches).map_err(map_err)
+}
+
+#[tauri::command]
+pub fn build_ereporting_batch(
+    state: State<'_, AppState>,
+    input: CreateEreportingBatchInput,
+) -> Result<EreportingBatch, String> {
+    db::with_conn(&state, |c| db::einvoice::build_ereporting_batch(c, &input)).map_err(map_err)
+}
+
+#[tauri::command]
 pub fn annual_statements(
     state: State<'_, AppState>,
     filter: LedgerFilter,

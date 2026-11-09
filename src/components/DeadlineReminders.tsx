@@ -137,6 +137,8 @@ function labelKind(kind: DeadlineItem["kind"]): string {
       return "AG";
     case "depot":
       return "Dépôt";
+    case "einvoice":
+      return "E-facture";
   }
 }
 
