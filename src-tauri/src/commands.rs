@@ -922,6 +922,21 @@ pub fn mark_reminder_sent(
 }
 
 #[tauri::command]
+pub fn list_document_sequences(
+    state: State<'_, AppState>,
+) -> Result<Vec<DocumentSequenceInfo>, String> {
+    db::with_conn(&state, db::billing::list_document_sequences).map_err(map_err)
+}
+
+#[tauri::command]
+pub fn set_document_sequences(
+    state: State<'_, AppState>,
+    inputs: Vec<SetDocumentSequenceInput>,
+) -> Result<Vec<DocumentSequenceInfo>, String> {
+    db::with_conn(&state, |c| db::billing::set_document_sequences(c, &inputs)).map_err(map_err)
+}
+
+#[tauri::command]
 pub fn get_einvoice_profile(
     state: State<'_, AppState>,
 ) -> Result<EinvoicePartyProfile, String> {

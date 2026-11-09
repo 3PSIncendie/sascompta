@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use thiserror::Error;
 
-pub const SCHEMA_VERSION: i32 = 11;
+pub const SCHEMA_VERSION: i32 = 12;
 pub const DEMO_PASSWORD: &str = "SecretPass1";
 
 #[derive(Debug, Error)]
@@ -205,6 +205,7 @@ pub fn migrate(conn: &Connection) -> DbResult<()> {
     // v9 = commercial (devis/factures) + tiers enrichis — via billing::migrate_billing
     // v10 = RH (salariés / contrats / congés / bulletins) — via hr::migrate_hr
     // v11 = e-facture (profil, queue, e-reporting) — via einvoice::migrate_einvoice
+    // v12 = index unique numéro facture + API numérotation (document_sequence)
 
     if version < SCHEMA_VERSION {
         conn.execute(

@@ -19,8 +19,10 @@ import type {
   CreateQuoteInput,
   CreateThirdPartyInput,
   CreateWorkspaceInput,
+  DocumentSequenceInfo,
   KnownWorkspace,
   EinvoicePartyProfile,
+  SetDocumentSequenceInput,
   EinvoiceQueueItem,
   EreportingBatch,
   DepreciationRun,
@@ -244,6 +246,11 @@ export const api = {
   generateDueReminders: () => invoke<Reminder[]>("generate_due_reminders"),
   markReminderSent: (id: number) =>
     invoke<Reminder>("mark_reminder_sent", { id }),
+
+  listDocumentSequences: () =>
+    invoke<DocumentSequenceInfo[]>("list_document_sequences"),
+  setDocumentSequences: (inputs: SetDocumentSequenceInput[]) =>
+    invoke<DocumentSequenceInfo[]>("set_document_sequences", { inputs }),
 
   getEinvoiceProfile: () =>
     invoke<EinvoicePartyProfile>("get_einvoice_profile"),

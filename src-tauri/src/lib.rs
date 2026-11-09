@@ -104,6 +104,8 @@ pub fn run() {
             commands::list_reminders,
             commands::generate_due_reminders,
             commands::mark_reminder_sent,
+            commands::list_document_sequences,
+            commands::set_document_sequences,
             commands::get_einvoice_profile,
             commands::update_einvoice_profile,
             commands::list_einvoice_queue,

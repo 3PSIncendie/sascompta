@@ -11,7 +11,10 @@ use std::fs::File;
 use std::io::BufWriter;
 use std::path::Path;
 
-pub const SCHEMA_BILLING_VERSION: i32 = 9;
+pub const SCHEMA_BILLING_VERSION: i32 = 10;
+
+/// Séries documentaires configurables (préfixes d’émission).
+pub const DOCUMENT_SEQUENCE_KINDS: &[&str] = &["FACT", "ACMP", "AVO", "DEV"];
 
 const QUOTE_STATUSES: &[&str] = &[
     "draft",
@@ -142,6 +145,9 @@ pub fn migrate_billing(conn: &Connection) -> DbResult<()> {
             channel TEXT NOT NULL DEFAULT 'pdf',
             body_snapshot TEXT
         );
+
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_invoice_number_unique
+            ON invoice(number) WHERE number IS NOT NULL;
         "#,
     )?;
     enrich_billing_line_description(conn)?;
@@ -220,36 +226,207 @@ fn fy_label(conn: &Connection, fy_id: i64) -> DbResult<String> {
     .map_err(|e| e.into())
 }
 
-/// Réserve atomiquement le prochain numéro (DEV-2026-0001…).
-pub fn allocate_document_number(
+fn sequence_label_fr(kind: &str) -> String {
+    match kind {
+        "FACT" => "Factures (standard / solde)".into(),
+        "ACMP" => "Factures d’acompte".into(),
+        "AVO" => "Avoirs".into(),
+        "DEV" => "Devis".into(),
+        other => other.to_string(),
+    }
+}
+
+fn validate_sequence_kind(kind: &str) -> DbResult<()> {
+    if DOCUMENT_SEQUENCE_KINDS.contains(&kind) {
+        Ok(())
+    } else {
+        Err(format!(
+            "Série inconnue « {kind} » (attendu : {})",
+            DOCUMENT_SEQUENCE_KINDS.join(", ")
+        )
+        .into())
+    }
+}
+
+fn format_document_number(kind: &str, fy_label: &str, num: i64) -> String {
+    format!("{kind}-{fy_label}-{num:04}")
+}
+
+fn parse_sequence_suffix(number: &str, kind: &str, fy_label: &str) -> Option<i64> {
+    let prefix = format!("{kind}-{fy_label}-");
+    number.strip_prefix(&prefix)?.parse::<i64>().ok()
+}
+
+fn numbers_table_for_kind(kind: &str) -> &'static str {
+    if kind == "DEV" {
+        "quote"
+    } else {
+        "invoice"
+    }
+}
+
+/// Plus grand suffixe numérique déjà utilisé pour cette série / exercice (0 si aucun).
+pub fn max_used_document_num(
+    conn: &Connection,
+    kind: &str,
+    fy_label: &str,
+) -> DbResult<i64> {
+    let table = numbers_table_for_kind(kind);
+    let like = format!("{kind}-{fy_label}-%");
+    let sql = format!("SELECT number FROM {table} WHERE number LIKE ?1");
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(params![like], |r| r.get::<_, String>(0))?;
+    let mut max = 0i64;
+    for row in rows {
+        let number = row?;
+        if let Some(n) = parse_sequence_suffix(&number, kind, fy_label) {
+            if n > max {
+                max = n;
+            }
+        }
+    }
+    Ok(max)
+}
+
+fn read_stored_next_num(
     conn: &Connection,
     kind: &str,
     fiscal_year_id: i64,
-) -> DbResult<String> {
-    let next: i64 = conn
+) -> DbResult<i64> {
+    Ok(conn
         .query_row(
             "SELECT next_num FROM document_sequence WHERE kind = ?1 AND fiscal_year_id = ?2",
             params![kind, fiscal_year_id],
             |r| r.get(0),
         )
         .optional()?
-        .unwrap_or(1);
-    if next == 1 {
-        conn.execute(
-            "INSERT INTO document_sequence(kind, fiscal_year_id, next_num)
-             VALUES (?1, ?2, 2)
-             ON CONFLICT(kind, fiscal_year_id) DO UPDATE SET next_num = excluded.next_num",
-            params![kind, fiscal_year_id],
-        )?;
-    } else {
-        conn.execute(
-            "UPDATE document_sequence SET next_num = next_num + 1
-             WHERE kind = ?1 AND fiscal_year_id = ?2",
-            params![kind, fiscal_year_id],
-        )?;
+        .unwrap_or(1))
+}
+
+fn upsert_next_num(
+    conn: &Connection,
+    kind: &str,
+    fiscal_year_id: i64,
+    next_num: i64,
+) -> DbResult<()> {
+    if next_num < 1 {
+        return Err("Le prochain numéro doit être ≥ 1".into());
     }
+    conn.execute(
+        "INSERT INTO document_sequence(kind, fiscal_year_id, next_num)
+         VALUES (?1, ?2, ?3)
+         ON CONFLICT(kind, fiscal_year_id) DO UPDATE SET next_num = excluded.next_num",
+        params![kind, fiscal_year_id, next_num],
+    )?;
+    Ok(())
+}
+
+fn document_number_exists(conn: &Connection, kind: &str, number: &str) -> DbResult<bool> {
+    let table = numbers_table_for_kind(kind);
+    let sql = format!("SELECT 1 FROM {table} WHERE number = ?1 LIMIT 1");
+    let found: Option<i64> = conn
+        .query_row(&sql, params![number], |r| r.get(0))
+        .optional()?;
+    Ok(found.is_some())
+}
+
+/// Réserve atomiquement le prochain numéro (FACT-2026-0001…).
+/// Lit le compteur, le plafonne au-dessus des documents déjà numérotés, incrémente.
+pub fn allocate_document_number(
+    conn: &Connection,
+    kind: &str,
+    fiscal_year_id: i64,
+) -> DbResult<String> {
     let label = fy_label(conn, fiscal_year_id)?;
-    Ok(format!("{kind}-{label}-{next:04}"))
+    let stored = read_stored_next_num(conn, kind, fiscal_year_id)?;
+    let max_used = max_used_document_num(conn, kind, &label)?;
+    let mut next = stored.max(max_used + 1).max(1);
+
+    // Garde-fou collision (numéros hors format ou importés).
+    for _ in 0..10_000 {
+        let candidate = format_document_number(kind, &label, next);
+        if !document_number_exists(conn, kind, &candidate)? {
+            upsert_next_num(conn, kind, fiscal_year_id, next + 1)?;
+            return Ok(candidate);
+        }
+        next += 1;
+    }
+    Err("Impossible d’allouer un numéro libre pour cette série".into())
+}
+
+fn sequence_info_for(
+    conn: &Connection,
+    kind: &str,
+    fiscal_year_id: i64,
+    fy_label_str: &str,
+) -> DbResult<DocumentSequenceInfo> {
+    let max_used = max_used_document_num(conn, kind, fy_label_str)?;
+    let min_next = (max_used + 1).max(1);
+    let stored = read_stored_next_num(conn, kind, fiscal_year_id)?;
+    let next_num = stored.max(min_next);
+    Ok(DocumentSequenceInfo {
+        kind: kind.to_string(),
+        label: sequence_label_fr(kind),
+        fiscal_year_id,
+        fiscal_year_label: fy_label_str.to_string(),
+        next_num,
+        min_next_num: min_next,
+        preview: format_document_number(kind, fy_label_str, next_num),
+    })
+}
+
+/// Compteurs de l’exercice ouvert (FACT / ACMP / AVO / DEV).
+pub fn list_document_sequences(conn: &Connection) -> DbResult<Vec<DocumentSequenceInfo>> {
+    let fy_id = open_fy_id(conn)?;
+    let label = fy_label(conn, fy_id)?;
+    let mut out = Vec::with_capacity(DOCUMENT_SEQUENCE_KINDS.len());
+    for kind in DOCUMENT_SEQUENCE_KINDS {
+        out.push(sequence_info_for(conn, kind, fy_id, &label)?);
+    }
+    Ok(out)
+}
+
+/// Définit le prochain numéro d’une ou plusieurs séries (exercice ouvert).
+pub fn set_document_sequences(
+    conn: &Connection,
+    inputs: &[SetDocumentSequenceInput],
+) -> DbResult<Vec<DocumentSequenceInfo>> {
+    if inputs.is_empty() {
+        return Err("Aucun compteur à enregistrer".into());
+    }
+    let fy_id = open_fy_id(conn)?;
+    let label = fy_label(conn, fy_id)?;
+    for input in inputs {
+        let kind = input.kind.trim();
+        validate_sequence_kind(kind)?;
+        if input.next_num < 1 {
+            return Err(format!(
+                "Série {kind} : le prochain numéro doit être un entier ≥ 1"
+            )
+            .into());
+        }
+        let max_used = max_used_document_num(conn, kind, &label)?;
+        let min_next = (max_used + 1).max(1);
+        if input.next_num < min_next {
+            let conflict = format_document_number(kind, &label, max_used);
+            return Err(format!(
+                "Série {kind} : le prochain numéro doit être ≥ {min_next} \
+                 (le document {conflict} existe déjà). Indiquez le numéro \
+                 suivant votre dernière facture hors SasCompta."
+            )
+            .into());
+        }
+        let candidate = format_document_number(kind, &label, input.next_num);
+        if document_number_exists(conn, kind, &candidate)? {
+            return Err(format!(
+                "Série {kind} : le numéro {candidate} est déjà attribué. \
+                 Choisissez un prochain numéro plus élevé."
+            )
+            .into());
+        }
+        upsert_next_num(conn, kind, fy_id, input.next_num)?;
+    }
+    list_document_sequences(conn)
 }
 
 pub fn compute_line_ht(quantity_milli: i64, unit_price_cents: i64) -> i64 {
@@ -2483,5 +2660,75 @@ mod tests {
             .unwrap();
         let marked = mark_reminder_sent(&conn, first.id).unwrap();
         assert!(marked.sent_at.is_some());
+    }
+
+    #[test]
+    fn configure_next_invoice_numbers_and_allocate() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("seq.sascompta");
+        create_demo_workspace(&path).unwrap();
+        let conn = open_connection(&path).unwrap();
+
+        let listed = list_document_sequences(&conn).unwrap();
+        assert_eq!(listed.len(), DOCUMENT_SEQUENCE_KINDS.len());
+        let fact = listed.iter().find(|s| s.kind == "FACT").unwrap();
+        assert_eq!(fact.next_num, 1);
+        assert!(fact.preview.starts_with("FACT-2026-"));
+
+        // Continuer une série externe : prochain = 42 → FACT-2026-0042
+        let updated = set_document_sequences(
+            &conn,
+            &[
+                SetDocumentSequenceInput {
+                    kind: "FACT".into(),
+                    next_num: 42,
+                },
+                SetDocumentSequenceInput {
+                    kind: "ACMP".into(),
+                    next_num: 3,
+                },
+                SetDocumentSequenceInput {
+                    kind: "AVO".into(),
+                    next_num: 7,
+                },
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            updated.iter().find(|s| s.kind == "FACT").unwrap().preview,
+            "FACT-2026-0042"
+        );
+
+        let draft = list_invoices(&conn)
+            .unwrap()
+            .into_iter()
+            .find(|i| i.status == "draft")
+            .expect("demo invoice");
+        let issued = issue_invoice(&conn, draft.id).unwrap();
+        assert_eq!(issued.number.as_deref(), Some("FACT-2026-0042"));
+
+        let after = list_document_sequences(&conn).unwrap();
+        let fact_after = after.iter().find(|s| s.kind == "FACT").unwrap();
+        assert_eq!(fact_after.next_num, 43);
+        assert_eq!(fact_after.min_next_num, 43);
+
+        // Impossible de redescendre sous un numéro déjà émis
+        let err = set_document_sequences(
+            &conn,
+            &[SetDocumentSequenceInput {
+                kind: "FACT".into(),
+                next_num: 42,
+            }],
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("≥ 43"), "{err}");
+
+        let deposit = create_deposit_invoice(&conn, issued.id, 10_000, 2000, None).unwrap();
+        let dep_issued = issue_invoice(&conn, deposit.id).unwrap();
+        assert_eq!(dep_issued.number.as_deref(), Some("ACMP-2026-0003"));
+
+        let credit = create_credit_note(&conn, issued.id).unwrap();
+        let credit_issued = issue_invoice(&conn, credit.id).unwrap();
+        assert_eq!(credit_issued.number.as_deref(), Some("AVO-2026-0007"));
     }
 }

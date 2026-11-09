@@ -406,6 +406,21 @@ export interface UpdateEinvoiceProfileInput {
   certificateRef?: string | null;
 }
 
+export interface DocumentSequenceInfo {
+  kind: string;
+  label: string;
+  fiscalYearId: number;
+  fiscalYearLabel: string;
+  nextNum: number;
+  minNextNum: number;
+  preview: string;
+}
+
+export interface SetDocumentSequenceInput {
+  kind: string;
+  nextNum: number;
+}
+
 export interface EinvoiceQueueItem {
   id: number;
   direction: "outbound" | "inbound" | string;
