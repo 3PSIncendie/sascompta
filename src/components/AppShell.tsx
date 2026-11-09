@@ -45,9 +45,9 @@ const NAV_GROUPS: NavGroup[] = [
     id: "rh",
     label: "RH",
     items: [
-      { id: "salaries", label: "Salariés", soon: true },
-      { id: "conges", label: "Congés", soon: true },
-      { id: "paie", label: "Paie", soon: true },
+      { id: "salaries", label: "Salariés" },
+      { id: "conges", label: "Congés" },
+      { id: "paie", label: "Paie" },
     ],
   },
 ];

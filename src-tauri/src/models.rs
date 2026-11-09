@@ -690,3 +690,174 @@ pub struct Reminder {
     pub channel: String,
     pub body_snapshot: Option<String>,
 }
+
+// —— RH (M8/M9) ——————————————————————————————————————————————————————————
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Employee {
+    pub id: i64,
+    pub code: String,
+    pub first_name: String,
+    pub last_name: String,
+    pub birth_date: Option<String>,
+    pub address: Option<String>,
+    pub email: Option<String>,
+    pub iban_ref: Option<String>,
+    pub active: bool,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateEmployeeInput {
+    pub code: String,
+    pub first_name: String,
+    pub last_name: String,
+    pub birth_date: Option<String>,
+    pub address: Option<String>,
+    pub email: Option<String>,
+    pub iban_ref: Option<String>,
+    #[serde(default = "default_true")]
+    pub active: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EmploymentContract {
+    pub id: i64,
+    pub employee_id: i64,
+    pub employee_code: String,
+    pub employee_name: String,
+    pub kind: String,
+    pub start_date: String,
+    pub end_date: Option<String>,
+    pub job_title: String,
+    pub weekly_hours_bp: i64,
+    pub gross_monthly_cents: i64,
+    pub convention_ref: Option<String>,
+    pub status: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateContractInput {
+    pub employee_id: i64,
+    pub kind: String,
+    pub start_date: String,
+    pub end_date: Option<String>,
+    pub job_title: String,
+    pub weekly_hours_bp: i64,
+    pub gross_monthly_cents: i64,
+    pub convention_ref: Option<String>,
+    #[serde(default = "default_active_status")]
+    pub status: String,
+}
+
+fn default_active_status() -> String {
+    "active".into()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LeaveBalance {
+    pub employee_id: i64,
+    pub employee_code: String,
+    pub employee_name: String,
+    pub year: i32,
+    pub acquired_days_bp: i64,
+    pub taken_days_bp: i64,
+    pub remaining_days_bp: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LeaveRequest {
+    pub id: i64,
+    pub employee_id: i64,
+    pub employee_code: String,
+    pub employee_name: String,
+    pub from_date: String,
+    pub to_date: String,
+    pub days_bp: i64,
+    pub status: String,
+    pub notes: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateLeaveRequestInput {
+    pub employee_id: i64,
+    pub from_date: String,
+    pub to_date: String,
+    pub days_bp: i64,
+    pub notes: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SocialRateTable {
+    pub id: i64,
+    pub valid_from: String,
+    pub payload_json: String,
+    pub label: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PayslipLine {
+    pub id: i64,
+    pub payslip_id: i64,
+    pub line_no: i32,
+    pub code: String,
+    pub label: String,
+    pub base_cents: i64,
+    pub rate_bp: i32,
+    pub employee_cents: i64,
+    pub employer_cents: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Payslip {
+    pub id: i64,
+    pub employee_id: i64,
+    pub employee_code: String,
+    pub employee_name: String,
+    pub contract_id: Option<i64>,
+    pub period_ym: String,
+    pub status: String,
+    pub gross_cents: i64,
+    pub employee_charges_cents: i64,
+    pub employer_charges_cents: i64,
+    pub net_cents: i64,
+    pub pas_rate_bp: Option<i32>,
+    pub pas_cents: i64,
+    pub entry_id: Option<i64>,
+    pub pdf_path: Option<String>,
+    pub notes: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+    pub lines: Vec<PayslipLine>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DsnExportRun {
+    pub id: i64,
+    pub period_ym: String,
+    pub status: String,
+    pub path: Option<String>,
+    pub checklist_json: String,
+    pub created_at: String,
+}

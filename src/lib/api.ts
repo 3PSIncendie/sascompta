@@ -8,27 +8,37 @@ import type {
   CloseYearResult,
   ClosingChecklist,
   ClosingEventInfo,
+  CreateContractInput,
+  CreateEmployeeInput,
   CreateEntryInput,
   CreateFixedAssetInput,
   CreateInvoiceInput,
+  CreateLeaveRequestInput,
   CreatePaymentInput,
   CreateQuoteInput,
   CreateThirdPartyInput,
   CreateWorkspaceInput,
   DepreciationRun,
   DepreciationScheduleRow,
+  DsnExportRun,
+  Employee,
+  EmploymentContract,
   Entry,
   FiscalYear,
   FixedAsset,
   GenerateDepreciationResult,
   Invoice,
   Journal,
-  Payment,
-  Reminder,
+  LeaveBalance,
+  LeaveRequest,
   LedgerFilter,
   LedgerMovement,
+  Payment,
+  Payslip,
   PublicationPackMeta,
   Quote,
+  Reminder,
+  SocialRateTable,
   ThirdParty,
   UpdateOrganizationInput,
   VatCode,
@@ -225,4 +235,80 @@ export const api = {
   generateDueReminders: () => invoke<Reminder[]>("generate_due_reminders"),
   markReminderSent: (id: number) =>
     invoke<Reminder>("mark_reminder_sent", { id }),
+
+  listEmployees: () => invoke<Employee[]>("list_employees"),
+  getEmployee: (id: number) => invoke<Employee>("get_employee", { id }),
+  createEmployee: (input: CreateEmployeeInput) =>
+    invoke<Employee>("create_employee", { input }),
+  updateEmployee: (id: number, input: CreateEmployeeInput) =>
+    invoke<Employee>("update_employee", { id, input }),
+  deleteEmployee: (id: number) => invoke<void>("delete_employee", { id }),
+
+  listContracts: (employeeId?: number | null) =>
+    invoke<EmploymentContract[]>("list_contracts", {
+      employeeId: employeeId ?? null,
+    }),
+  createContract: (input: CreateContractInput) =>
+    invoke<EmploymentContract>("create_contract", { input }),
+  updateContract: (id: number, input: CreateContractInput) =>
+    invoke<EmploymentContract>("update_contract", { id, input }),
+  deleteContract: (id: number) => invoke<void>("delete_contract", { id }),
+
+  listLeaveBalances: (year?: number | null) =>
+    invoke<LeaveBalance[]>("list_leave_balances", { year: year ?? null }),
+  upsertLeaveBalance: (
+    employeeId: number,
+    year: number,
+    acquiredDaysBp: number,
+  ) =>
+    invoke<LeaveBalance>("upsert_leave_balance", {
+      employeeId,
+      year,
+      acquiredDaysBp,
+    }),
+  listLeaveRequests: (employeeId?: number | null) =>
+    invoke<LeaveRequest[]>("list_leave_requests", {
+      employeeId: employeeId ?? null,
+    }),
+  createLeaveRequest: (input: CreateLeaveRequestInput) =>
+    invoke<LeaveRequest>("create_leave_request", { input }),
+  setLeaveStatus: (id: number, status: string) =>
+    invoke<LeaveRequest>("set_leave_status", { id, status }),
+  deleteLeaveRequest: (id: number) =>
+    invoke<void>("delete_leave_request", { id }),
+
+  listSocialRates: () => invoke<SocialRateTable[]>("list_social_rates"),
+  upsertSocialRate: (
+    validFrom: string,
+    employeeRateBp: number,
+    employerRateBp: number,
+    label: string,
+  ) =>
+    invoke<SocialRateTable>("upsert_social_rate", {
+      validFrom,
+      employeeRateBp,
+      employerRateBp,
+      label,
+    }),
+  listPayslips: (periodYm?: string | null) =>
+    invoke<Payslip[]>("list_payslips", { periodYm: periodYm ?? null }),
+  getPayslip: (id: number) => invoke<Payslip>("get_payslip", { id }),
+  computePayslip: (
+    employeeId: number,
+    periodYm: string,
+    pasRateBp?: number | null,
+  ) =>
+    invoke<Payslip>("compute_payslip", {
+      employeeId,
+      periodYm,
+      pasRateBp: pasRateBp ?? null,
+    }),
+  generatePeriodPayslips: (periodYm: string) =>
+    invoke<Payslip[]>("generate_period_payslips", { periodYm }),
+  validatePayslip: (id: number) => invoke<Payslip>("validate_payslip", { id }),
+  deletePayslip: (id: number) => invoke<void>("delete_payslip", { id }),
+  buildPayslipEntryDraft: (payslipId: number) =>
+    invoke<Entry>("build_payslip_entry_draft", { payslipId }),
+  exportDsnOriented: (periodYm: string, path: string) =>
+    invoke<DsnExportRun>("export_dsn_oriented", { periodYm, path }),
 };

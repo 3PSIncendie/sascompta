@@ -635,6 +635,209 @@ pub fn build_invoice_entry_draft(
         .map_err(map_err)
 }
 
+// —— RH ——————————————————————————————————————————————————————————————————
+
+#[tauri::command]
+pub fn list_employees(state: State<'_, AppState>) -> Result<Vec<Employee>, String> {
+    db::with_conn(&state, |c| db::hr::list_employees(c)).map_err(map_err)
+}
+
+#[tauri::command]
+pub fn get_employee(state: State<'_, AppState>, id: i64) -> Result<Employee, String> {
+    db::with_conn(&state, |c| db::hr::get_employee(c, id)).map_err(map_err)
+}
+
+#[tauri::command]
+pub fn create_employee(
+    state: State<'_, AppState>,
+    input: CreateEmployeeInput,
+) -> Result<Employee, String> {
+    db::with_conn(&state, |c| db::hr::create_employee(c, &input)).map_err(map_err)
+}
+
+#[tauri::command]
+pub fn update_employee(
+    state: State<'_, AppState>,
+    id: i64,
+    input: CreateEmployeeInput,
+) -> Result<Employee, String> {
+    db::with_conn(&state, |c| db::hr::update_employee(c, id, &input)).map_err(map_err)
+}
+
+#[tauri::command]
+pub fn delete_employee(state: State<'_, AppState>, id: i64) -> Result<(), String> {
+    db::with_conn(&state, |c| db::hr::delete_employee(c, id)).map_err(map_err)
+}
+
+#[tauri::command]
+pub fn list_contracts(
+    state: State<'_, AppState>,
+    employee_id: Option<i64>,
+) -> Result<Vec<EmploymentContract>, String> {
+    db::with_conn(&state, |c| db::hr::list_contracts(c, employee_id)).map_err(map_err)
+}
+
+#[tauri::command]
+pub fn create_contract(
+    state: State<'_, AppState>,
+    input: CreateContractInput,
+) -> Result<EmploymentContract, String> {
+    db::with_conn(&state, |c| db::hr::create_contract(c, &input)).map_err(map_err)
+}
+
+#[tauri::command]
+pub fn update_contract(
+    state: State<'_, AppState>,
+    id: i64,
+    input: CreateContractInput,
+) -> Result<EmploymentContract, String> {
+    db::with_conn(&state, |c| db::hr::update_contract(c, id, &input)).map_err(map_err)
+}
+
+#[tauri::command]
+pub fn delete_contract(state: State<'_, AppState>, id: i64) -> Result<(), String> {
+    db::with_conn(&state, |c| db::hr::delete_contract(c, id)).map_err(map_err)
+}
+
+#[tauri::command]
+pub fn list_leave_balances(
+    state: State<'_, AppState>,
+    year: Option<i32>,
+) -> Result<Vec<LeaveBalance>, String> {
+    db::with_conn(&state, |c| db::hr::list_leave_balances(c, year)).map_err(map_err)
+}
+
+#[tauri::command]
+pub fn upsert_leave_balance(
+    state: State<'_, AppState>,
+    employee_id: i64,
+    year: i32,
+    acquired_days_bp: i64,
+) -> Result<LeaveBalance, String> {
+    db::with_conn(&state, |c| {
+        db::hr::upsert_leave_balance(c, employee_id, year, acquired_days_bp)
+    })
+    .map_err(map_err)
+}
+
+#[tauri::command]
+pub fn list_leave_requests(
+    state: State<'_, AppState>,
+    employee_id: Option<i64>,
+) -> Result<Vec<LeaveRequest>, String> {
+    db::with_conn(&state, |c| db::hr::list_leave_requests(c, employee_id)).map_err(map_err)
+}
+
+#[tauri::command]
+pub fn create_leave_request(
+    state: State<'_, AppState>,
+    input: CreateLeaveRequestInput,
+) -> Result<LeaveRequest, String> {
+    db::with_conn(&state, |c| db::hr::create_leave_request(c, &input)).map_err(map_err)
+}
+
+#[tauri::command]
+pub fn set_leave_status(
+    state: State<'_, AppState>,
+    id: i64,
+    status: String,
+) -> Result<LeaveRequest, String> {
+    db::with_conn(&state, |c| db::hr::set_leave_status(c, id, &status)).map_err(map_err)
+}
+
+#[tauri::command]
+pub fn delete_leave_request(state: State<'_, AppState>, id: i64) -> Result<(), String> {
+    db::with_conn(&state, |c| db::hr::delete_leave_request(c, id)).map_err(map_err)
+}
+
+#[tauri::command]
+pub fn list_social_rates(state: State<'_, AppState>) -> Result<Vec<SocialRateTable>, String> {
+    db::with_conn(&state, |c| db::hr::list_social_rates(c)).map_err(map_err)
+}
+
+#[tauri::command]
+pub fn upsert_social_rate(
+    state: State<'_, AppState>,
+    valid_from: String,
+    employee_rate_bp: i32,
+    employer_rate_bp: i32,
+    label: String,
+) -> Result<SocialRateTable, String> {
+    db::with_conn(&state, |c| {
+        db::hr::upsert_social_rate(c, &valid_from, employee_rate_bp, employer_rate_bp, &label)
+    })
+    .map_err(map_err)
+}
+
+#[tauri::command]
+pub fn list_payslips(
+    state: State<'_, AppState>,
+    period_ym: Option<String>,
+) -> Result<Vec<Payslip>, String> {
+    db::with_conn(&state, |c| {
+        db::hr::list_payslips(c, period_ym.as_deref())
+    })
+    .map_err(map_err)
+}
+
+#[tauri::command]
+pub fn get_payslip(state: State<'_, AppState>, id: i64) -> Result<Payslip, String> {
+    db::with_conn(&state, |c| db::hr::get_payslip(c, id)).map_err(map_err)
+}
+
+#[tauri::command]
+pub fn compute_payslip(
+    state: State<'_, AppState>,
+    employee_id: i64,
+    period_ym: String,
+    pas_rate_bp: Option<i32>,
+) -> Result<Payslip, String> {
+    db::with_conn(&state, |c| {
+        db::hr::compute_payslip(c, employee_id, &period_ym, pas_rate_bp)
+    })
+    .map_err(map_err)
+}
+
+#[tauri::command]
+pub fn generate_period_payslips(
+    state: State<'_, AppState>,
+    period_ym: String,
+) -> Result<Vec<Payslip>, String> {
+    db::with_conn(&state, |c| db::hr::generate_period_payslips(c, &period_ym))
+        .map_err(map_err)
+}
+
+#[tauri::command]
+pub fn validate_payslip(state: State<'_, AppState>, id: i64) -> Result<Payslip, String> {
+    db::with_conn(&state, |c| db::hr::validate_payslip(c, id)).map_err(map_err)
+}
+
+#[tauri::command]
+pub fn delete_payslip(state: State<'_, AppState>, id: i64) -> Result<(), String> {
+    db::with_conn(&state, |c| db::hr::delete_payslip(c, id)).map_err(map_err)
+}
+
+#[tauri::command]
+pub fn build_payslip_entry_draft(
+    state: State<'_, AppState>,
+    payslip_id: i64,
+) -> Result<Entry, String> {
+    db::with_conn(&state, |c| db::hr::build_payslip_entry_draft(c, payslip_id))
+        .map_err(map_err)
+}
+
+#[tauri::command]
+pub fn export_dsn_oriented(
+    state: State<'_, AppState>,
+    period_ym: String,
+    path: String,
+) -> Result<DsnExportRun, String> {
+    db::with_conn(&state, |c| {
+        db::hr::export_dsn_oriented(c, &period_ym, std::path::Path::new(&path))
+    })
+    .map_err(map_err)
+}
+
 #[tauri::command]
 pub fn list_payments(
     state: State<'_, AppState>,
