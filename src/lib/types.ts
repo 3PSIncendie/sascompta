@@ -314,6 +314,43 @@ export interface CreateInvoiceInput {
   lines: InvoiceLineInput[];
 }
 
+export interface Payment {
+  id: number;
+  invoiceId: number;
+  invoiceNumber: string | null;
+  thirdPartyCode: string;
+  thirdPartyName: string;
+  paidOn: string;
+  amountCents: number;
+  method: string;
+  bankRef: string | null;
+  entryId: number | null;
+  lettre: string | null;
+}
+
+export interface CreatePaymentInput {
+  invoiceId: number;
+  paidOn: string;
+  amountCents: number;
+  method: string;
+  bankRef?: string | null;
+}
+
+export interface Reminder {
+  id: number;
+  invoiceId: number;
+  invoiceNumber: string | null;
+  thirdPartyCode: string;
+  thirdPartyName: string;
+  level: number;
+  dueDate: string | null;
+  daysOverdue: number;
+  amountDueCents: number;
+  sentAt: string | null;
+  channel: string;
+  bodySnapshot: string | null;
+}
+
 export interface LedgerFilter {
   fromDate?: string | null;
   toDate?: string | null;

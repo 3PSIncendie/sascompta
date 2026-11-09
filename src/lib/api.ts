@@ -11,6 +11,7 @@ import type {
   CreateEntryInput,
   CreateFixedAssetInput,
   CreateInvoiceInput,
+  CreatePaymentInput,
   CreateQuoteInput,
   CreateThirdPartyInput,
   CreateWorkspaceInput,
@@ -22,6 +23,8 @@ import type {
   GenerateDepreciationResult,
   Invoice,
   Journal,
+  Payment,
+  Reminder,
   LedgerFilter,
   LedgerMovement,
   PublicationPackMeta,
@@ -213,4 +216,13 @@ export const api = {
     invoke<Invoice>("convert_quote_to_invoice", { quoteId }),
   buildInvoiceEntryDraft: (invoiceId: number) =>
     invoke<Entry>("build_invoice_entry_draft", { invoiceId }),
+
+  listPayments: (invoiceId?: number | null) =>
+    invoke<Payment[]>("list_payments", { invoiceId: invoiceId ?? null }),
+  recordPayment: (input: CreatePaymentInput) =>
+    invoke<Payment>("record_payment", { input }),
+  listReminders: () => invoke<Reminder[]>("list_reminders"),
+  generateDueReminders: () => invoke<Reminder[]>("generate_due_reminders"),
+  markReminderSent: (id: number) =>
+    invoke<Reminder>("mark_reminder_sent", { id }),
 };

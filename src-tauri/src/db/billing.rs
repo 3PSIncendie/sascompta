@@ -1591,6 +1591,315 @@ pub fn seed_demo_quotes(conn: &Connection) -> DbResult<()> {
     Ok(())
 }
 
+
+/* ——— Paiements + relances + lettrage soft ——— */
+
+fn soft_lettre_for_invoice(inv: &Invoice) -> String {
+    inv.number
+        .as_ref()
+        .map(|n| n.replace('-', ""))
+        .unwrap_or_else(|| format!("FAC{}", inv.id))
+}
+
+fn apply_soft_lettre(conn: &Connection, entry_id: i64, lettre: &str, date: &str) -> DbResult<()> {
+    conn.execute(
+        "UPDATE entry SET ecriture_lettre = ?1, ecriture_date_lettre = ?2 WHERE id = ?3",
+        params![lettre, date, entry_id],
+    )?;
+    Ok(())
+}
+
+fn refresh_invoice_payment_status(conn: &Connection, invoice_id: i64) -> DbResult<Invoice> {
+    let inv = get_invoice(conn, invoice_id)?;
+    let paid: i64 = conn.query_row(
+        "SELECT COALESCE(SUM(amount_cents), 0) FROM payment WHERE invoice_id = ?1",
+        params![invoice_id],
+        |r| r.get(0),
+    )?;
+    let status = if paid <= 0 {
+        // conserver issued/sent si aucun paiement
+        if matches!(inv.status.as_str(), "partially_paid" | "paid") {
+            "issued".to_string()
+        } else {
+            inv.status.clone()
+        }
+    } else if paid >= inv.ttc_cents {
+        "paid".to_string()
+    } else {
+        "partially_paid".to_string()
+    };
+    conn.execute(
+        "UPDATE invoice SET paid_cents = ?1, status = ?2, updated_at = ?3 WHERE id = ?4",
+        params![paid, status, now_iso(), invoice_id],
+    )?;
+    get_invoice(conn, invoice_id)
+}
+
+pub fn list_payments(conn: &Connection, invoice_id: Option<i64>) -> DbResult<Vec<Payment>> {
+    let mut sql = String::from(
+        "SELECT p.id, p.invoice_id, i.number, tp.code, tp.name, p.paid_on, p.amount_cents,
+                p.method, p.bank_ref, p.entry_id,
+                (SELECT e.ecriture_lettre FROM entry e WHERE e.id = p.entry_id)
+         FROM payment p
+         JOIN invoice i ON i.id = p.invoice_id
+         JOIN third_party tp ON tp.id = i.third_party_id",
+    );
+    if invoice_id.is_some() {
+        sql.push_str(" WHERE p.invoice_id = ?1");
+    }
+    sql.push_str(" ORDER BY p.paid_on DESC, p.id DESC");
+    let mut stmt = conn.prepare(&sql)?;
+    let map = |r: &rusqlite::Row<'_>| {
+        Ok(Payment {
+            id: r.get(0)?,
+            invoice_id: r.get(1)?,
+            invoice_number: r.get(2)?,
+            third_party_code: r.get(3)?,
+            third_party_name: r.get(4)?,
+            paid_on: r.get(5)?,
+            amount_cents: r.get(6)?,
+            method: r.get(7)?,
+            bank_ref: r.get(8)?,
+            entry_id: r.get(9)?,
+            lettre: r.get(10)?,
+        })
+    };
+    let rows = if let Some(id) = invoice_id {
+        stmt.query_map(params![id], map)?
+    } else {
+        stmt.query_map([], map)?
+    };
+    Ok(rows.filter_map(|r| r.ok()).collect())
+}
+
+/// Enregistre un encaissement : paiement + brouillon BQ (512/411) + lettrage soft.
+pub fn record_payment(conn: &Connection, input: &CreatePaymentInput) -> DbResult<Payment> {
+    let inv = get_invoice(conn, input.invoice_id)?;
+    if matches!(inv.status.as_str(), "draft" | "cancelled") {
+        return Err("Paiement réservé aux factures émises".into());
+    }
+    if inv.kind == "credit_note" {
+        return Err("Enregistrez plutôt un remboursement hors MVP paiement client".into());
+    }
+    if input.amount_cents <= 0 {
+        return Err("Montant de paiement invalide".into());
+    }
+    let remaining = inv.ttc_cents - inv.paid_cents;
+    if input.amount_cents > remaining {
+        return Err(format!(
+            "Montant trop élevé (reste dû {} centimes)",
+            remaining
+        )
+        .into());
+    }
+    let method = if input.method.trim().is_empty() {
+        "virement".to_string()
+    } else {
+        input.method.trim().to_string()
+    };
+    let piece = inv
+        .number
+        .clone()
+        .unwrap_or_else(|| format!("FAC-{}", inv.id));
+    let label = format!("Encaissement {piece}");
+    let lines = vec![
+        EntryLineInput {
+            account_number: "512".into(),
+            label: Some("Banque".into()),
+            debit_cents: input.amount_cents,
+            credit_cents: 0,
+            vat_code: None,
+            third_party_id: None,
+            comp_aux_type: None,
+            comp_aux_num: None,
+        },
+        EntryLineInput {
+            account_number: "411".into(),
+            label: Some(format!("Client {}", inv.third_party_code)),
+            debit_cents: 0,
+            credit_cents: input.amount_cents,
+            vat_code: None,
+            third_party_id: Some(inv.third_party_id),
+            comp_aux_type: Some("client".into()),
+            comp_aux_num: Some(inv.third_party_code.clone()),
+        },
+    ];
+    let entry_input = CreateEntryInput {
+        journal_code: "BQ".into(),
+        entry_date: input.paid_on.clone(),
+        piece_ref: piece.clone(),
+        label,
+        lines,
+    };
+    let entry = ledger::create_draft(conn, &entry_input)?;
+    let lettre = soft_lettre_for_invoice(&inv);
+    apply_soft_lettre(conn, entry.id, &lettre, &input.paid_on)?;
+    // Lettrage soft sur l'écriture VTE liée si présente (même code)
+    if let Some(vte_id) = inv.entry_id {
+        let _ = apply_soft_lettre(conn, vte_id, &lettre, &input.paid_on);
+    }
+    conn.execute(
+        "INSERT INTO payment(invoice_id, paid_on, amount_cents, method, bank_ref, entry_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![
+            input.invoice_id,
+            input.paid_on,
+            input.amount_cents,
+            method,
+            input.bank_ref,
+            entry.id,
+        ],
+    )?;
+    let payment_id = conn.last_insert_rowid();
+    refresh_invoice_payment_status(conn, input.invoice_id)?;
+    list_payments(conn, Some(input.invoice_id))?
+        .into_iter()
+        .find(|p| p.id == payment_id)
+        .ok_or_else(|| "Paiement introuvable après création".into())
+}
+
+fn days_between(from: &str, to: &str) -> i32 {
+    // Dates ISO AAAA-MM-JJ — écart calendaire simple via chrono
+    let parse = |s: &str| {
+        chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").ok()
+    };
+    match (parse(from), parse(to)) {
+        (Some(a), Some(b)) => (b - a).num_days() as i32,
+        _ => 0,
+    }
+}
+
+fn today_ymd() -> String {
+    Utc::now().format("%Y-%m-%d").to_string()
+}
+
+fn reminder_body(inv: &Invoice, level: i32, days_overdue: i32, due: &str) -> String {
+    let num = inv
+        .number
+        .clone()
+        .unwrap_or_else(|| format!("#{}", inv.id));
+    let due_cents = (inv.ttc_cents - inv.paid_cents).max(0);
+    format!(
+        "Relance J+{level} — Facture {num}\n\
+         Client : {} ({})\n\
+         Échéance : {due} (retard {days_overdue} j)\n\
+         Reste dû : {} €\n\
+         Merci de régulariser votre paiement.\n\
+         — SasCompta (relance manuelle / PDF)",
+        inv.third_party_name,
+        inv.third_party_code,
+        crate::db::tax::format_cents_csv(due_cents),
+    )
+}
+
+pub fn list_reminders(conn: &Connection) -> DbResult<Vec<Reminder>> {
+    let today = today_ymd();
+    let mut stmt = conn.prepare(
+        "SELECT r.id, r.invoice_id, i.number, tp.code, tp.name, r.level, i.due_date,
+                i.ttc_cents, i.paid_cents, r.sent_at, r.channel, r.body_snapshot
+         FROM reminder r
+         JOIN invoice i ON i.id = r.invoice_id
+         JOIN third_party tp ON tp.id = i.third_party_id
+         ORDER BY r.level DESC, i.due_date ASC, r.id DESC",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        let due: Option<String> = r.get(6)?;
+        let ttc: i64 = r.get(7)?;
+        let paid: i64 = r.get(8)?;
+        let days = due
+            .as_deref()
+            .map(|d| days_between(d, &today).max(0))
+            .unwrap_or(0);
+        Ok(Reminder {
+            id: r.get(0)?,
+            invoice_id: r.get(1)?,
+            invoice_number: r.get(2)?,
+            third_party_code: r.get(3)?,
+            third_party_name: r.get(4)?,
+            level: r.get(5)?,
+            due_date: due,
+            days_overdue: days,
+            amount_due_cents: (ttc - paid).max(0),
+            sent_at: r.get(9)?,
+            channel: r.get(10)?,
+            body_snapshot: r.get(11)?,
+        })
+    })?;
+    Ok(rows.filter_map(|r| r.ok()).collect())
+}
+
+/// Crée les relances J+7 / J+15 / J+30 manquantes pour les factures échues non soldées.
+pub fn generate_due_reminders(conn: &Connection) -> DbResult<Vec<Reminder>> {
+    let today = today_ymd();
+    let invoices = list_invoices(conn)?;
+    let mut created_ids = Vec::new();
+    for inv in invoices {
+        if !matches!(
+            inv.status.as_str(),
+            "issued" | "sent" | "partially_paid"
+        ) {
+            continue;
+        }
+        if inv.paid_cents >= inv.ttc_cents {
+            continue;
+        }
+        let Some(due) = inv.due_date.clone() else {
+            continue;
+        };
+        let overdue = days_between(&due, &today);
+        if overdue < 7 {
+            continue;
+        }
+        for level in [7_i32, 15, 30] {
+            if overdue < level {
+                continue;
+            }
+            let exists: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM reminder WHERE invoice_id = ?1 AND level = ?2",
+                params![inv.id, level],
+                |r| r.get(0),
+            )?;
+            if exists > 0 {
+                continue;
+            }
+            let body = reminder_body(&inv, level, overdue, &due);
+            conn.execute(
+                "INSERT INTO reminder(invoice_id, level, sent_at, channel, body_snapshot)
+                 VALUES (?1, ?2, NULL, 'pdf', ?3)",
+                params![inv.id, level, body],
+            )?;
+            created_ids.push(conn.last_insert_rowid());
+        }
+    }
+    let all = list_reminders(conn)?;
+    Ok(all
+        .into_iter()
+        .filter(|r| created_ids.contains(&r.id))
+        .collect())
+}
+
+pub fn mark_reminder_sent(conn: &Connection, id: i64) -> DbResult<Reminder> {
+    let n = conn.execute(
+        "UPDATE reminder SET sent_at = ?1 WHERE id = ?2 AND sent_at IS NULL",
+        params![now_iso(), id],
+    )?;
+    if n == 0 {
+        // déjà envoyée ou introuvable
+        let exists: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM reminder WHERE id = ?1",
+            params![id],
+            |r| r.get(0),
+        )?;
+        if exists == 0 {
+            return Err("Relance introuvable".into());
+        }
+    }
+    list_reminders(conn)?
+        .into_iter()
+        .find(|r| r.id == id)
+        .ok_or_else(|| "Relance introuvable".into())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1736,5 +2045,121 @@ mod tests {
         // Pas de double post silencieux
         ledger::post_entry(&conn, entry_id).unwrap();
         assert!(build_invoice_entry_draft(&conn, issued.id).is_err());
+    }
+
+    #[test]
+    fn payment_bq_soft_lettre_and_reminders() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("pay.sascompta");
+        create_demo_workspace(&path).unwrap();
+        let conn = open_connection(&path).unwrap();
+
+        let draft = list_invoices(&conn)
+            .unwrap()
+            .into_iter()
+            .find(|i| i.status == "draft")
+            .unwrap();
+        // échéance passée pour relances
+        conn.execute(
+            "UPDATE invoice SET due_date = '2026-01-01' WHERE id = ?1",
+            params![draft.id],
+        )
+        .unwrap();
+        let issued = issue_invoice(&conn, draft.id).unwrap();
+        let vte = issued.entry_id.unwrap();
+        ledger::post_entry(&conn, vte).unwrap();
+
+        let pay = record_payment(
+            &conn,
+            &CreatePaymentInput {
+                invoice_id: issued.id,
+                paid_on: "2026-04-10".into(),
+                amount_cents: issued.ttc_cents / 2,
+                method: "virement".into(),
+                bank_ref: Some("VIR-1".into()),
+            },
+        )
+        .unwrap();
+        assert!(pay.entry_id.is_some());
+        assert!(pay.lettre.as_ref().unwrap().contains("FACT"));
+        let partial = get_invoice(&conn, issued.id).unwrap();
+        assert_eq!(partial.status, "partially_paid");
+
+        // même lettre soft sur VTE
+        let vte_lettre: String = conn
+            .query_row(
+                "SELECT ecriture_lettre FROM entry WHERE id = ?1",
+                params![vte],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(vte_lettre, pay.lettre.unwrap());
+
+        let bq_id = pay.entry_id.unwrap();
+        let journal: String = conn
+            .query_row(
+                "SELECT j.code FROM entry e JOIN journal j ON j.id = e.journal_id WHERE e.id = ?1",
+                params![bq_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(journal, "BQ");
+
+        let rest = get_invoice(&conn, issued.id).unwrap();
+        let _ = record_payment(
+            &conn,
+            &CreatePaymentInput {
+                invoice_id: issued.id,
+                paid_on: "2026-04-15".into(),
+                amount_cents: rest.ttc_cents - rest.paid_cents,
+                method: "cheque".into(),
+                bank_ref: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(get_invoice(&conn, issued.id).unwrap().status, "paid");
+
+        // Relances : facture soldée → pas de nouvelle ; créer une autre échue
+        let other = create_invoice(
+            &conn,
+            &CreateInvoiceInput {
+                kind: "standard".into(),
+                third_party_id: issued.third_party_id,
+                quote_id: None,
+                parent_invoice_id: None,
+                issue_date: "2025-12-01".into(),
+                due_date: Some("2025-12-15".into()),
+                service_date: None,
+                vat_mode: "normale".into(),
+                notes: None,
+                legal_mentions: None,
+                lines: vec![InvoiceLineInput {
+                    label: "Prestation".into(),
+                    quantity_milli: 1000,
+                    unit: "u".into(),
+                    unit_price_cents: 10_000,
+                    ht_cents: 10_000,
+                    vat_rate_bp: 2000,
+                    vat_code: Some("T20C".into()),
+                    account_number: "706".into(),
+                    analytic_code: None,
+                }],
+            },
+        )
+        .unwrap();
+        let other = issue_invoice(&conn, other.id).unwrap();
+        let created = generate_due_reminders(&conn).unwrap();
+        assert!(!created.is_empty());
+        assert!(created.iter().any(|r| r.invoice_id == other.id && r.level == 7));
+        assert!(created.iter().any(|r| r.level == 30));
+        let again = generate_due_reminders(&conn).unwrap();
+        assert!(again.is_empty()); // idempotent
+        let first = list_reminders(&conn)
+            .unwrap()
+            .into_iter()
+            .find(|r| r.invoice_id == other.id && r.level == 7)
+            .unwrap();
+        let marked = mark_reminder_sent(&conn, first.id).unwrap();
+        assert!(marked.sent_at.is_some());
     }
 }

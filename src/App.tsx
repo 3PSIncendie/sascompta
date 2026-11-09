@@ -16,6 +16,7 @@ import { ClosingScreen } from "./screens/ClosingScreen";
 import { ComingSoonScreen } from "./screens/ComingSoonScreen";
 import { QuotesScreen } from "./screens/QuotesScreen";
 import { InvoicesScreen } from "./screens/InvoicesScreen";
+import { RemindersScreen } from "./screens/RemindersScreen";
 import { api } from "./lib/api";
 import { loadGuideProgress } from "./lib/guideProgress";
 import type { NavId, WorkspaceInfo } from "./lib/types";
@@ -145,13 +146,7 @@ export default function App() {
       )}
       {nav === "devis" && <QuotesScreen />}
       {nav === "factures" && <InvoicesScreen />}
-      {nav === "relances" && (
-        <ComingSoonScreen
-          group="Commercial"
-          title="Relances"
-          blurb="File de relances basée sur l’échéance et le statut de paiement."
-        />
-      )}
+      {nav === "relances" && <RemindersScreen />}
       {nav === "einvoice" && (
         <ComingSoonScreen
           group="Commercial"

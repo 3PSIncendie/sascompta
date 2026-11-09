@@ -647,3 +647,46 @@ pub struct CreateInvoiceInput {
     pub legal_mentions: Option<String>,
     pub lines: Vec<InvoiceLineInput>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Payment {
+    pub id: i64,
+    pub invoice_id: i64,
+    pub invoice_number: Option<String>,
+    pub third_party_code: String,
+    pub third_party_name: String,
+    pub paid_on: String,
+    pub amount_cents: i64,
+    pub method: String,
+    pub bank_ref: Option<String>,
+    pub entry_id: Option<i64>,
+    pub lettre: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreatePaymentInput {
+    pub invoice_id: i64,
+    pub paid_on: String,
+    pub amount_cents: i64,
+    pub method: String,
+    pub bank_ref: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Reminder {
+    pub id: i64,
+    pub invoice_id: i64,
+    pub invoice_number: Option<String>,
+    pub third_party_code: String,
+    pub third_party_name: String,
+    pub level: i32,
+    pub due_date: Option<String>,
+    pub days_overdue: i32,
+    pub amount_due_cents: i64,
+    pub sent_at: Option<String>,
+    pub channel: String,
+    pub body_snapshot: Option<String>,
+}

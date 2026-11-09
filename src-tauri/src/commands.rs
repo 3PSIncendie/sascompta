@@ -636,6 +636,40 @@ pub fn build_invoice_entry_draft(
 }
 
 #[tauri::command]
+pub fn list_payments(
+    state: State<'_, AppState>,
+    invoice_id: Option<i64>,
+) -> Result<Vec<Payment>, String> {
+    db::with_conn(&state, |c| db::billing::list_payments(c, invoice_id)).map_err(map_err)
+}
+
+#[tauri::command]
+pub fn record_payment(
+    state: State<'_, AppState>,
+    input: CreatePaymentInput,
+) -> Result<Payment, String> {
+    db::with_conn(&state, |c| db::billing::record_payment(c, &input)).map_err(map_err)
+}
+
+#[tauri::command]
+pub fn list_reminders(state: State<'_, AppState>) -> Result<Vec<Reminder>, String> {
+    db::with_conn(&state, db::billing::list_reminders).map_err(map_err)
+}
+
+#[tauri::command]
+pub fn generate_due_reminders(state: State<'_, AppState>) -> Result<Vec<Reminder>, String> {
+    db::with_conn(&state, db::billing::generate_due_reminders).map_err(map_err)
+}
+
+#[tauri::command]
+pub fn mark_reminder_sent(
+    state: State<'_, AppState>,
+    id: i64,
+) -> Result<Reminder, String> {
+    db::with_conn(&state, |c| db::billing::mark_reminder_sent(c, id)).map_err(map_err)
+}
+
+#[tauri::command]
 pub fn annual_statements(
     state: State<'_, AppState>,
     filter: LedgerFilter,
