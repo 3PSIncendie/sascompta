@@ -3,8 +3,10 @@ import {
   buildGuidedLines,
   computeVatCents,
   DEFAULT_COUNTERPART,
+  defaultJournalForGuided,
   defaultVatCodeFor,
   eurosStringsFromLines,
+  FRAIS_HT_ACCOUNT,
   preferredHtAccount,
   SUBCONTRACT_HT_ACCOUNT,
   VAT_ACCOUNT,
@@ -174,6 +176,59 @@ describe("buildGuidedLines — achat classique", () => {
   });
 });
 
+describe("buildGuidedLines — frais", () => {
+  it("génère charge + TVA déductible + fournisseur (ACH)", () => {
+    const r = buildGuidedLines({
+      kind: "frais",
+      htAccount: FRAIS_HT_ACCOUNT,
+      htCents: 8_000,
+      vatMode: "normale",
+      vatCode: "T20D",
+      rateBp: 2000,
+      counterpartAccount: "401",
+      thirdPartyId: 2,
+    });
+    expect(r.vatAccount).toBe("44566");
+    expect(r.ttcCents).toBe(9_600);
+    expect(r.lines).toHaveLength(3);
+    expect(r.lines[0]).toMatchObject({
+      accountNumber: "625",
+      debitCents: 8_000,
+    });
+    expect(r.lines[1]).toMatchObject({
+      accountNumber: "44566",
+      debitCents: 1_600,
+    });
+    expect(r.lines[2]).toMatchObject({
+      accountNumber: "401",
+      creditCents: 9_600,
+      thirdPartyId: 2,
+    });
+    const d = r.lines.reduce((s, l) => s + l.debitCents, 0);
+    const c = r.lines.reduce((s, l) => s + l.creditCents, 0);
+    expect(d).toBe(c);
+    expect(defaultJournalForGuided("frais", "401")).toBe("ACH");
+  });
+
+  it("équilibre aussi payé par banque (OD)", () => {
+    const r = buildGuidedLines({
+      kind: "frais",
+      htAccount: "606",
+      htCents: 10_000,
+      vatMode: "normale",
+      vatCode: "T20D",
+      rateBp: 2000,
+      counterpartAccount: "512",
+    });
+    expect(r.lines[2]).toMatchObject({
+      accountNumber: "512",
+      creditCents: 12_000,
+    });
+    expect(defaultJournalForGuided("frais", "512")).toBe("OD");
+    expect(defaultJournalForGuided("frais", "530")).toBe("OD");
+  });
+});
+
 describe("buildGuidedLines — autoliquidation sous-traitance", () => {
   it("génère 604 + 44566 + 4452 + 401 au HT", () => {
     const r = buildGuidedLines({
@@ -260,6 +315,10 @@ describe("helpers TVA", () => {
       "sans",
       "autoliquidation_chantier",
     ]);
+    expect(vatModesForKind("frais").map((m) => m.id)).toEqual([
+      "normale",
+      "sans",
+    ]);
   });
 
   it("filtre les codes par sens et mode", () => {
@@ -268,6 +327,10 @@ describe("helpers TVA", () => {
       "T10C",
     ]);
     expect(vatCodesForKind("achat", CODES).map((c) => c.code)).toEqual([
+      "T20D",
+      "T55D",
+    ]);
+    expect(vatCodesForKind("frais", CODES).map((c) => c.code)).toEqual([
       "T20D",
       "T55D",
     ]);
@@ -281,6 +344,7 @@ describe("helpers TVA", () => {
   it("choisit le code par défaut selon taux et mode", () => {
     expect(defaultVatCodeFor("vente", 2000, CODES)?.code).toBe("T20C");
     expect(defaultVatCodeFor("achat", 550, CODES)?.code).toBe("T55D");
+    expect(defaultVatCodeFor("frais", 2000, CODES)?.code).toBe("T20D");
     expect(
       defaultVatCodeFor("achat", 2000, CODES, "autoliquidation_sous_traitance")
         ?.code,
@@ -290,11 +354,12 @@ describe("helpers TVA", () => {
     ).toBe("T10R");
   });
 
-  it("préfère 604 pour sous-traitance", () => {
+  it("préfère 604 pour sous-traitance et 625 pour frais", () => {
     expect(preferredHtAccount("achat", "autoliquidation_sous_traitance")).toBe(
       "604",
     );
     expect(preferredHtAccount("achat", "normale")).toBe("606");
+    expect(preferredHtAccount("frais", "normale")).toBe("625");
   });
 
   it("formate les chaînes débit/crédit", () => {

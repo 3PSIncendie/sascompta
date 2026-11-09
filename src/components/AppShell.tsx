@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { DeadlineBadge } from "./DeadlineReminders";
 import { UpdateChecker } from "./UpdateChecker";
 import { PACKAGE_VERSION, resolveAppVersion } from "../lib/appVersion";
@@ -52,6 +52,51 @@ const NAV_GROUPS: NavGroup[] = [
   },
 ];
 
+const OPEN_GROUPS_KEY = "sascompta.navOpenGroups";
+
+function groupIdForNav(nav: NavId): string | null {
+  for (const g of NAV_GROUPS) {
+    if (g.items.some((i) => i.id === nav)) return g.id;
+  }
+  return null;
+}
+
+function defaultOpenGroups(nav: NavId): Record<string, boolean> {
+  const active = groupIdForNav(nav);
+  const open: Record<string, boolean> = {};
+  for (const g of NAV_GROUPS) {
+    open[g.id] = active ? g.id === active : g.id === "societe" || g.id === "compta";
+  }
+  return open;
+}
+
+function loadOpenGroups(nav: NavId): Record<string, boolean> {
+  const fallback = defaultOpenGroups(nav);
+  if (typeof sessionStorage === "undefined") return fallback;
+  try {
+    const raw = sessionStorage.getItem(OPEN_GROUPS_KEY);
+    if (!raw) return fallback;
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const open: Record<string, boolean> = {};
+    for (const g of NAV_GROUPS) {
+      const value = parsed[g.id];
+      open[g.id] = typeof value === "boolean" ? value : fallback[g.id];
+    }
+    return open;
+  } catch {
+    return fallback;
+  }
+}
+
+function persistOpenGroups(open: Record<string, boolean>) {
+  if (typeof sessionStorage === "undefined") return;
+  try {
+    sessionStorage.setItem(OPEN_GROUPS_KEY, JSON.stringify(open));
+  } catch {
+    /* ignore quota / private mode */
+  }
+}
+
 interface Props {
   workspace: WorkspaceInfo;
   nav: NavId;
@@ -62,6 +107,9 @@ interface Props {
 
 export function AppShell({ workspace, nav, onNav, onClose, children }: Props) {
   const [version, setVersion] = useState(PACKAGE_VERSION);
+  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>(() =>
+    loadOpenGroups(nav),
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -73,6 +121,28 @@ export function AppShell({ workspace, nav, onNav, onClose, children }: Props) {
     };
   }, []);
 
+  // Keep the active screen's group expanded (multi-open elsewhere stays as-is).
+  useEffect(() => {
+    const gid = groupIdForNav(nav);
+    if (!gid) return;
+    setOpenGroups((prev) => {
+      if (prev[gid]) return prev;
+      const next = { ...prev, [gid]: true };
+      persistOpenGroups(next);
+      return next;
+    });
+  }, [nav]);
+
+  const activeGroupId = useMemo(() => groupIdForNav(nav), [nav]);
+
+  function toggleGroup(id: string) {
+    setOpenGroups((prev) => {
+      const next = { ...prev, [id]: !prev[id] };
+      persistOpenGroups(next);
+      return next;
+    });
+  }
+
   return (
     <div className="app-shell">
       <aside className="sidebar">
@@ -81,32 +151,62 @@ export function AppShell({ workspace, nav, onNav, onClose, children }: Props) {
           <small>{workspace.organization.name}</small>
         </div>
         <nav className="nav" aria-label="Navigation principale">
-          {NAV_GROUPS.map((group) => (
-            <div key={group.id} className="nav-group">
-              <p className="nav-group-label">{group.label}</p>
-              {group.items.map((item) => (
+          {NAV_GROUPS.map((group) => {
+            const expanded = !!openGroups[group.id];
+            const panelId = `nav-panel-${group.id}`;
+            const btnId = `nav-toggle-${group.id}`;
+            return (
+              <div
+                key={group.id}
+                className={`nav-group${expanded ? " is-open" : ""}${
+                  activeGroupId === group.id ? " has-active" : ""
+                }`}
+              >
                 <button
-                  key={item.id}
                   type="button"
-                  className={nav === item.id ? "active" : ""}
-                  onClick={() => onNav(item.id)}
+                  id={btnId}
+                  className="nav-group-toggle"
+                  aria-expanded={expanded}
+                  aria-controls={panelId}
+                  onClick={() => toggleGroup(group.id)}
                 >
-                  <span className="nav-active-indicator" aria-hidden />
-                  <span className="nav-label">
-                    {item.label}
-                    {item.id === "guide" && (
-                      <DeadlineBadge workspace={workspace} />
-                    )}
-                    {item.soon && (
-                      <span className="nav-soon" title="Bientôt disponible">
-                        bientôt
-                      </span>
-                    )}
+                  <span className="nav-group-label">{group.label}</span>
+                  <span className="nav-group-chevron" aria-hidden>
+                    {expanded ? "▾" : "▸"}
                   </span>
                 </button>
-              ))}
-            </div>
-          ))}
+                <div
+                  id={panelId}
+                  role="region"
+                  aria-labelledby={btnId}
+                  className="nav-group-items"
+                  hidden={!expanded}
+                >
+                  {group.items.map((item) => (
+                    <button
+                      key={item.id}
+                      type="button"
+                      className={nav === item.id ? "active" : ""}
+                      onClick={() => onNav(item.id)}
+                    >
+                      <span className="nav-active-indicator" aria-hidden />
+                      <span className="nav-label">
+                        {item.label}
+                        {item.id === "guide" && (
+                          <DeadlineBadge workspace={workspace} />
+                        )}
+                        {item.soon && (
+                          <span className="nav-soon" title="Bientôt disponible">
+                            bientôt
+                          </span>
+                        )}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
         </nav>
         <div className="sidebar-footer">
           <UpdateChecker variant="button" />

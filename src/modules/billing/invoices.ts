@@ -45,6 +45,7 @@ export function invoiceToDraftLines(inv: Invoice): DraftLine[] {
   return inv.lines.map((l) => ({
     key: `i-${l.id}`,
     label: l.label,
+    description: l.description ?? "",
     quantity: (l.quantityMilli / 1000).toString(),
     unit: l.unit,
     unitPriceEuros: (l.unitPriceCents / 100).toFixed(2),
@@ -136,6 +137,7 @@ export function previewInvoices(): Invoice[] {
           invoiceId: 1,
           lineNo: 1,
           label: "Contrat maintenance annuelle",
+          description: "Visites périodiques + rapport",
           quantityMilli: 1000,
           unit: "u",
           unitPriceCents: 120_000,
@@ -181,6 +183,8 @@ export function previewInvoices(): Invoice[] {
           invoiceId: 2,
           lineNo: 1,
           label: "Centrale détection addressable",
+          description:
+            "Fourniture centrale + boucles adressables\nMise en service incluse",
           quantityMilli: 1000,
           unit: "u",
           unitPriceCents: 250_000,
@@ -195,6 +199,7 @@ export function previewInvoices(): Invoice[] {
           invoiceId: 2,
           lineNo: 2,
           label: "Main d'œuvre pose",
+          description: "Pose et câblage sur site",
           quantityMilli: 8000,
           unit: "h",
           unitPriceCents: 6_500,

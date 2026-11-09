@@ -121,14 +121,75 @@ p {
   gap: 0.15rem;
 }
 
+.nav-group-toggle {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.35rem;
+  width: 100%;
+  margin: 0;
+  padding: 0.45rem 0.75rem 0.35rem;
+  border-radius: 8px;
+  cursor: pointer;
+  opacity: 0.9;
+  transition: background 0.18s var(--motion-ease), opacity 0.18s ease;
+}
+
+.nav-group-toggle:hover {
+  background: rgba(255, 255, 255, 0.06);
+  opacity: 1;
+}
+
 .nav-group-label {
-  margin: 0 0 0.2rem;
-  padding: 0 0.75rem;
+  margin: 0;
+  padding: 0;
   font-size: 0.65rem;
   font-weight: 600;
   letter-spacing: 0.1em;
   text-transform: uppercase;
   color: rgba(238, 248, 250, 0.55);
+}
+
+.nav-group.has-active .nav-group-label {
+  color: rgba(213, 244, 248, 0.88);
+}
+
+.nav-group-chevron {
+  font-size: 0.7rem;
+  line-height: 1;
+  color: rgba(238, 248, 250, 0.45);
+  transition: transform 0.2s var(--motion-ease);
+}
+
+.nav-group.is-open .nav-group-chevron {
+  color: rgba(18, 181, 201, 0.9);
+}
+
+.nav-group-items {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding-bottom: 0.25rem;
+  animation: nav-group-open 0.18s var(--motion-ease);
+}
+
+.nav-group-items[hidden] {
+  display: none;
+}
+
+@keyframes nav-group-open {
+  from {
+    opacity: 0.35;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .nav button {
@@ -684,6 +745,16 @@ tr.selected td {
 .stack {
   display: grid;
   gap: 1.5rem;
+}
+
+.stack.stack-tight {
+  gap: 0.85rem;
+}
+
+.grid-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1.25rem;
 }
 
 .muted.small,
@@ -1418,5 +1489,188 @@ label {
 
   .main {
     padding: 1rem;
+  }
+
+  .grid-2 {
+    grid-template-columns: 1fr;
+  }
+
+  .billing-line-metrics {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .flow-steps {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+/* ——— Modal Nouveau client / tiers ——— */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  background: rgba(6, 56, 71, 0.45);
+  animation: modal-fade 0.18s var(--motion-ease);
+}
+
+.modal-card {
+  width: min(520px, 100%);
+  max-height: min(90vh, 720px);
+  overflow: auto;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 1.1rem 1.25rem 1.25rem;
+  animation: modal-rise 0.22s var(--motion-ease);
+}
+
+.modal-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.35rem;
+}
+
+.modal-head h2 {
+  margin: 0;
+  color: var(--brand);
+}
+
+.third-party-select {
+  display: flex;
+  gap: 0.45rem;
+  align-items: center;
+}
+
+.third-party-select select {
+  flex: 1;
+  min-width: 0;
+}
+
+.third-party-select.compact {
+  gap: 0.25rem;
+}
+
+.third-party-select.compact select {
+  min-width: 0;
+}
+
+/* ——— Lignes devis / facture (titre + détails, illimitées) ——— */
+.billing-lines {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.billing-lines-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.billing-lines-head h3 {
+  margin: 0;
+  font-size: 1rem;
+  color: var(--brand);
+}
+
+.billing-lines-list {
+  display: grid;
+  gap: 0.75rem;
+  max-height: min(58vh, 640px);
+  overflow: auto;
+  padding-right: 0.15rem;
+}
+
+.billing-line-card {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-tint);
+  padding: 0.75rem 0.85rem;
+}
+
+.billing-line-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.55rem;
+}
+
+.billing-line-index {
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--accent-ink);
+}
+
+.billing-line-title-block {
+  display: grid;
+  gap: 0.55rem;
+  margin-bottom: 0.65rem;
+}
+
+.billing-line-title-block textarea {
+  resize: vertical;
+  min-height: 2.6rem;
+}
+
+.billing-line-metrics {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+
+.flow-steps {
+  list-style: none;
+  margin: 0 0 1rem;
+  padding: 0.75rem 0.9rem;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.55rem;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: linear-gradient(
+    120deg,
+    var(--surface) 0%,
+    var(--accent-soft) 120%
+  );
+}
+
+.flow-steps li {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--ink-muted);
+  line-height: 1.35;
+}
+
+.flow-steps strong {
+  display: block;
+  color: var(--brand);
+  margin-bottom: 0.15rem;
+}
+
+@keyframes modal-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes modal-rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
   }
 }

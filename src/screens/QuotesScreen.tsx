@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { save } from "@tauri-apps/plugin-dialog";
+import { BillingLinesEditor } from "../components/BillingLinesEditor";
+import { ThirdPartySelect } from "../components/ThirdPartySelect";
 import { api } from "../lib/api";
 import { formatEuros, parseEurosToCents } from "../lib/money";
 import { isTauriRuntime } from "../lib/updater";
@@ -15,6 +17,7 @@ import {
 } from "../modules/billing/quotes";
 import type {
   BillingVatMode,
+  NavId,
   Quote,
   QuoteStatus,
   ThirdParty,
@@ -34,7 +37,11 @@ function statusLabel(status: string): string {
   return QUOTE_STATUS_LABELS[status as QuoteStatus] ?? status;
 }
 
-export function QuotesScreen() {
+export function QuotesScreen({
+  onNavigate,
+}: {
+  onNavigate?: (id: NavId) => void;
+}) {
   const [quotes, setQuotes] = useState<Quote[]>([]);
   const [customers, setCustomers] = useState<ThirdParty[]>([]);
   const [vatCodes, setVatCodes] = useState<VatCode[]>([]);
@@ -305,7 +312,9 @@ export function QuotesScreen() {
 
   async function onPdf(q: Quote) {
     if (PREVIEW || !isTauriRuntime()) {
-      setStatus("Export PDF disponible dans l’application bureau.");
+      setStatus(
+        `PDF devis ${q.number} — disponible dans l’application bureau (enregistrement fichier).`,
+      );
       return;
     }
     const path = await save({
@@ -313,11 +322,15 @@ export function QuotesScreen() {
       filters: [{ name: "PDF", extensions: ["pdf"] }],
     });
     if (!path) return;
+    setBusy(true);
+    setError(null);
     try {
       await api.exportQuotePdf(q.id, String(path));
-      setStatus(`PDF exporté : ${path}`);
+      setStatus(`PDF devis enregistré : ${path}`);
     } catch (err) {
       setError(String(err));
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -327,8 +340,9 @@ export function QuotesScreen() {
         prev.map((x) => (x.id === q.id ? { ...x, status: "invoiced" } : x)),
       );
       setStatus(
-        "Facture brouillon créée (aperçu) — UI factures dans le prochain jalon.",
+        `Facture brouillon créée depuis ${q.number} (aperçu) — ouvrez Factures pour émettre.`,
       );
+      onNavigate?.("factures");
       return;
     }
     setBusy(true);
@@ -336,9 +350,10 @@ export function QuotesScreen() {
     try {
       const inv = await api.convertQuoteToInvoice(q.id);
       setStatus(
-        `Facture brouillon #${inv.id} créée depuis ${q.number} (écran Factures à venir).`,
+        `Facture brouillon #${inv.id} créée depuis ${q.number} — émettez-la dans Factures (VTE auto).`,
       );
       await refresh();
+      onNavigate?.("factures");
     } catch (err) {
       setError(String(err));
     } finally {
@@ -346,10 +361,11 @@ export function QuotesScreen() {
     }
   }
 
-  function updateLine(key: string, patch: Partial<DraftLine>) {
-    setLines((prev) =>
-      prev.map((l) => (l.key === key ? { ...l, ...patch } : l)),
+  function onCustomerCreated(tier: ThirdParty) {
+    setCustomers((prev) =>
+      prev.some((c) => c.id === tier.id) ? prev : [...prev, tier],
     );
+    setThirdPartyId(tier.id);
   }
 
   if (mode === "edit") {
@@ -359,7 +375,8 @@ export function QuotesScreen() {
           <div>
             <h1>{editingId ? "Modifier le devis" : "Nouveau devis"}</h1>
             <p className="muted">
-              Lignes HT, régime TVA (dont chantier BTP) et totaux TTC.
+              Lignes HT (titre + détails), régime TVA (dont chantier BTP) et
+              totaux TTC.
             </p>
           </div>
           <button type="button" className="ghost" onClick={() => setMode("list")}>
@@ -370,25 +387,20 @@ export function QuotesScreen() {
         {error ? <p className="error">{error}</p> : null}
 
         <form className="stack gap" onSubmit={(e) => void onSave(e)}>
-          <div className="grid-2">
-            <label>
+          <div className="split-2">
+            <label className="field">
               Client
-              <select
-                value={thirdPartyId || ""}
-                onChange={(e) => setThirdPartyId(Number(e.target.value))}
+              <ThirdPartySelect
+                value={thirdPartyId || null}
+                onChange={(id) => setThirdPartyId(id ?? 0)}
+                tiers={customers}
+                onCreated={onCustomerCreated}
+                kind="customer"
                 required
-              >
-                <option value="" disabled>
-                  Choisir…
-                </option>
-                {customers.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.code} — {c.name}
-                  </option>
-                ))}
-              </select>
+                emptyLabel="Choisir…"
+              />
             </label>
-            <label>
+            <label className="field">
               Régime TVA
               <select
                 value={vatMode}
@@ -443,124 +455,12 @@ export function QuotesScreen() {
             {BILLING_VAT_MODE_OPTIONS.find((o) => o.id === vatMode)?.help}
           </p>
 
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Libellé</th>
-                  <th>Qté</th>
-                  <th>Unité</th>
-                  <th>P.U. HT</th>
-                  <th>Compte</th>
-                  <th>TVA</th>
-                  <th />
-                </tr>
-              </thead>
-              <tbody>
-                {lines.map((l) => (
-                  <tr key={l.key}>
-                    <td>
-                      <input
-                        value={l.label}
-                        onChange={(e) =>
-                          updateLine(l.key, { label: e.target.value })
-                        }
-                        placeholder="Prestation…"
-                        required
-                      />
-                    </td>
-                    <td>
-                      <input
-                        value={l.quantity}
-                        onChange={(e) =>
-                          updateLine(l.key, { quantity: e.target.value })
-                        }
-                      />
-                    </td>
-                    <td>
-                      <input
-                        value={l.unit}
-                        onChange={(e) =>
-                          updateLine(l.key, { unit: e.target.value })
-                        }
-                      />
-                    </td>
-                    <td>
-                      <input
-                        value={l.unitPriceEuros}
-                        onChange={(e) =>
-                          updateLine(l.key, { unitPriceEuros: e.target.value })
-                        }
-                        placeholder="0,00"
-                      />
-                    </td>
-                    <td>
-                      <input
-                        value={l.accountNumber}
-                        onChange={(e) =>
-                          updateLine(l.key, { accountNumber: e.target.value })
-                        }
-                      />
-                    </td>
-                    <td>
-                      <select
-                        value={l.vatCode}
-                        onChange={(e) => {
-                          const code = collectedCodes.find(
-                            (c) => c.code === e.target.value,
-                          );
-                          updateLine(l.key, {
-                            vatCode: e.target.value,
-                            vatRateBp: code?.rateBp ?? l.vatRateBp,
-                          });
-                        }}
-                        disabled={vatMode === "sans"}
-                      >
-                        {collectedCodes.map((c) => (
-                          <option key={c.code} value={c.code}>
-                            {c.code}
-                          </option>
-                        ))}
-                      </select>
-                    </td>
-                    <td>
-                      <button
-                        type="button"
-                        className="ghost"
-                        onClick={() =>
-                          setLines((prev) =>
-                            prev.length > 1
-                              ? prev.filter((x) => x.key !== l.key)
-                              : prev,
-                          )
-                        }
-                      >
-                        Retirer
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-
-          <div className="btn-row">
-            <button
-              type="button"
-              className="ghost"
-              onClick={() =>
-                setLines((prev) => [
-                  ...prev,
-                  emptyDraftLine(
-                    collectedCodes[0]?.rateBp ?? 2000,
-                    collectedCodes[0]?.code ?? "T20C",
-                  ),
-                ])
-              }
-            >
-              Ajouter une ligne
-            </button>
-          </div>
+          <BillingLinesEditor
+            lines={lines}
+            onChange={setLines}
+            vatCodes={collectedCodes}
+            vatMode={vatMode}
+          />
 
           <label>
             Notes
@@ -599,14 +499,29 @@ export function QuotesScreen() {
         <div>
           <h1>Devis</h1>
           <p className="muted">
-            Chiffrez, envoyez, acceptez — puis transformez en facture sans
-            re-saisie.
+            Parcours : PDF → valider → transformer en facture → encaisser →
+            compta (VTE / BQ).
           </p>
         </div>
         <button type="button" className="primary" onClick={startCreate}>
           Nouveau devis
         </button>
       </header>
+
+      <ol className="flow-steps" aria-label="Parcours devis">
+        <li>
+          <strong>1. PDF</strong> — imprimer / archiver
+        </li>
+        <li>
+          <strong>2. Valider</strong> — statut accepté
+        </li>
+        <li>
+          <strong>3. Facture</strong> — conversion sans re-saisie
+        </li>
+        <li>
+          <strong>4. Compta</strong> — émission VTE puis encaissement BQ
+        </li>
+      </ol>
 
       {error ? <p className="error">{error}</p> : null}
       {status ? <p className="hint">{status}</p> : null}
@@ -665,6 +580,15 @@ export function QuotesScreen() {
                           Éditer
                         </button>
                       )}
+                      <button
+                        type="button"
+                        className="secondary"
+                        disabled={busy}
+                        onClick={() => void onPdf(q)}
+                        title="Enregistrer le devis en PDF"
+                      >
+                        Imprimer PDF
+                      </button>
                       {q.status === "draft" && (
                         <button
                           type="button"
@@ -672,17 +596,18 @@ export function QuotesScreen() {
                           disabled={busy}
                           onClick={() => void changeStatus(q.id, "sent")}
                         >
-                          Envoyer
+                          Marquer envoyé
                         </button>
                       )}
                       {(q.status === "draft" || q.status === "sent") && (
                         <button
                           type="button"
-                          className="ghost"
+                          className="primary"
                           disabled={busy}
                           onClick={() => void changeStatus(q.id, "accepted")}
+                          title="Passe le devis en statut Accepté (validé)"
                         >
-                          Accepter
+                          Valider
                         </button>
                       )}
                       {q.status === "accepted" && (
@@ -691,17 +616,20 @@ export function QuotesScreen() {
                           className="primary"
                           disabled={busy}
                           onClick={() => void onConvert(q)}
+                          title="Crée une facture brouillon et ouvre Factures"
                         >
-                          → Facture
+                          Transformer en facture
                         </button>
                       )}
-                      <button
-                        type="button"
-                        className="ghost"
-                        onClick={() => void onPdf(q)}
-                      >
-                        PDF
-                      </button>
+                      {q.status === "invoiced" && (
+                        <button
+                          type="button"
+                          className="ghost"
+                          onClick={() => onNavigate?.("factures")}
+                        >
+                          Voir factures
+                        </button>
+                      )}
                       {q.status === "draft" && (
                         <button
                           type="button"

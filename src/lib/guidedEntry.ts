@@ -1,11 +1,16 @@
 import type { EntryLineInput, VatCode } from "./types";
 
-/** Sens de l’opération pour la saisie guidée. */
-export type GuidedKind = "achat" | "vente";
+/**
+ * Sens de l’opération pour la saisie guidée.
+ * - vente : produit 7xx + TVA collectée + client 411 (journal VTE)
+ * - achat : charge 6xx + TVA déductible + fournisseur 401 (journal ACH)
+ * - frais : charge 6xx + TVA déductible ; ACH si fournisseur, OD si banque/caisse
+ */
+export type GuidedKind = "achat" | "vente" | "frais";
 
 /**
  * Régime TVA de l’intention — choix clair pour débutants BTP / SAS.
- * - normale : TVA collectée (vente) ou déductible (achat)
+ * - normale : TVA collectée (vente) ou déductible (achat / frais)
  * - sans : franchise, hors champ, exonération classique
  * - autoliquidation_sous_traitance : achat sous-traitance chantier (art. 283)
  * - autoliquidation_chantier : vente travaux / chantier en direct (art. 283)
@@ -34,6 +39,11 @@ export type GuidedEntryInput = {
   thirdPartyId?: number | null;
 };
 
+/** Charge / frais côté débit (vs vente crédit). */
+export function isChargeKind(kind: GuidedKind): boolean {
+  return kind === "achat" || kind === "frais";
+}
+
 export type GuidedEntryResult = {
   lines: EntryLineInput[];
   htCents: number;
@@ -49,11 +59,13 @@ export type GuidedEntryResult = {
 export const DEFAULT_COUNTERPART: Record<GuidedKind, string> = {
   achat: "401",
   vente: "411",
+  frais: "401",
 };
 
 export const VAT_ACCOUNT: Record<GuidedKind, string> = {
   achat: "44566",
   vente: "44571",
+  frais: "44566",
 };
 
 /** TVA due par autoliquidation (BTP / art. 283) — côté donneur d’ordre. */
@@ -61,6 +73,50 @@ export const VAT_DUE_ACCOUNT = "4452";
 
 /** Compte charge sous-traitance (PCG). */
 export const SUBCONTRACT_HT_ACCOUNT = "604";
+
+/** Compte charge « frais » par défaut (déplacements / missions). */
+export const FRAIS_HT_ACCOUNT = "625";
+
+/** Règlements proposés pour le mode Frais (journal auto). */
+export const FRAIS_SETTLEMENT_OPTIONS: {
+  account: string;
+  label: string;
+  journal: "ACH" | "OD";
+  needsSupplier: boolean;
+}[] = [
+  {
+    account: "401",
+    label: "Fournisseur à payer (401) → journal ACH",
+    journal: "ACH",
+    needsSupplier: true,
+  },
+  {
+    account: "512",
+    label: "Payé par banque (512) → journal OD",
+    journal: "OD",
+    needsSupplier: false,
+  },
+  {
+    account: "530",
+    label: "Payé en caisse (530) → journal OD",
+    journal: "OD",
+    needsSupplier: false,
+  },
+];
+
+export function defaultJournalForGuided(
+  kind: GuidedKind,
+  counterpartAccount: string,
+): string {
+  if (kind === "vente") return "VTE";
+  if (kind === "frais") {
+    const opt = FRAIS_SETTLEMENT_OPTIONS.find((o) =>
+      counterpartAccount.startsWith(o.account),
+    );
+    return opt?.journal ?? (counterpartAccount.startsWith("401") ? "ACH" : "OD");
+  }
+  return "ACH";
+}
 
 export const VAT_MODE_OPTIONS: {
   id: GuidedVatMode;
@@ -71,13 +127,13 @@ export const VAT_MODE_OPTIONS: {
   {
     id: "normale",
     label: "TVA classique",
-    kinds: ["achat", "vente"],
+    kinds: ["achat", "vente", "frais"],
     shortHelp: "TVA facturée / récupérable au taux choisi.",
   },
   {
     id: "sans",
     label: "Sans TVA (franchise / exonéré)",
-    kinds: ["achat", "vente"],
+    kinds: ["achat", "vente", "frais"],
     shortHelp: "Pas de ventilation 445… (franchise en base, hors champ…).",
   },
   {
@@ -127,7 +183,7 @@ export function defaultVatCodeFor(
       null
     );
   }
-  const direction = kind === "achat" ? "deductible" : "collected";
+  const direction = isChargeKind(kind) ? "deductible" : "collected";
   return (
     codes.find(
       (c) => c.active && c.direction === direction && c.rateBp === rateBp,
@@ -151,7 +207,7 @@ export function vatCodesForKind(
   ) {
     return codes.filter((c) => c.active && c.direction === "reverse");
   }
-  const direction = kind === "achat" ? "deductible" : "collected";
+  const direction = isChargeKind(kind) ? "deductible" : "collected";
   return codes.filter((c) => c.active && c.direction === direction);
 }
 
@@ -159,6 +215,7 @@ export function preferredHtAccount(kind: GuidedKind, mode: GuidedVatMode): strin
   if (kind === "achat" && mode === "autoliquidation_sous_traitance") {
     return SUBCONTRACT_HT_ACCOUNT;
   }
+  if (kind === "frais") return FRAIS_HT_ACCOUNT;
   return kind === "vente" ? "706" : "606";
 }
 
@@ -251,7 +308,7 @@ export function buildGuidedLines(input: GuidedEntryInput): GuidedEntryResult {
     };
   }
 
-  // normale | sans
+  // normale | sans — vente au crédit ; achat / frais au débit
   const withVat = mode === "normale" && vat > 0;
   const ttc = ht + (withVat ? vat : 0);
   const vatAccount = withVat ? VAT_ACCOUNT[input.kind] : null;
@@ -284,6 +341,7 @@ export function buildGuidedLines(input: GuidedEntryInput): GuidedEntryResult {
       thirdPartyId: input.thirdPartyId ?? null,
     });
   } else {
+    // achat | frais
     lines.push({
       accountNumber: input.htAccount,
       debitCents: ht,
@@ -324,7 +382,7 @@ export function suggestHtAccounts(
   kind: GuidedKind,
   accounts: { number: string; label: string }[],
 ): { number: string; label: string }[] {
-  const prefix = kind === "achat" ? "6" : "7";
+  const prefix = isChargeKind(kind) ? "6" : "7";
   return accounts.filter((a) => a.number.startsWith(prefix));
 }
 

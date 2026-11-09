@@ -11,7 +11,7 @@ import type {
 export const QUOTE_STATUS_LABELS: Record<QuoteStatus, string> = {
   draft: "Brouillon",
   sent: "Envoyé",
-  accepted: "Accepté",
+  accepted: "Validé",
   refused: "Refusé",
   expired: "Expiré",
   invoiced: "Facturé",
@@ -85,7 +85,10 @@ export function summarizeQuoteLines(
 
 export type DraftLine = {
   key: string;
+  /** Titre de ligne (affiché en gras sur PDF / UI). */
   label: string;
+  /** Détails multi-ligne sous le titre (optionnel). */
+  description: string;
   quantity: string;
   unit: string;
   unitPriceEuros: string;
@@ -98,6 +101,7 @@ export function emptyDraftLine(rateBp = 2000, vatCode = "T20C"): DraftLine {
   return {
     key: `l-${Math.random().toString(36).slice(2, 9)}`,
     label: "",
+    description: "",
     quantity: "1",
     unit: "u",
     unitPriceEuros: "",
@@ -117,8 +121,10 @@ export function draftLinesToInput(
       const qty = Number(String(l.quantity).replace(",", ".")) || 0;
       const quantityMilli = Math.max(1, Math.round(qty * 1000));
       const unitPriceCents = parseEuros(l.unitPriceEuros);
+      const description = l.description.trim() || null;
       return {
         label: l.label.trim(),
+        description,
         quantityMilli,
         unit: l.unit.trim() || "u",
         unitPriceCents,
@@ -134,6 +140,7 @@ export function quoteToDraftLines(quote: Quote): DraftLine[] {
   return quote.lines.map((l: QuoteLine) => ({
     key: `q-${l.id}`,
     label: l.label,
+    description: l.description ?? "",
     quantity: (l.quantityMilli / 1000).toString(),
     unit: l.unit,
     unitPriceEuros: (l.unitPriceCents / 100).toFixed(2),
@@ -192,6 +199,8 @@ export function previewQuotes(): Quote[] {
           quoteId: 1,
           lineNo: 1,
           label: "Centrale détection addressable",
+          description:
+            "Fourniture centrale + boucles adressables\nMise en service incluse",
           quantityMilli: 1000,
           unit: "u",
           unitPriceCents: 250_000,
@@ -205,6 +214,7 @@ export function previewQuotes(): Quote[] {
           quoteId: 1,
           lineNo: 2,
           label: "Main d'œuvre pose",
+          description: "Pose et câblage sur site",
           quantityMilli: 8000,
           unit: "h",
           unitPriceCents: 6_500,

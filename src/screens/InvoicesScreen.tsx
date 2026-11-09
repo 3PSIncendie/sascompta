@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { open, save } from "@tauri-apps/plugin-dialog";
+import { BillingLinesEditor } from "../components/BillingLinesEditor";
+import { ThirdPartySelect } from "../components/ThirdPartySelect";
 import { api } from "../lib/api";
 import { formatEuros, parseEurosToCents } from "../lib/money";
 import { isTauriRuntime } from "../lib/updater";
@@ -22,6 +24,7 @@ import type {
   BillingVatMode,
   Invoice,
   InvoiceKind,
+  NavId,
   ThirdParty,
   VatCode,
 } from "../lib/types";
@@ -36,7 +39,11 @@ const PREVIEW_EDIT =
   typeof window !== "undefined" &&
   new URLSearchParams(window.location.search).get("invoiceEdit") === "1";
 
-export function InvoicesScreen() {
+export function InvoicesScreen({
+  onNavigate,
+}: {
+  onNavigate?: (id: NavId) => void;
+}) {
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [customers, setCustomers] = useState<ThirdParty[]>([]);
   const [vatCodes, setVatCodes] = useState<VatCode[]>([]);
@@ -312,7 +319,7 @@ export function InvoicesScreen() {
     try {
       const issued = await api.issueInvoice(inv.id);
       setStatus(
-        `${issued.number} émise — brouillon VTE #${issued.entryId ?? "?"} prêt (à valider dans Écritures).`,
+        `${issued.number} émise — brouillon VTE #${issued.entryId ?? "?"} créé. Validez-le pour passer en compta.`,
       );
       await refresh();
     } catch (err) {
@@ -324,7 +331,7 @@ export function InvoicesScreen() {
 
   async function onRebuildVte(inv: Invoice) {
     if (PREVIEW || !isTauriRuntime()) {
-      setStatus("Régénération VTE (aperçu).");
+      setStatus("Régénération du brouillon VTE (aperçu).");
       return;
     }
     setBusy(true);
@@ -332,7 +339,7 @@ export function InvoicesScreen() {
     try {
       const entry = await api.buildInvoiceEntryDraft(inv.id);
       setStatus(
-        `Brouillon VTE #${entry.id} prêt (${entry.journalCode}) — valider dans Écritures.`,
+        `Brouillon VTE #${entry.id} prêt (${entry.journalCode}). Validez pour poster en compta.`,
       );
       await refresh();
     } catch (err) {
@@ -406,7 +413,7 @@ export function InvoicesScreen() {
         bankRef: payRef.trim() || null,
       });
       setStatus(
-        `Paiement #${p.id} — BQ brouillon #${p.entryId ?? "?"} · lettrage ${p.lettre ?? "—"}.`,
+        `Encaissement #${p.id} — brouillon BQ #${p.entryId ?? "?"} · lettrage ${p.lettre ?? "—"}. Validez le BQ pour passer en compta.`,
       );
       setPayInvoiceId(null);
       await refresh();
@@ -507,10 +514,41 @@ export function InvoicesScreen() {
     }
   }
 
-  function updateLine(key: string, patch: Partial<DraftLine>) {
-    setLines((prev) =>
-      prev.map((l) => (l.key === key ? { ...l, ...patch } : l)),
+  function onCustomerCreated(tier: ThirdParty) {
+    setCustomers((prev) =>
+      prev.some((c) => c.id === tier.id) ? prev : [...prev, tier],
     );
+    setThirdPartyId(tier.id);
+  }
+
+  async function onPostEntry(entryId: number, journalHint: string) {
+    if (PREVIEW || !isTauriRuntime()) {
+      setStatus(
+        `Validation ${journalHint} #${entryId} (aperçu) — en bureau : passage en compta.`,
+      );
+      onNavigate?.("ecritures");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const current = await api.getEntry(entryId);
+      if (current.status === "posted") {
+        setStatus(
+          `${journalHint} #${entryId} déjà en compta (${current.ecritureNum ?? "postée"}).`,
+        );
+        return;
+      }
+      const e = await api.postEntry(entryId);
+      setStatus(
+        `Écriture ${e.journalCode} ${e.ecritureNum ?? `#${e.id}`} validée en compta.`,
+      );
+      await refresh();
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setBusy(false);
+    }
   }
 
   if (mode === "edit") {
@@ -524,8 +562,8 @@ export function InvoicesScreen() {
                 : `Nouveau — ${kindLabel(kind)}`}
             </h1>
             <p className="muted">
-              Brouillon sans numéro ; l’émission réserve FACT / ACMP / AVO et
-              prépare le VTE.
+              Titre + détails par ligne ; l’émission réserve le numéro et
+              prépare le brouillon VTE.
             </p>
           </div>
           <button type="button" className="ghost" onClick={() => setMode("list")}>
@@ -536,8 +574,8 @@ export function InvoicesScreen() {
         {error ? <p className="error">{error}</p> : null}
 
         <form className="stack gap" onSubmit={(e) => void onSave(e)}>
-          <div className="grid-2">
-            <label>
+          <div className="split-2">
+            <label className="field">
               Type
               <select
                 value={kind}
@@ -559,22 +597,17 @@ export function InvoicesScreen() {
                 <option value="credit_note">Avoir</option>
               </select>
             </label>
-            <label>
+            <label className="field">
               Client
-              <select
-                value={thirdPartyId || ""}
-                onChange={(e) => setThirdPartyId(Number(e.target.value))}
+              <ThirdPartySelect
+                value={thirdPartyId || null}
+                onChange={(id) => setThirdPartyId(id ?? 0)}
+                tiers={customers}
+                onCreated={onCustomerCreated}
+                kind="customer"
                 required
-              >
-                <option value="" disabled>
-                  Choisir…
-                </option>
-                {customers.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.code} — {c.name}
-                  </option>
-                ))}
-              </select>
+                emptyLabel="Choisir…"
+              />
             </label>
             <label>
               Régime TVA
@@ -628,131 +661,15 @@ export function InvoicesScreen() {
             </label>
           </div>
 
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Libellé</th>
-                  <th>Qté</th>
-                  <th>Unité</th>
-                  <th>P.U. HT</th>
-                  <th>Compte</th>
-                  <th>TVA</th>
-                  <th />
-                </tr>
-              </thead>
-              <tbody>
-                {lines.map((l) => (
-                  <tr key={l.key}>
-                    <td>
-                      <input
-                        value={l.label}
-                        onChange={(e) =>
-                          updateLine(l.key, { label: e.target.value })
-                        }
-                        required
-                      />
-                    </td>
-                    <td>
-                      <input
-                        value={l.quantity}
-                        onChange={(e) =>
-                          updateLine(l.key, { quantity: e.target.value })
-                        }
-                      />
-                    </td>
-                    <td>
-                      <input
-                        value={l.unit}
-                        onChange={(e) =>
-                          updateLine(l.key, { unit: e.target.value })
-                        }
-                      />
-                    </td>
-                    <td>
-                      <input
-                        value={l.unitPriceEuros}
-                        onChange={(e) =>
-                          updateLine(l.key, {
-                            unitPriceEuros: e.target.value,
-                          })
-                        }
-                      />
-                    </td>
-                    <td>
-                      <input
-                        value={l.accountNumber}
-                        onChange={(e) =>
-                          updateLine(l.key, {
-                            accountNumber: e.target.value,
-                          })
-                        }
-                      />
-                    </td>
-                    <td>
-                      <select
-                        value={l.vatCode}
-                        onChange={(e) => {
-                          const code = collectedCodes.find(
-                            (c) => c.code === e.target.value,
-                          );
-                          updateLine(l.key, {
-                            vatCode: e.target.value,
-                            vatRateBp: code?.rateBp ?? l.vatRateBp,
-                          });
-                        }}
-                        disabled={vatMode === "sans"}
-                      >
-                        {collectedCodes.map((c) => (
-                          <option key={c.code} value={c.code}>
-                            {c.code}
-                          </option>
-                        ))}
-                      </select>
-                    </td>
-                    <td>
-                      <button
-                        type="button"
-                        className="ghost"
-                        onClick={() =>
-                          setLines((prev) =>
-                            prev.length > 1
-                              ? prev.filter((x) => x.key !== l.key)
-                              : prev,
-                          )
-                        }
-                      >
-                        Retirer
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <BillingLinesEditor
+            lines={lines}
+            onChange={setLines}
+            vatCodes={collectedCodes}
+            vatMode={vatMode}
+            defaultAccount={defaultAccountForKind(kind)}
+          />
 
-          <div className="btn-row">
-            <button
-              type="button"
-              className="ghost"
-              onClick={() =>
-                setLines((prev) => [
-                  ...prev,
-                  {
-                    ...emptyDraftLine(
-                      collectedCodes[0]?.rateBp ?? 2000,
-                      collectedCodes[0]?.code ?? "T20C",
-                    ),
-                    accountNumber: defaultAccountForKind(kind),
-                  },
-                ])
-              }
-            >
-              Ajouter une ligne
-            </button>
-          </div>
-
-          <label>
+          <label className="field">
             Notes
             <textarea
               rows={2}
@@ -789,8 +706,8 @@ export function InvoicesScreen() {
         <div>
           <h1>Factures</h1>
           <p className="muted">
-            Factures, acomptes et avoirs — émission numérotée et brouillon VTE
-            sans double écriture.
+            Émettre → valider VTE → encaisser → valider BQ. Création client et
+            lignes titre+détail sans plafond.
           </p>
         </div>
         <div className="btn-row" style={{ marginTop: 0 }}>
@@ -811,8 +728,36 @@ export function InvoicesScreen() {
         </div>
       </header>
 
+      <ol className="flow-steps" aria-label="Parcours facture">
+        <li>
+          <strong>Émettre</strong> — numéro + PDF + brouillon VTE
+        </li>
+        <li>
+          <strong>Valider VTE</strong> — passage en compta ventes
+        </li>
+        <li>
+          <strong>Encaisser</strong> — brouillon BQ + lettrage 411
+        </li>
+        <li>
+          <strong>Valider BQ</strong> — passage en compta banque
+        </li>
+      </ol>
+
       {error ? <p className="error">{error}</p> : null}
-      {status ? <p className="hint">{status}</p> : null}
+      {status ? (
+        <p className="hint">
+          {status}{" "}
+          {onNavigate ? (
+            <button
+              type="button"
+              className="linkish"
+              onClick={() => onNavigate("ecritures")}
+            >
+              Ouvrir Écritures
+            </button>
+          ) : null}
+        </p>
+      ) : null}
 
       <div className="toolbar" style={{ marginBottom: "0.75rem" }}>
         <label>
@@ -967,14 +912,28 @@ export function InvoicesScreen() {
                       {inv.status !== "draft" &&
                         inv.status !== "cancelled" && (
                           <>
-                            <button
-                              type="button"
-                              className="ghost"
-                              disabled={busy}
-                              onClick={() => void onRebuildVte(inv)}
-                            >
-                              VTE brouillon
-                            </button>
+                            {inv.entryId ? (
+                              <button
+                                type="button"
+                                className="secondary"
+                                disabled={busy}
+                                onClick={() =>
+                                  void onPostEntry(inv.entryId!, "VTE")
+                                }
+                                title="Valide le brouillon VTE en écriture postée"
+                              >
+                                Valider VTE
+                              </button>
+                            ) : (
+                              <button
+                                type="button"
+                                className="ghost"
+                                disabled={busy}
+                                onClick={() => void onRebuildVte(inv)}
+                              >
+                                Créer VTE
+                              </button>
+                            )}
                             {inv.kind !== "credit_note" &&
                               inv.paidCents < inv.ttcCents && (
                                 <button
@@ -986,6 +945,17 @@ export function InvoicesScreen() {
                                   Encaisser
                                 </button>
                               )}
+                            {inv.status === "paid" ||
+                            inv.status === "partially_paid" ? (
+                              <button
+                                type="button"
+                                className="ghost"
+                                onClick={() => onNavigate?.("ecritures")}
+                                title="Ouvre Écritures pour valider le brouillon BQ"
+                              >
+                                Voir BQ / compta
+                              </button>
+                            ) : null}
                             {inv.kind !== "credit_note" && (
                               <button
                                 type="button"
@@ -1010,10 +980,11 @@ export function InvoicesScreen() {
                         )}
                       <button
                         type="button"
-                        className="ghost"
+                        className="secondary"
                         onClick={() => void onPdf(inv)}
+                        title="Enregistrer la facture en PDF"
                       >
-                        PDF
+                        Imprimer PDF
                       </button>
                       {inv.status !== "draft" &&
                         inv.status !== "cancelled" && (

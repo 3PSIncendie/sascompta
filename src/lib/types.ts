@@ -181,6 +181,7 @@ export interface QuoteLine {
   quoteId: number;
   lineNo: number;
   label: string;
+  description?: string | null;
   quantityMilli: number;
   unit: string;
   unitPriceCents: number;
@@ -192,6 +193,7 @@ export interface QuoteLine {
 
 export interface QuoteLineInput {
   label: string;
+  description?: string | null;
   quantityMilli: number;
   unit: string;
   unitPriceCents: number;
@@ -247,6 +249,7 @@ export interface InvoiceLine {
   invoiceId: number;
   lineNo: number;
   label: string;
+  description?: string | null;
   quantityMilli: number;
   unit: string;
   unitPriceCents: number;
@@ -259,6 +262,7 @@ export interface InvoiceLine {
 
 export interface InvoiceLineInput {
   label: string;
+  description?: string | null;
   quantityMilli: number;
   unit: string;
   unitPriceCents: number;
