@@ -62,12 +62,30 @@ jobs:
             exit 1
           fi
 
+      # Retry: Tauri NSIS bundling downloads nsis_tauri_utils.dll from GitHub
+      # Releases and occasionally hits transient 504s after a green compile.
       - name: Build Windows bundles (push / PR / dispatch)
         if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        shell: bash
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: npm run build:windows
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            echo "::group::build:windows attempt ${attempt}/3"
+            if npm run build:windows; then
+              echo "::endgroup::"
+              exit 0
+            fi
+            status=$?
+            echo "::endgroup::"
+            echo "::warning::build:windows failed (exit ${status}) on attempt ${attempt}"
+            if [ "$attempt" -eq 3 ]; then
+              exit "$status"
+            fi
+            sleep $((attempt * 20))
+          done
 
       - name: Upload installers
         if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
