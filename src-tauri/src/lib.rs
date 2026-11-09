@@ -87,6 +87,13 @@ pub fn run() {
             commands::export_quote_pdf,
             commands::list_invoices,
             commands::get_invoice,
+            commands::create_invoice,
+            commands::update_invoice,
+            commands::delete_invoice,
+            commands::issue_invoice,
+            commands::create_credit_note,
+            commands::create_deposit_invoice,
+            commands::export_invoice_pdf,
             commands::convert_quote_to_invoice,
             commands::build_invoice_entry_draft,
         ])

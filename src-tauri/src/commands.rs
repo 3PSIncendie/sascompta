@@ -551,6 +551,73 @@ pub fn get_invoice(state: State<'_, AppState>, id: i64) -> Result<Invoice, Strin
 }
 
 #[tauri::command]
+pub fn create_invoice(
+    state: State<'_, AppState>,
+    input: CreateInvoiceInput,
+) -> Result<Invoice, String> {
+    db::with_conn(&state, |c| db::billing::create_invoice(c, &input)).map_err(map_err)
+}
+
+#[tauri::command]
+pub fn update_invoice(
+    state: State<'_, AppState>,
+    id: i64,
+    input: CreateInvoiceInput,
+) -> Result<Invoice, String> {
+    db::with_conn(&state, |c| db::billing::update_invoice(c, id, &input)).map_err(map_err)
+}
+
+#[tauri::command]
+pub fn delete_invoice(state: State<'_, AppState>, id: i64) -> Result<(), String> {
+    db::with_conn(&state, |c| db::billing::delete_invoice(c, id)).map_err(map_err)
+}
+
+#[tauri::command]
+pub fn issue_invoice(state: State<'_, AppState>, id: i64) -> Result<Invoice, String> {
+    db::with_conn(&state, |c| db::billing::issue_invoice(c, id)).map_err(map_err)
+}
+
+#[tauri::command]
+pub fn create_credit_note(
+    state: State<'_, AppState>,
+    invoice_id: i64,
+) -> Result<Invoice, String> {
+    db::with_conn(&state, |c| db::billing::create_credit_note(c, invoice_id)).map_err(map_err)
+}
+
+#[tauri::command]
+pub fn create_deposit_invoice(
+    state: State<'_, AppState>,
+    parent_invoice_id: i64,
+    amount_ht_cents: i64,
+    vat_rate_bp: i32,
+    vat_code: Option<String>,
+) -> Result<Invoice, String> {
+    db::with_conn(&state, |c| {
+        db::billing::create_deposit_invoice(
+            c,
+            parent_invoice_id,
+            amount_ht_cents,
+            vat_rate_bp,
+            vat_code,
+        )
+    })
+    .map_err(map_err)
+}
+
+#[tauri::command]
+pub fn export_invoice_pdf(
+    state: State<'_, AppState>,
+    id: i64,
+    path: String,
+) -> Result<(), String> {
+    db::with_conn(&state, |c| {
+        db::billing::export_invoice_pdf(c, id, std::path::Path::new(&path))
+    })
+    .map_err(map_err)
+}
+
+#[tauri::command]
 pub fn convert_quote_to_invoice(
     state: State<'_, AppState>,
     quote_id: i64,

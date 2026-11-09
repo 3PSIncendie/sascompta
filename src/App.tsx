@@ -15,6 +15,7 @@ import { StatementsScreen } from "./screens/StatementsScreen";
 import { ClosingScreen } from "./screens/ClosingScreen";
 import { ComingSoonScreen } from "./screens/ComingSoonScreen";
 import { QuotesScreen } from "./screens/QuotesScreen";
+import { InvoicesScreen } from "./screens/InvoicesScreen";
 import { api } from "./lib/api";
 import { loadGuideProgress } from "./lib/guideProgress";
 import type { NavId, WorkspaceInfo } from "./lib/types";
@@ -143,13 +144,7 @@ export default function App() {
         />
       )}
       {nav === "devis" && <QuotesScreen />}
-      {nav === "factures" && (
-        <ComingSoonScreen
-          group="Commercial"
-          title="Factures"
-          blurb="Factures, acomptes et avoirs avec écritures VTE automatiques en brouillon — schéma et hooks prêts depuis les devis acceptés."
-        />
-      )}
+      {nav === "factures" && <InvoicesScreen />}
       {nav === "relances" && (
         <ComingSoonScreen
           group="Commercial"
