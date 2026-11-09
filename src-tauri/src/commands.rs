@@ -1,26 +1,65 @@
 use crate::db::{self, AppState, DbError};
 use crate::models::*;
+use crate::registry;
 use std::path::PathBuf;
-use tauri::State;
+use tauri::{AppHandle, State};
 
 fn map_err(e: DbError) -> String {
     e.to_string()
 }
 
+fn map_reg(e: registry::RegistryError) -> String {
+    e.to_string()
+}
+
+fn register_opened(app: &AppHandle, info: &WorkspaceInfo) -> Result<(), String> {
+    registry::upsert_known(
+        app,
+        &info.path,
+        &info.organization.name,
+        &info.organization.siren,
+    )
+    .map(|_| ())
+    .map_err(map_reg)
+}
+
+#[tauri::command]
+pub fn list_known_workspaces(app: AppHandle) -> Result<Vec<KnownWorkspace>, String> {
+    registry::list_known(&app).map_err(map_reg)
+}
+
+#[tauri::command]
+pub fn forget_known_workspace(app: AppHandle, path: String) -> Result<(), String> {
+    registry::forget_known(&app, &path).map_err(map_reg)
+}
+
 #[tauri::command]
 pub fn create_workspace(
+    app: AppHandle,
     state: State<'_, AppState>,
-    input: CreateWorkspaceInput,
+    mut input: CreateWorkspaceInput,
 ) -> Result<WorkspaceInfo, String> {
+    let needs_default = input
+        .path
+        .as_ref()
+        .map(|p| p.trim().is_empty())
+        .unwrap_or(true);
+    if needs_default {
+        let dir = registry::workspaces_dir(&app).map_err(map_reg)?;
+        let path = registry::default_file_path(&dir, &input.org_name, &input.siren);
+        input.path = Some(path.display().to_string());
+    }
     let info = db::create_workspace(&input).map_err(map_err)?;
     let conn = db::open_connection(std::path::Path::new(&info.path)).map_err(map_err)?;
     *state.conn.lock().map_err(|e| e.to_string())? = Some(conn);
     *state.path.lock().map_err(|e| e.to_string())? = Some(PathBuf::from(&info.path));
+    register_opened(&app, &info)?;
     Ok(info)
 }
 
 #[tauri::command]
 pub fn open_workspace(
+    app: AppHandle,
     state: State<'_, AppState>,
     path: String,
     password: String,
@@ -28,19 +67,29 @@ pub fn open_workspace(
     let (conn, info) = db::open_workspace(&path, &password).map_err(map_err)?;
     *state.conn.lock().map_err(|e| e.to_string())? = Some(conn);
     *state.path.lock().map_err(|e| e.to_string())? = Some(PathBuf::from(&path));
+    register_opened(&app, &info)?;
     Ok(info)
 }
 
 #[tauri::command]
 pub fn create_demo_workspace(
+    app: AppHandle,
     state: State<'_, AppState>,
-    path: String,
+    path: Option<String>,
 ) -> Result<WorkspaceInfo, String> {
-    let p = PathBuf::from(&path);
+    let p = match path.as_ref().map(|s| s.trim()).filter(|s| !s.is_empty()) {
+        Some(raw) => PathBuf::from(raw),
+        None => {
+            let dir = registry::workspaces_dir(&app).map_err(map_reg)?;
+            dir.join("demo.sascompta")
+        }
+    };
     let _info = db::create_demo_workspace(&p).map_err(map_err)?;
-    let (conn, info) = db::open_workspace(&path, db::DEMO_PASSWORD).map_err(map_err)?;
+    let path_str = p.display().to_string();
+    let (conn, info) = db::open_workspace(&path_str, db::DEMO_PASSWORD).map_err(map_err)?;
     *state.conn.lock().map_err(|e| e.to_string())? = Some(conn);
     *state.path.lock().map_err(|e| e.to_string())? = Some(p);
+    register_opened(&app, &info)?;
     Ok(info)
 }
 

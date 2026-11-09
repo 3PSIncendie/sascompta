@@ -19,6 +19,7 @@ import type {
   CreateQuoteInput,
   CreateThirdPartyInput,
   CreateWorkspaceInput,
+  KnownWorkspace,
   EinvoicePartyProfile,
   EinvoiceQueueItem,
   EreportingBatch,
@@ -52,12 +53,15 @@ import type {
 } from "./types";
 
 export const api = {
+  listKnownWorkspaces: () => invoke<KnownWorkspace[]>("list_known_workspaces"),
+  forgetKnownWorkspace: (path: string) =>
+    invoke<void>("forget_known_workspace", { path }),
   createWorkspace: (input: CreateWorkspaceInput) =>
     invoke<WorkspaceInfo>("create_workspace", { input }),
   openWorkspace: (path: string, password: string) =>
     invoke<WorkspaceInfo>("open_workspace", { path, password }),
-  createDemoWorkspace: (path: string) =>
-    invoke<WorkspaceInfo>("create_demo_workspace", { path }),
+  createDemoWorkspace: (path?: string | null) =>
+    invoke<WorkspaceInfo>("create_demo_workspace", { path: path ?? null }),
   getWorkspaceInfo: () => invoke<WorkspaceInfo>("get_workspace_info"),
   updateOrganization: (input: UpdateOrganizationInput) =>
     invoke<WorkspaceInfo>("update_organization", { input }),

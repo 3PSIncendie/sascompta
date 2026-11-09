@@ -1,8 +1,8 @@
-import { useMemo, useState } from "react";
-import { save, open } from "@tauri-apps/plugin-dialog";
+import { useEffect, useMemo, useState } from "react";
+import { open } from "@tauri-apps/plugin-dialog";
 import { FieldHelp, LabelWithHelp } from "../components/FieldHelp";
 import { api } from "../lib/api";
-import type { WorkspaceInfo } from "../lib/types";
+import type { KnownWorkspace, WorkspaceInfo } from "../lib/types";
 
 interface Props {
   onOpened: (info: WorkspaceInfo) => void;
@@ -42,6 +42,8 @@ export function WelcomeScreen({ onOpened }: Props) {
   const [mode, setMode] = useState<"idle" | "create" | "open">("idle");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [known, setKnown] = useState<KnownWorkspace[]>([]);
+  const [knownLoaded, setKnownLoaded] = useState(false);
 
   const [orgName, setOrgName] = useState("");
   const [siren, setSiren] = useState("");
@@ -49,8 +51,10 @@ export function WelcomeScreen({ onOpened }: Props) {
   const [displayName, setDisplayName] = useState("");
   const [password, setPassword] = useState("");
   const [password2, setPassword2] = useState("");
-  const [openPath, setOpenPath] = useState("");
+
+  const [selectedPath, setSelectedPath] = useState("");
   const [openPassword, setOpenPassword] = useState("");
+  const [importHint, setImportHint] = useState<string | null>(null);
 
   const liveHint = useMemo(
     () =>
@@ -64,6 +68,66 @@ export function WelcomeScreen({ onOpened }: Props) {
       }),
     [orgName, siren, year, displayName, password, password2],
   );
+
+  async function refreshKnown(preferPath?: string) {
+    try {
+      const list = await api.listKnownWorkspaces();
+      setKnown(list);
+      if (preferPath && list.some((w) => w.path === preferPath)) {
+        setSelectedPath(preferPath);
+      } else if (list.length === 0) {
+        if (!preferPath) setSelectedPath("");
+      } else if (!list.some((w) => w.path === selectedPath)) {
+        setSelectedPath(list[0].path);
+      }
+      return list;
+    } catch {
+      // Aperçu navigateur (`?previewLogin`) — sans backend Tauri.
+      const previewLogin =
+        typeof window !== "undefined" &&
+        new URLSearchParams(window.location.search).has("previewLogin");
+      if (previewLogin) {
+        const mock: KnownWorkspace[] = [
+          {
+            id: "preview-1",
+            name: "Atelier Lumière SAS",
+            siren: "123456782",
+            path: "/preview/atelier-lumiere.sascompta",
+            lastOpenedAt: new Date().toISOString(),
+          },
+          {
+            id: "preview-2",
+            name: "Nord Énergie SAS",
+            siren: "987654321",
+            path: "/preview/nord-energie.sascompta",
+            lastOpenedAt: new Date().toISOString(),
+          },
+        ];
+        setKnown(mock);
+        setSelectedPath(mock[0].path);
+        return mock;
+      }
+      setKnown([]);
+      return [] as KnownWorkspace[];
+    } finally {
+      setKnownLoaded(true);
+    }
+  }
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const list = await refreshKnown();
+      if (cancelled) return;
+      if (list.length > 0) {
+        setMode("open");
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- bootstrap once
+  }, []);
 
   async function handleCreate() {
     setError(null);
@@ -81,17 +145,7 @@ export function WelcomeScreen({ onOpened }: Props) {
     }
     setBusy(true);
     try {
-      const path = await save({
-        title: "Enregistrer le workspace",
-        defaultPath: `${orgName.replace(/\s+/g, "-").toLowerCase()}.sascompta`,
-        filters: [{ name: "SasCompta", extensions: ["sascompta"] }],
-      });
-      if (!path) {
-        setBusy(false);
-        return;
-      }
       const info = await api.createWorkspace({
-        path: String(path),
         password,
         orgName: orgName.trim(),
         siren: siren.replace(/\s/g, ""),
@@ -100,6 +154,7 @@ export function WelcomeScreen({ onOpened }: Props) {
         endDate: `${year}-12-31`,
         displayName: displayName.trim(),
       });
+      await refreshKnown(info.path);
       onOpened(info);
     } catch (e) {
       setError(String(e));
@@ -108,26 +163,49 @@ export function WelcomeScreen({ onOpened }: Props) {
     }
   }
 
-  async function handleOpen() {
+  async function handleOpenSelected() {
     setError(null);
+    setImportHint(null);
+    if (!selectedPath) {
+      setError("Choisissez une société ou importez un fichier.");
+      return;
+    }
+    if (!openPassword) {
+      setError("Indiquez le mot de passe.");
+      return;
+    }
     setBusy(true);
     try {
-      let path = openPath;
-      if (!path) {
-        const picked = await open({
-          title: "Ouvrir un workspace",
-          multiple: false,
-          filters: [{ name: "SasCompta", extensions: ["sascompta"] }],
-        });
-        if (!picked) {
-          setBusy(false);
-          return;
-        }
-        path = String(picked);
-        setOpenPath(path);
-      }
-      const info = await api.openWorkspace(path, openPassword);
+      const info = await api.openWorkspace(selectedPath, openPassword);
+      await refreshKnown(info.path);
       onOpened(info);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleImportFile() {
+    setError(null);
+    setImportHint(null);
+    setBusy(true);
+    try {
+      const picked = await open({
+        title: "Importer un fichier .sascompta",
+        multiple: false,
+        filters: [{ name: "SasCompta", extensions: ["sascompta"] }],
+      });
+      if (!picked) {
+        setBusy(false);
+        return;
+      }
+      const path = String(picked);
+      setSelectedPath(path);
+      setImportHint(
+        "Fichier sélectionné — entrez le mot de passe pour l’ouvrir (il sera mémorisé).",
+      );
+      setMode("open");
     } catch (e) {
       setError(String(e));
     } finally {
@@ -139,8 +217,8 @@ export function WelcomeScreen({ onOpened }: Props) {
     setError(null);
     setBusy(true);
     try {
-      const path = "/tmp/sascompta-demo/demo.sascompta";
-      const info = await api.createDemoWorkspace(path);
+      const info = await api.createDemoWorkspace();
+      await refreshKnown(info.path);
       onOpened(info);
     } catch (e) {
       setError(String(e));
@@ -148,6 +226,9 @@ export function WelcomeScreen({ onOpened }: Props) {
       setBusy(false);
     }
   }
+
+  const selectedIsImported =
+    Boolean(selectedPath) && !known.some((w) => w.path === selectedPath);
 
   return (
     <div className={`welcome-stage${mode !== "idle" ? " has-form" : ""}`}>
@@ -159,8 +240,8 @@ export function WelcomeScreen({ onOpened }: Props) {
             La compta SAS, claire et locale.
           </p>
           <p className="welcome-support">
-            Un fichier sur votre machine, un parcours guidé, zéro cloud
-            imposé.
+            Choisissez votre société, entrez le mot de passe — vos fichiers
+            restent sur cette machine.
           </p>
           <div className="welcome-cta">
             <button
@@ -169,6 +250,7 @@ export function WelcomeScreen({ onOpened }: Props) {
               disabled={busy}
               onClick={() => {
                 setError(null);
+                setImportHint(null);
                 setMode("create");
               }}
             >
@@ -180,6 +262,7 @@ export function WelcomeScreen({ onOpened }: Props) {
               disabled={busy}
               onClick={() => {
                 setError(null);
+                setImportHint(null);
                 setMode("open");
               }}
             >
@@ -223,6 +306,7 @@ export function WelcomeScreen({ onOpened }: Props) {
               onClick={() => {
                 setMode("idle");
                 setError(null);
+                setImportHint(null);
               }}
             >
               Fermer
@@ -296,6 +380,9 @@ export function WelcomeScreen({ onOpened }: Props) {
                   />
                 </label>
               </div>
+              <p className="hint welcome-live-hint">
+                Le fichier sera enregistré automatiquement sur cet ordinateur.
+              </p>
               {liveHint && !error && (
                 <p className="hint welcome-live-hint">{liveHint}</p>
               )}
@@ -306,46 +393,69 @@ export function WelcomeScreen({ onOpened }: Props) {
                   disabled={busy || Boolean(liveHint)}
                   onClick={() => void handleCreate()}
                 >
-                  Créer le workspace
+                  Créer la société
                 </button>
               </div>
             </div>
           ) : (
             <div className="form-grid">
-              <label>
-                Fichier .sascompta
-                <div className="btn-row" style={{ marginTop: 0 }}>
-                  <input
-                    style={{ flex: 1 }}
-                    value={openPath}
-                    onChange={(e) => setOpenPath(e.target.value)}
-                    placeholder="Chemin du workspace"
-                  />
-                  <button
-                    type="button"
-                    className="ghost"
-                    onClick={() => void handleOpen()}
+              {knownLoaded && known.length === 0 && !selectedIsImported ? (
+                <p className="hint welcome-live-hint">
+                  Aucune société mémorisée pour l’instant. Créez-en une, lancez
+                  la démo, ou importez un fichier existant.
+                </p>
+              ) : (
+                <label>
+                  Société
+                  <select
+                    value={selectedPath}
+                    onChange={(e) => {
+                      setSelectedPath(e.target.value);
+                      setImportHint(null);
+                    }}
                   >
-                    Parcourir…
-                  </button>
-                </div>
-              </label>
+                    {selectedIsImported && (
+                      <option value={selectedPath}>
+                        Fichier importé…
+                      </option>
+                    )}
+                    {known.map((w) => (
+                      <option key={w.id} value={w.path}>
+                        {w.name}
+                        {w.siren ? ` · ${w.siren}` : ""}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
               <label>
                 <LabelWithHelp topic="motDePasse">Mot de passe</LabelWithHelp>
                 <input
                   type="password"
                   value={openPassword}
                   onChange={(e) => setOpenPassword(e.target.value)}
+                  autoComplete="current-password"
                 />
               </label>
-              <div className="btn-row">
+              {importHint && (
+                <p className="hint welcome-live-hint">{importHint}</p>
+              )}
+              <div className="btn-row welcome-open-actions">
                 <button
                   type="button"
                   className="primary"
-                  disabled={busy || !openPassword}
-                  onClick={() => void handleOpen()}
+                  disabled={busy || !selectedPath || !openPassword}
+                  onClick={() => void handleOpenSelected()}
                 >
                   Ouvrir
+                </button>
+                <button
+                  type="button"
+                  className="ghost"
+                  disabled={busy}
+                  onClick={() => void handleImportFile()}
+                >
+                  Importer un fichier…
                 </button>
               </div>
             </div>

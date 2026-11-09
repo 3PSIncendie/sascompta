@@ -333,7 +333,14 @@ pub fn create_workspace(input: &CreateWorkspaceInput) -> DbResult<WorkspaceInfo>
     if input.password.len() < 8 {
         return Err("Mot de passe trop court (8 caractères min.)".into());
     }
-    let path = PathBuf::from(&input.path);
+    let path = match input.path.as_ref().map(|p| p.trim()).filter(|p| !p.is_empty()) {
+        Some(p) => PathBuf::from(p),
+        None => {
+            return Err(
+                "Chemin workspace manquant (le backend doit résoudre le dossier app data)".into(),
+            );
+        }
+    };
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -559,7 +566,7 @@ pub fn create_demo_workspace(path: &Path) -> DbResult<WorkspaceInfo> {
         std::fs::remove_file(path)?;
     }
     let input = CreateWorkspaceInput {
-        path: path.display().to_string(),
+        path: Some(path.display().to_string()),
         password: DEMO_PASSWORD.to_string(),
         org_name: "Demo SAS".to_string(),
         siren: "123456782".to_string(),
@@ -599,7 +606,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let path = dir.path().join("test.sascompta");
         let input = CreateWorkspaceInput {
-            path: path.display().to_string(),
+            path: Some(path.display().to_string()),
             password: "SecretPass1".into(),
             org_name: "Demo SAS".into(),
             siren: "123456782".into(),
@@ -636,7 +643,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let path = dir.path().join("org.sascompta");
         let input = CreateWorkspaceInput {
-            path: path.display().to_string(),
+            path: Some(path.display().to_string()),
             password: "SecretPass1".into(),
             org_name: "Demo SAS".into(),
             siren: "123456782".into(),

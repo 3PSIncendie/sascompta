@@ -44,7 +44,8 @@ export interface WorkspaceInfo {
 }
 
 export interface CreateWorkspaceInput {
-  path: string;
+  /** Omise pour stocker sous le dossier app data (workspaces/). */
+  path?: string | null;
   password: string;
   orgName: string;
   siren: string;
@@ -52,6 +53,15 @@ export interface CreateWorkspaceInput {
   startDate: string;
   endDate: string;
   displayName: string;
+}
+
+/** Société connue sur cette machine (registre local). */
+export interface KnownWorkspace {
+  id: string;
+  name: string;
+  siren: string;
+  path: string;
+  lastOpenedAt: string;
 }
 
 export interface Account {
