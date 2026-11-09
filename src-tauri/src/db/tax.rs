@@ -87,7 +87,8 @@ pub fn seed_demo_third_parties(conn: &Connection) -> DbResult<()> {
 
 pub fn list_third_parties(conn: &Connection) -> DbResult<Vec<ThirdParty>> {
     let mut stmt = conn.prepare(
-        "SELECT id, code, name, kind, account_number, active FROM third_party ORDER BY code",
+        "SELECT id, code, name, kind, account_number, active, siret, email, address, routing_id
+         FROM third_party ORDER BY code",
     )?;
     let rows = stmt.query_map([], |r| {
         Ok(ThirdParty {
@@ -97,6 +98,10 @@ pub fn list_third_parties(conn: &Connection) -> DbResult<Vec<ThirdParty>> {
             kind: r.get(3)?,
             account_number: r.get(4)?,
             active: r.get::<_, i32>(5)? != 0,
+            siret: r.get(6)?,
+            email: r.get(7)?,
+            address: r.get(8)?,
+            routing_id: r.get(9)?,
         })
     })?;
     Ok(rows.filter_map(|r| r.ok()).collect())
@@ -109,8 +114,18 @@ pub fn create_third_party(conn: &Connection, input: &CreateThirdPartyInput) -> D
         _ => return Err("Type de tiers invalide (supplier|customer)".into()),
     };
     conn.execute(
-        "INSERT INTO third_party(code, name, kind, account_number, active) VALUES (?1, ?2, ?3, ?4, 1)",
-        params![input.code, input.name, input.kind, account],
+        "INSERT INTO third_party(code, name, kind, account_number, active, siret, email, address, routing_id)
+         VALUES (?1, ?2, ?3, ?4, 1, ?5, ?6, ?7, ?8)",
+        params![
+            input.code,
+            input.name,
+            input.kind,
+            account,
+            input.siret,
+            input.email,
+            input.address,
+            input.routing_id
+        ],
     )?;
     let id = conn.last_insert_rowid();
     Ok(ThirdParty {
@@ -120,6 +135,10 @@ pub fn create_third_party(conn: &Connection, input: &CreateThirdPartyInput) -> D
         kind: input.kind.clone(),
         account_number: account.to_string(),
         active: true,
+        siret: input.siret.clone(),
+        email: input.email.clone(),
+        address: input.address.clone(),
+        routing_id: input.routing_id.clone(),
     })
 }
 

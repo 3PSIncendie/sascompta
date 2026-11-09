@@ -179,6 +179,14 @@ pub struct ThirdParty {
     pub kind: String,
     pub account_number: String,
     pub active: bool,
+    #[serde(default)]
+    pub siret: Option<String>,
+    #[serde(default)]
+    pub email: Option<String>,
+    #[serde(default)]
+    pub address: Option<String>,
+    #[serde(default)]
+    pub routing_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -187,6 +195,14 @@ pub struct CreateThirdPartyInput {
     pub code: String,
     pub name: String,
     pub kind: String,
+    #[serde(default)]
+    pub siret: Option<String>,
+    #[serde(default)]
+    pub email: Option<String>,
+    #[serde(default)]
+    pub address: Option<String>,
+    #[serde(default)]
+    pub routing_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -482,4 +498,121 @@ pub struct ClosingEventInfo {
     pub next_fiscal_year_id: Option<i64>,
     pub pack_path: Option<String>,
     pub notes: Option<String>,
+}
+
+/* ——— Commercial / billing ——— */
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuoteLine {
+    pub id: i64,
+    pub quote_id: i64,
+    pub line_no: i32,
+    pub label: String,
+    pub quantity_milli: i64,
+    pub unit: String,
+    pub unit_price_cents: i64,
+    pub ht_cents: i64,
+    pub vat_rate_bp: i32,
+    pub vat_code: Option<String>,
+    pub account_number: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuoteLineInput {
+    pub label: String,
+    pub quantity_milli: i64,
+    pub unit: String,
+    pub unit_price_cents: i64,
+    #[serde(default)]
+    pub ht_cents: i64,
+    pub vat_rate_bp: i32,
+    pub vat_code: Option<String>,
+    pub account_number: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Quote {
+    pub id: i64,
+    pub number: String,
+    pub third_party_id: i64,
+    pub third_party_code: String,
+    pub third_party_name: String,
+    pub status: String,
+    pub issue_date: String,
+    pub valid_until: Option<String>,
+    pub currency: String,
+    pub ht_cents: i64,
+    pub vat_cents: i64,
+    pub ttc_cents: i64,
+    pub vat_mode: String,
+    pub notes: Option<String>,
+    pub legal_mentions: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+    pub lines: Vec<QuoteLine>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateQuoteInput {
+    pub third_party_id: i64,
+    pub issue_date: String,
+    pub valid_until: Option<String>,
+    pub vat_mode: String,
+    pub notes: Option<String>,
+    pub legal_mentions: Option<String>,
+    pub lines: Vec<QuoteLineInput>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InvoiceLine {
+    pub id: i64,
+    pub invoice_id: i64,
+    pub line_no: i32,
+    pub label: String,
+    pub quantity_milli: i64,
+    pub unit: String,
+    pub unit_price_cents: i64,
+    pub ht_cents: i64,
+    pub vat_rate_bp: i32,
+    pub vat_code: Option<String>,
+    pub account_number: String,
+    pub analytic_code: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Invoice {
+    pub id: i64,
+    pub number: Option<String>,
+    pub kind: String,
+    pub third_party_id: i64,
+    pub third_party_code: String,
+    pub third_party_name: String,
+    pub quote_id: Option<i64>,
+    pub parent_invoice_id: Option<i64>,
+    pub status: String,
+    pub issue_date: String,
+    pub due_date: Option<String>,
+    pub service_date: Option<String>,
+    pub ht_cents: i64,
+    pub vat_cents: i64,
+    pub ttc_cents: i64,
+    pub paid_cents: i64,
+    pub vat_mode: String,
+    pub vat_code: Option<String>,
+    pub einvoice_profile: String,
+    pub einvoice_status: String,
+    pub entry_id: Option<i64>,
+    pub pdf_path: Option<String>,
+    pub facturx_path: Option<String>,
+    pub notes: Option<String>,
+    pub legal_mentions: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+    pub lines: Vec<InvoiceLine>,
 }

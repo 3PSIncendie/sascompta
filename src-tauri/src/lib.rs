@@ -78,6 +78,17 @@ pub fn run() {
             commands::export_fec_draft,
             commands::export_publication_zip,
             commands::last_closing_event,
+            commands::list_quotes,
+            commands::get_quote,
+            commands::create_quote,
+            commands::update_quote,
+            commands::set_quote_status,
+            commands::delete_quote,
+            commands::export_quote_pdf,
+            commands::list_invoices,
+            commands::get_invoice,
+            commands::convert_quote_to_invoice,
+            commands::build_invoice_entry_draft,
         ])
         .run(tauri::generate_context!())
         .expect("erreur au démarrage de SasCompta");

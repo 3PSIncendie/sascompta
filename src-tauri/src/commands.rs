@@ -485,6 +485,89 @@ pub fn last_closing_event(state: State<'_, AppState>) -> Result<Option<ClosingEv
     db::with_conn(&state, db::closing::last_closing_event).map_err(map_err)
 }
 
+/* ——— Commercial / devis ——— */
+
+#[tauri::command]
+pub fn list_quotes(state: State<'_, AppState>) -> Result<Vec<Quote>, String> {
+    db::with_conn(&state, db::billing::list_quotes).map_err(map_err)
+}
+
+#[tauri::command]
+pub fn get_quote(state: State<'_, AppState>, id: i64) -> Result<Quote, String> {
+    db::with_conn(&state, |c| db::billing::get_quote(c, id)).map_err(map_err)
+}
+
+#[tauri::command]
+pub fn create_quote(
+    state: State<'_, AppState>,
+    input: CreateQuoteInput,
+) -> Result<Quote, String> {
+    db::with_conn(&state, |c| db::billing::create_quote(c, &input)).map_err(map_err)
+}
+
+#[tauri::command]
+pub fn update_quote(
+    state: State<'_, AppState>,
+    id: i64,
+    input: CreateQuoteInput,
+) -> Result<Quote, String> {
+    db::with_conn(&state, |c| db::billing::update_quote(c, id, &input)).map_err(map_err)
+}
+
+#[tauri::command]
+pub fn set_quote_status(
+    state: State<'_, AppState>,
+    id: i64,
+    status: String,
+) -> Result<Quote, String> {
+    db::with_conn(&state, |c| db::billing::set_quote_status(c, id, &status)).map_err(map_err)
+}
+
+#[tauri::command]
+pub fn delete_quote(state: State<'_, AppState>, id: i64) -> Result<(), String> {
+    db::with_conn(&state, |c| db::billing::delete_quote(c, id)).map_err(map_err)
+}
+
+#[tauri::command]
+pub fn export_quote_pdf(
+    state: State<'_, AppState>,
+    id: i64,
+    path: String,
+) -> Result<(), String> {
+    db::with_conn(&state, |c| {
+        db::billing::export_quote_pdf(c, id, std::path::Path::new(&path))
+    })
+    .map_err(map_err)
+}
+
+#[tauri::command]
+pub fn list_invoices(state: State<'_, AppState>) -> Result<Vec<Invoice>, String> {
+    db::with_conn(&state, db::billing::list_invoices).map_err(map_err)
+}
+
+#[tauri::command]
+pub fn get_invoice(state: State<'_, AppState>, id: i64) -> Result<Invoice, String> {
+    db::with_conn(&state, |c| db::billing::get_invoice(c, id)).map_err(map_err)
+}
+
+#[tauri::command]
+pub fn convert_quote_to_invoice(
+    state: State<'_, AppState>,
+    quote_id: i64,
+) -> Result<Invoice, String> {
+    db::with_conn(&state, |c| db::billing::convert_quote_to_invoice(c, quote_id))
+        .map_err(map_err)
+}
+
+#[tauri::command]
+pub fn build_invoice_entry_draft(
+    state: State<'_, AppState>,
+    invoice_id: i64,
+) -> Result<Entry, String> {
+    db::with_conn(&state, |c| db::billing::build_invoice_entry_draft(c, invoice_id))
+        .map_err(map_err)
+}
+
 #[tauri::command]
 pub fn annual_statements(
     state: State<'_, AppState>,
