@@ -150,7 +150,7 @@ export function WelcomeScreen({ onOpened }: Props) {
   }
 
   return (
-    <div className="welcome-stage">
+    <div className={`welcome-stage${mode !== "idle" ? " has-form" : ""}`}>
       <div className="welcome-atmosphere" aria-hidden />
       <div className="welcome-viewport">
         <header className="welcome-brand-block">

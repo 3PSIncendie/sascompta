@@ -69,3 +69,7 @@ path = "src/bin/demo_export_statements.rs"
 [[bin]]
 name = "demo_export_closing"
 path = "src/bin/demo_export_closing.rs"
+
+[[bin]]
+name = "demo_export_billing_pdfs"
+path = "src/bin/demo_export_billing_pdfs.rs"
