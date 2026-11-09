@@ -202,6 +202,18 @@ export const HELP: Record<string, HelpTopic> = {
     plain:
       "Obligation de déposer bilan / compte de résultat / annexe au greffe (souvent via le guichet unique) après l’assemblée d’approbation.",
   },
+  numerotationFactures: {
+    term: "Numérotation des factures",
+    plain:
+      "Chaque facture émise reçoit un numéro unique et chronologique (ex. FACT-2026-0042). Si vous avez déjà facturé hors SasCompta, indiquez ici le prochain numéro à utiliser pour continuer la série sans trou ni doublon.",
+    example: "Dernière facture papier FACT-2026-0041 → prochain numéro = 42",
+  },
+  prochainNumero: {
+    term: "Prochain numéro",
+    plain:
+      "Le numéro qui sera attribué à la prochaine émission de cette série. SasCompta refuse une valeur trop basse si un document portant ce numéro (ou un numéro supérieur) existe déjà dans le fichier.",
+    example: "Série FACT, exercice 2026 → aperçu FACT-2026-0042",
+  },
 };
 
 export function helpPlain(key: keyof typeof HELP): string {

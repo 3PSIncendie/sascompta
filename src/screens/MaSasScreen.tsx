@@ -9,7 +9,13 @@ import {
   phaseLabel,
   previewEinvoiceProfile,
 } from "../modules/billing/einvoice";
+import {
+  parseNextNumInput,
+  previewDocumentSequences,
+  previewNumber,
+} from "../modules/billing/sequences";
 import type {
+  DocumentSequenceInfo,
   EinvoicePartyProfile,
   UpdateOrganizationInput,
   WorkspaceInfo,
@@ -137,6 +143,10 @@ export function MaSasScreen({
   const [pdpApiBase, setPdpApiBase] = useState("");
   const [pdpTechId, setPdpTechId] = useState("");
   const [eiStatus, setEiStatus] = useState<string | null>(null);
+  const [sequences, setSequences] = useState<DocumentSequenceInfo[]>([]);
+  const [seqDrafts, setSeqDrafts] = useState<Record<string, string>>({});
+  const [seqStatus, setSeqStatus] = useState<string | null>(null);
+  const [seqError, setSeqError] = useState<string | null>(null);
 
   useEffect(() => {
     if (editing) return;
@@ -153,6 +163,15 @@ export function MaSasScreen({
     setEndDate(fy.endDate);
   }, [org, fy, profile, editing]);
 
+  function applySequences(rows: DocumentSequenceInfo[]) {
+    setSequences(rows);
+    const drafts: Record<string, string> = {};
+    for (const row of rows) {
+      drafts[row.kind] = String(row.nextNum);
+    }
+    setSeqDrafts(drafts);
+  }
+
   useEffect(() => {
     void (async () => {
       if (isPreview || !isTauriRuntime()) {
@@ -166,6 +185,7 @@ export function MaSasScreen({
         setPdpProvider(p.pdpProvider ?? "");
         setPdpApiBase(p.pdpApiBase ?? "");
         setPdpTechId(p.pdpTechId ?? "");
+        applySequences(previewDocumentSequences(fy.label));
         return;
       }
       try {
@@ -182,8 +202,61 @@ export function MaSasScreen({
       } catch {
         /* profil optionnel */
       }
+      try {
+        applySequences(await api.listDocumentSequences());
+      } catch {
+        /* compteurs optionnels tant que le workspace n’est pas prêt */
+      }
     })();
-  }, [isPreview, workspace.path]);
+  }, [isPreview, workspace.path, fy.label]);
+
+  async function saveSequences() {
+    setSeqError(null);
+    setSeqStatus(null);
+    const inputs: { kind: string; nextNum: number }[] = [];
+    for (const row of sequences) {
+      const parsed = parseNextNumInput(seqDrafts[row.kind] ?? "");
+      if (parsed == null) {
+        setSeqError(
+          `Série ${row.kind} : indiquez un entier ≥ 1 (ex. 42 pour continuer après 41).`,
+        );
+        return;
+      }
+      if (parsed < row.minNextNum) {
+        setSeqError(
+          `Série ${row.kind} : le prochain numéro doit être ≥ ${row.minNextNum} pour éviter un doublon avec les documents déjà numérotés.`,
+        );
+        return;
+      }
+      inputs.push({ kind: row.kind, nextNum: parsed });
+    }
+    setBusy(true);
+    try {
+      if (isPreview || !isTauriRuntime()) {
+        applySequences(
+          sequences.map((row) => {
+            const nextNum =
+              inputs.find((i) => i.kind === row.kind)?.nextNum ?? row.nextNum;
+            return {
+              ...row,
+              nextNum,
+              preview: previewNumber(row.kind, row.fiscalYearLabel, nextNum),
+            };
+          }),
+        );
+        setSeqStatus("Numérotation enregistrée (aperçu).");
+        return;
+      }
+      applySequences(await api.setDocumentSequences(inputs));
+      setSeqStatus(
+        "Numérotation enregistrée. La prochaine émission utilisera ces compteurs.",
+      );
+    } catch (e) {
+      setSeqError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function saveEinvoiceProfile() {
     setEiStatus(null);
@@ -602,6 +675,98 @@ export function MaSasScreen({
             </div>
           </form>
         )}
+      </div>
+
+      <div className="panel nested-panel" style={{ marginTop: "1.25rem" }}>
+        <header className="panel-head">
+          <div>
+            <h2>
+              Numérotation des factures{" "}
+              <FieldHelp topic="numerotationFactures" compact />
+            </h2>
+            <p className="muted">
+              Indiquez le <strong>prochain numéro</strong> de chaque série pour
+              continuer une numérotation déjà commencée hors SasCompta (papier,
+              autre logiciel…). Les numéros émis restent uniques et
+              chronologiques.
+            </p>
+          </div>
+        </header>
+
+        <div className="help-callout">
+          <strong>Comment faire ?</strong>
+          <p>
+            Regardez votre <em>dernière</em> facture émise. Si c’était{" "}
+            <code>FACT-2026-0041</code>, saisissez <strong>42</strong> dans
+            « Factures ». À la prochaine émission, SasCompta attribuera{" "}
+            <code>FACT-2026-0042</code>, puis 43, 44… Idem pour acomptes (
+            <code>ACMP-</code>), avoirs (<code>AVO-</code>) et devis (
+            <code>DEV-</code>).
+          </p>
+        </div>
+
+        {seqStatus && <div className="ok-banner">{seqStatus}</div>}
+        {seqError && <div className="error">{seqError}</div>}
+
+        {sequences.length === 0 ? (
+          <p className="hint">Chargement des compteurs…</p>
+        ) : (
+          <div className="stack" style={{ gap: "0.75rem" }}>
+            {sequences.map((row) => {
+              const draft = seqDrafts[row.kind] ?? String(row.nextNum);
+              const parsed = parseNextNumInput(draft);
+              const livePreview =
+                parsed != null
+                  ? previewNumber(row.kind, row.fiscalYearLabel, parsed)
+                  : "—";
+              const tooLow = parsed != null && parsed < row.minNextNum;
+              return (
+                <div key={row.kind} className="form-grid two" style={{ alignItems: "end" }}>
+                  <label>
+                    <LabelWithHelp topic="prochainNumero">
+                      {row.label} — prochain numéro
+                    </LabelWithHelp>
+                    <input
+                      value={draft}
+                      onChange={(e) =>
+                        setSeqDrafts((prev) => ({
+                          ...prev,
+                          [row.kind]: e.target.value,
+                        }))
+                      }
+                      inputMode="numeric"
+                      placeholder={String(row.minNextNum)}
+                      aria-invalid={tooLow || parsed == null}
+                    />
+                    <span className="hint">
+                      Minimum autorisé : {row.minNextNum}
+                      {row.minNextNum > 1
+                        ? " (documents déjà numérotés dans ce fichier)"
+                        : ""}
+                    </span>
+                  </label>
+                  <div className="meta-item">
+                    <span>Aperçu du prochain document</span>
+                    <strong style={{ fontFamily: "ui-monospace, monospace" }}>
+                      {livePreview}
+                    </strong>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        <div className="btn-row" style={{ marginTop: "0.75rem" }}>
+          <button
+            type="button"
+            className="primary"
+            disabled={busy || sequences.length === 0}
+            onClick={() => void saveSequences()}
+          >
+            Enregistrer la numérotation
+          </button>
+        </div>
       </div>
 
       <div className="panel nested-panel" style={{ marginTop: "1.25rem" }}>

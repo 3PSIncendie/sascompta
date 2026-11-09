@@ -954,6 +954,25 @@ pub struct EreportingBatch {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct DocumentSequenceInfo {
+    pub kind: String,
+    pub label: String,
+    pub fiscal_year_id: i64,
+    pub fiscal_year_label: String,
+    pub next_num: i64,
+    pub min_next_num: i64,
+    pub preview: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetDocumentSequenceInput {
+    pub kind: String,
+    pub next_num: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CreateEreportingBatchInput {
     pub period_from: String,
     pub period_to: String,
