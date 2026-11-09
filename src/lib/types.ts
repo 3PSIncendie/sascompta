@@ -351,6 +351,80 @@ export interface Reminder {
   bodySnapshot: string | null;
 }
 
+export type ObligationPhase =
+  | "receive_only"
+  | "emit_large"
+  | "emit_all"
+  | "franchise_receive";
+
+export interface EinvoicePartyProfile {
+  organizationId: number;
+  siret: string | null;
+  siren: string | null;
+  vatNumber: string | null;
+  legalName: string | null;
+  addressStructured: string | null;
+  routingScheme: string | null;
+  routingId: string | null;
+  obligationPhase: ObligationPhase | string;
+  obligationReceiveFrom: string | null;
+  obligationEmitFrom: string | null;
+  pdpProvider: string | null;
+  pdpApiBase: string | null;
+  pdpTechId: string | null;
+  certificateRef: string | null;
+}
+
+export interface UpdateEinvoiceProfileInput {
+  siret?: string | null;
+  siren?: string | null;
+  vatNumber?: string | null;
+  legalName?: string | null;
+  addressStructured?: string | null;
+  routingScheme?: string | null;
+  routingId?: string | null;
+  obligationPhase: string;
+  obligationReceiveFrom?: string | null;
+  obligationEmitFrom?: string | null;
+  pdpProvider?: string | null;
+  pdpApiBase?: string | null;
+  pdpTechId?: string | null;
+  certificateRef?: string | null;
+}
+
+export interface EinvoiceQueueItem {
+  id: number;
+  direction: "outbound" | "inbound" | string;
+  invoiceId: number | null;
+  entryId: number | null;
+  payloadPath: string | null;
+  format: string;
+  lifecycleStatus: string;
+  lastError: string | null;
+  attempts: number;
+  summary: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface EreportingBatch {
+  id: number;
+  periodFrom: string;
+  periodTo: string;
+  kind: string;
+  status: string;
+  payloadPath: string | null;
+  entryCount: number;
+  createdAt: string;
+}
+
+export interface CreateEreportingBatchInput {
+  periodFrom: string;
+  periodTo: string;
+  kind: string;
+  destPath: string;
+}
+
 export interface LedgerFilter {
   fromDate?: string | null;
   toDate?: string | null;

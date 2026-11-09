@@ -36,7 +36,7 @@ describe("buildDeadlines", () => {
       vatRegime: "reel_mensuel",
     });
     expect(items.map((i) => i.kind).sort()).toEqual(
-      ["ag", "cloture", "depot", "tva"].sort(),
+      ["ag", "cloture", "depot", "einvoice", "tva"].sort(),
     );
     expect(items.find((i) => i.kind === "tva")?.dueDate).toBe("2026-05-19");
   });

@@ -1418,7 +1418,7 @@ mod tests {
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(version, "10");
+        assert_eq!(version, crate::db::SCHEMA_VERSION.to_string());
 
         let employees = list_employees(&conn).unwrap();
         assert!(employees.len() >= 2);

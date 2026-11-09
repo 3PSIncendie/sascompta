@@ -12,12 +12,16 @@ import type {
   CreateEmployeeInput,
   CreateEntryInput,
   CreateFixedAssetInput,
+  CreateEreportingBatchInput,
   CreateInvoiceInput,
   CreateLeaveRequestInput,
   CreatePaymentInput,
   CreateQuoteInput,
   CreateThirdPartyInput,
   CreateWorkspaceInput,
+  EinvoicePartyProfile,
+  EinvoiceQueueItem,
+  EreportingBatch,
   DepreciationRun,
   DepreciationScheduleRow,
   DsnExportRun,
@@ -40,6 +44,7 @@ import type {
   Reminder,
   SocialRateTable,
   ThirdParty,
+  UpdateEinvoiceProfileInput,
   UpdateOrganizationInput,
   VatCode,
   VatReport,
@@ -235,6 +240,23 @@ export const api = {
   generateDueReminders: () => invoke<Reminder[]>("generate_due_reminders"),
   markReminderSent: (id: number) =>
     invoke<Reminder>("mark_reminder_sent", { id }),
+
+  getEinvoiceProfile: () =>
+    invoke<EinvoicePartyProfile>("get_einvoice_profile"),
+  updateEinvoiceProfile: (input: UpdateEinvoiceProfileInput) =>
+    invoke<EinvoicePartyProfile>("update_einvoice_profile", { input }),
+  listEinvoiceQueue: () =>
+    invoke<EinvoiceQueueItem[]>("list_einvoice_queue"),
+  exportFacturx: (invoiceId: number, destDir: string) =>
+    invoke<EinvoiceQueueItem>("export_facturx", { invoiceId, destDir }),
+  importEinvoiceFile: (path: string) =>
+    invoke<EinvoiceQueueItem>("import_einvoice_file", { path }),
+  pdpStubSubmit: (queueId: number) =>
+    invoke<EinvoiceQueueItem>("pdp_stub_submit", { queueId }),
+  listEreportingBatches: () =>
+    invoke<EreportingBatch[]>("list_ereporting_batches"),
+  buildEreportingBatch: (input: CreateEreportingBatchInput) =>
+    invoke<EreportingBatch>("build_ereporting_batch", { input }),
 
   listEmployees: () => invoke<Employee[]>("list_employees"),
   getEmployee: (id: number) => invoke<Employee>("get_employee", { id }),
