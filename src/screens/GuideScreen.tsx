@@ -309,6 +309,21 @@ export function GuideScreen({ workspace, onNavigate }: Props) {
         </div>
       </section>
 
+      <section className="panel guide-roadmap" aria-label="Modules à venir">
+        <h2>Ensuite : Commercial, E-facture, RH</h2>
+        <p>
+          La comptabilité reste le cœur. Les groupes de navigation{" "}
+          <strong>Commercial</strong>, <strong>E-facture</strong> et{" "}
+          <strong>RH</strong> sont déjà prêts dans la barre latérale — écrans
+          repères pour l’instant, métier dans les prochains jalons.
+        </p>
+        <ul>
+          <li>Devis → factures → relances, sans re-saisie vers les écritures</li>
+          <li>Factur-X local et file d’attente PDP (SasCompta n’est pas une PDP)</li>
+          <li>Salariés, congés, bulletins simplifiés et export DSN-oriented</li>
+        </ul>
+      </section>
+
       <DeadlineReminders workspace={workspace} />
     </div>
   );
