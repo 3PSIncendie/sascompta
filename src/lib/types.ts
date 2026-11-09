@@ -232,6 +232,16 @@ export interface CreateQuoteInput {
   lines: QuoteLineInput[];
 }
 
+export type InvoiceKind = "standard" | "deposit" | "balance" | "credit_note";
+
+export type InvoiceStatus =
+  | "draft"
+  | "issued"
+  | "sent"
+  | "partially_paid"
+  | "paid"
+  | "cancelled";
+
 export interface InvoiceLine {
   id: number;
   invoiceId: number;
@@ -247,16 +257,28 @@ export interface InvoiceLine {
   analyticCode: string | null;
 }
 
+export interface InvoiceLineInput {
+  label: string;
+  quantityMilli: number;
+  unit: string;
+  unitPriceCents: number;
+  htCents?: number;
+  vatRateBp: number;
+  vatCode?: string | null;
+  accountNumber: string;
+  analyticCode?: string | null;
+}
+
 export interface Invoice {
   id: number;
   number: string | null;
-  kind: string;
+  kind: InvoiceKind | string;
   thirdPartyId: number;
   thirdPartyCode: string;
   thirdPartyName: string;
   quoteId: number | null;
   parentInvoiceId: number | null;
-  status: string;
+  status: InvoiceStatus | string;
   issueDate: string;
   dueDate: string | null;
   serviceDate: string | null;
@@ -276,6 +298,20 @@ export interface Invoice {
   createdAt: string;
   updatedAt: string;
   lines: InvoiceLine[];
+}
+
+export interface CreateInvoiceInput {
+  kind: InvoiceKind | string;
+  thirdPartyId: number;
+  quoteId?: number | null;
+  parentInvoiceId?: number | null;
+  issueDate: string;
+  dueDate?: string | null;
+  serviceDate?: string | null;
+  vatMode: BillingVatMode | string;
+  notes?: string | null;
+  legalMentions?: string | null;
+  lines: InvoiceLineInput[];
 }
 
 export interface LedgerFilter {

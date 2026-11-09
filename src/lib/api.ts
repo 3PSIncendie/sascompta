@@ -10,6 +10,7 @@ import type {
   ClosingEventInfo,
   CreateEntryInput,
   CreateFixedAssetInput,
+  CreateInvoiceInput,
   CreateQuoteInput,
   CreateThirdPartyInput,
   CreateWorkspaceInput,
@@ -186,6 +187,28 @@ export const api = {
 
   listInvoices: () => invoke<Invoice[]>("list_invoices"),
   getInvoice: (id: number) => invoke<Invoice>("get_invoice", { id }),
+  createInvoice: (input: CreateInvoiceInput) =>
+    invoke<Invoice>("create_invoice", { input }),
+  updateInvoice: (id: number, input: CreateInvoiceInput) =>
+    invoke<Invoice>("update_invoice", { id, input }),
+  deleteInvoice: (id: number) => invoke<void>("delete_invoice", { id }),
+  issueInvoice: (id: number) => invoke<Invoice>("issue_invoice", { id }),
+  createCreditNote: (invoiceId: number) =>
+    invoke<Invoice>("create_credit_note", { invoiceId }),
+  createDepositInvoice: (
+    parentInvoiceId: number,
+    amountHtCents: number,
+    vatRateBp: number,
+    vatCode?: string | null,
+  ) =>
+    invoke<Invoice>("create_deposit_invoice", {
+      parentInvoiceId,
+      amountHtCents,
+      vatRateBp,
+      vatCode: vatCode ?? null,
+    }),
+  exportInvoicePdf: (id: number, path: string) =>
+    invoke<void>("export_invoice_pdf", { id, path }),
   convertQuoteToInvoice: (quoteId: number) =>
     invoke<Invoice>("convert_quote_to_invoice", { quoteId }),
   buildInvoiceEntryDraft: (invoiceId: number) =>

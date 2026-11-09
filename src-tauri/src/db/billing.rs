@@ -655,6 +655,337 @@ pub fn list_invoices(conn: &Connection) -> DbResult<Vec<Invoice>> {
     Ok(out)
 }
 
+fn sequence_kind_for_invoice(kind: &str) -> &'static str {
+    match kind {
+        "deposit" => "ACMP",
+        "credit_note" => "AVO",
+        _ => "FACT", // standard | balance
+    }
+}
+
+fn validate_invoice_kind(kind: &str) -> DbResult<()> {
+    if INVOICE_KINDS.contains(&kind) {
+        Ok(())
+    } else {
+        Err("Type de facture invalide (standard|deposit|balance|credit_note)".into())
+    }
+}
+
+fn default_account_for_kind(kind: &str) -> &'static str {
+    match kind {
+        "deposit" => "4191",
+        _ => "706",
+    }
+}
+
+fn recompute_invoice_totals(
+    lines: &[InvoiceLineInput],
+    vat_mode: &str,
+) -> (i64, i64, i64, Vec<InvoiceLineInput>) {
+    let mut ht_total = 0i64;
+    let mut vat_total = 0i64;
+    let mut computed = Vec::new();
+    for line in lines {
+        let ht = if line.ht_cents != 0 {
+            line.ht_cents
+        } else {
+            compute_line_ht(line.quantity_milli, line.unit_price_cents)
+        };
+        let vat = effective_vat_for_line(vat_mode, ht, line.vat_rate_bp);
+        ht_total += ht;
+        vat_total += vat;
+        let mut l = line.clone();
+        l.ht_cents = ht;
+        if l.account_number.trim().is_empty() {
+            l.account_number = "706".into();
+        }
+        computed.push(l);
+    }
+    (ht_total, vat_total, ht_total + vat_total, computed)
+}
+
+fn insert_invoice_lines(
+    conn: &Connection,
+    invoice_id: i64,
+    lines: &[InvoiceLineInput],
+) -> DbResult<()> {
+    for (i, line) in lines.iter().enumerate() {
+        let label = line.label.trim();
+        if label.is_empty() {
+            return Err("Libellé de ligne requis".into());
+        }
+        if line.quantity_milli <= 0 {
+            return Err("Quantité invalide".into());
+        }
+        conn.execute(
+            "INSERT INTO invoice_line(
+                invoice_id, line_no, label, quantity_milli, unit, unit_price_cents,
+                ht_cents, vat_rate_bp, vat_code, account_number, analytic_code
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            params![
+                invoice_id,
+                (i + 1) as i32,
+                label,
+                line.quantity_milli,
+                if line.unit.trim().is_empty() {
+                    "u"
+                } else {
+                    line.unit.trim()
+                },
+                line.unit_price_cents,
+                line.ht_cents,
+                line.vat_rate_bp,
+                line.vat_code,
+                line.account_number.trim(),
+                line.analytic_code,
+            ],
+        )?;
+    }
+    Ok(())
+}
+
+pub fn create_invoice(conn: &Connection, input: &CreateInvoiceInput) -> DbResult<Invoice> {
+    validate_invoice_kind(&input.kind)?;
+    ensure_customer(conn, input.third_party_id)?;
+    validate_vat_mode(&input.vat_mode)?;
+    if input.lines.is_empty() {
+        return Err("Ajoutez au moins une ligne à la facture".into());
+    }
+    if input.kind == "credit_note" && input.parent_invoice_id.is_none() {
+        return Err("Un avoir doit référencer la facture d'origine".into());
+    }
+    if input.kind == "balance" && input.parent_invoice_id.is_none() {
+        return Err("Une facture de solde doit référencer le marché / acompte parent".into());
+    }
+    let (ht, vat, ttc, lines) = recompute_invoice_totals(&input.lines, &input.vat_mode);
+    let now = now_iso();
+    let legal = input
+        .legal_mentions
+        .clone()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| legal_mentions_for(&input.vat_mode));
+    let vat_code = lines.iter().find_map(|l| l.vat_code.clone());
+    conn.execute(
+        "INSERT INTO invoice(
+            number, kind, third_party_id, quote_id, parent_invoice_id, status,
+            issue_date, due_date, service_date, ht_cents, vat_cents, ttc_cents, paid_cents,
+            vat_mode, vat_code, notes, legal_mentions, created_at, updated_at
+         ) VALUES (NULL, ?1, ?2, ?3, ?4, 'draft', ?5, ?6, ?7, ?8, ?9, ?10, 0, ?11, ?12, ?13, ?14, ?15, ?15)",
+        params![
+            input.kind,
+            input.third_party_id,
+            input.quote_id,
+            input.parent_invoice_id,
+            input.issue_date,
+            input.due_date,
+            input.service_date,
+            ht,
+            vat,
+            ttc,
+            input.vat_mode,
+            vat_code,
+            input.notes,
+            if legal.is_empty() { None } else { Some(legal) },
+            now,
+        ],
+    )?;
+    let id = conn.last_insert_rowid();
+    insert_invoice_lines(conn, id, &lines)?;
+    get_invoice(conn, id)
+}
+
+pub fn update_invoice(
+    conn: &Connection,
+    id: i64,
+    input: &CreateInvoiceInput,
+) -> DbResult<Invoice> {
+    let existing = get_invoice(conn, id)?;
+    if existing.status != "draft" {
+        return Err("Seules les factures brouillon sont modifiables".into());
+    }
+    validate_invoice_kind(&input.kind)?;
+    ensure_customer(conn, input.third_party_id)?;
+    validate_vat_mode(&input.vat_mode)?;
+    if input.lines.is_empty() {
+        return Err("Ajoutez au moins une ligne à la facture".into());
+    }
+    let (ht, vat, ttc, lines) = recompute_invoice_totals(&input.lines, &input.vat_mode);
+    let now = now_iso();
+    let legal = input
+        .legal_mentions
+        .clone()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| legal_mentions_for(&input.vat_mode));
+    let vat_code = lines.iter().find_map(|l| l.vat_code.clone());
+    conn.execute(
+        "UPDATE invoice SET kind = ?1, third_party_id = ?2, quote_id = ?3, parent_invoice_id = ?4,
+            issue_date = ?5, due_date = ?6, service_date = ?7,
+            ht_cents = ?8, vat_cents = ?9, ttc_cents = ?10, vat_mode = ?11, vat_code = ?12,
+            notes = ?13, legal_mentions = ?14, updated_at = ?15
+         WHERE id = ?16",
+        params![
+            input.kind,
+            input.third_party_id,
+            input.quote_id,
+            input.parent_invoice_id,
+            input.issue_date,
+            input.due_date,
+            input.service_date,
+            ht,
+            vat,
+            ttc,
+            input.vat_mode,
+            vat_code,
+            input.notes,
+            if legal.is_empty() { None } else { Some(legal) },
+            now,
+            id,
+        ],
+    )?;
+    conn.execute("DELETE FROM invoice_line WHERE invoice_id = ?1", params![id])?;
+    insert_invoice_lines(conn, id, &lines)?;
+    get_invoice(conn, id)
+}
+
+pub fn delete_invoice(conn: &Connection, id: i64) -> DbResult<()> {
+    let existing = get_invoice(conn, id)?;
+    if existing.status != "draft" {
+        return Err("Seules les factures brouillon peuvent être supprimées".into());
+    }
+    if let Some(entry_id) = existing.entry_id {
+        let status: String = conn.query_row(
+            "SELECT status FROM entry WHERE id = ?1",
+            params![entry_id],
+            |r| r.get(0),
+        )?;
+        if status == "posted" {
+            return Err("Écriture validée liée — suppression interdite".into());
+        }
+        conn.execute(
+            "UPDATE invoice SET entry_id = NULL WHERE id = ?1",
+            params![id],
+        )?;
+        let _ = ledger::delete_draft(conn, entry_id);
+    }
+    let n = conn.execute("DELETE FROM invoice WHERE id = ?1", params![id])?;
+    if n == 0 {
+        return Err("Facture introuvable".into());
+    }
+    Ok(())
+}
+
+/// Émet la facture : réserve le numéro (FACT/ACMP/AVO) + statut issued + brouillon VTE.
+pub fn issue_invoice(conn: &Connection, id: i64) -> DbResult<Invoice> {
+    let existing = get_invoice(conn, id)?;
+    if existing.status != "draft" {
+        return Err("Seules les factures brouillon peuvent être émises".into());
+    }
+    if existing.lines.is_empty() {
+        return Err("Facture sans lignes".into());
+    }
+    if existing.number.is_some() {
+        return Err("Numéro déjà attribué".into());
+    }
+    let fy_id = open_fy_id(conn)?;
+    let seq = sequence_kind_for_invoice(&existing.kind);
+    let number = allocate_document_number(conn, seq, fy_id)?;
+    let now = now_iso();
+    conn.execute(
+        "UPDATE invoice SET number = ?1, status = 'issued', updated_at = ?2 WHERE id = ?3",
+        params![number, now, id],
+    )?;
+    // Max automation : brouillon VTE dès l'émission (post humain ensuite)
+    let _ = build_invoice_entry_draft(conn, id)?;
+    get_invoice(conn, id)
+}
+
+/// Avoir brouillon inversant une facture émise (numéro AVO à l'émission).
+pub fn create_credit_note(conn: &Connection, invoice_id: i64) -> DbResult<Invoice> {
+    let src = get_invoice(conn, invoice_id)?;
+    if !matches!(src.status.as_str(), "issued" | "sent" | "partially_paid" | "paid") {
+        return Err("L'avoir nécessite une facture déjà émise".into());
+    }
+    if src.kind == "credit_note" {
+        return Err("Impossible de créer un avoir sur un avoir".into());
+    }
+    let lines: Vec<InvoiceLineInput> = src
+        .lines
+        .iter()
+        .map(|l| InvoiceLineInput {
+            label: format!("Avoir — {}", l.label),
+            quantity_milli: l.quantity_milli,
+            unit: l.unit.clone(),
+            unit_price_cents: l.unit_price_cents,
+            ht_cents: l.ht_cents,
+            vat_rate_bp: l.vat_rate_bp,
+            vat_code: l.vat_code.clone(),
+            account_number: l.account_number.clone(),
+            analytic_code: l.analytic_code.clone(),
+        })
+        .collect();
+    let input = CreateInvoiceInput {
+        kind: "credit_note".into(),
+        third_party_id: src.third_party_id,
+        quote_id: None,
+        parent_invoice_id: Some(src.id),
+        issue_date: src.issue_date.clone(),
+        due_date: None,
+        service_date: src.service_date.clone(),
+        vat_mode: src.vat_mode.clone(),
+        notes: Some(format!(
+            "Avoir sur {}",
+            src.number.as_deref().unwrap_or(&format!("#{}", src.id))
+        )),
+        legal_mentions: src.legal_mentions.clone(),
+        lines,
+    };
+    create_invoice(conn, &input)
+}
+
+/// Acompte brouillon lié à une facture marché (compte 4191 par défaut).
+pub fn create_deposit_invoice(
+    conn: &Connection,
+    parent_invoice_id: i64,
+    amount_ht_cents: i64,
+    vat_rate_bp: i32,
+    vat_code: Option<String>,
+) -> DbResult<Invoice> {
+    let parent = get_invoice(conn, parent_invoice_id)?;
+    if parent.kind == "credit_note" {
+        return Err("Pas d'acompte sur un avoir".into());
+    }
+    if amount_ht_cents <= 0 {
+        return Err("Montant d'acompte invalide".into());
+    }
+    let input = CreateInvoiceInput {
+        kind: "deposit".into(),
+        third_party_id: parent.third_party_id,
+        quote_id: parent.quote_id,
+        parent_invoice_id: Some(parent.id),
+        issue_date: parent.issue_date.clone(),
+        due_date: parent.due_date.clone(),
+        service_date: None,
+        vat_mode: parent.vat_mode.clone(),
+        notes: Some(format!(
+            "Acompte sur {}",
+            parent.number.as_deref().unwrap_or(&format!("#{}", parent.id))
+        )),
+        legal_mentions: parent.legal_mentions.clone(),
+        lines: vec![InvoiceLineInput {
+            label: "Acompte".into(),
+            quantity_milli: 1000,
+            unit: "u".into(),
+            unit_price_cents: amount_ht_cents,
+            ht_cents: amount_ht_cents,
+            vat_rate_bp,
+            vat_code,
+            account_number: default_account_for_kind("deposit").into(),
+            analytic_code: None,
+        }],
+    };
+    create_invoice(conn, &input)
+}
+
 /// Conversion devis accepté → facture brouillon (numéro réservé à l'émission).
 pub fn convert_quote_to_invoice(conn: &Connection, quote_id: i64) -> DbResult<Invoice> {
     // Idempotence d'abord : un devis déjà converti renvoie la facture liée.
@@ -777,15 +1108,27 @@ pub fn build_invoice_entry_draft(conn: &Connection, invoice_id: i64) -> DbResult
 }
 
 fn build_vte_lines_from_invoice(inv: &Invoice) -> DbResult<Vec<EntryLineInput>> {
+    let reverse = inv.kind == "credit_note";
     let mut lines = Vec::new();
     let mut ht_sum = 0i64;
     for l in &inv.lines {
         ht_sum += l.ht_cents;
+        let account = if inv.kind == "deposit" && l.account_number.starts_with('7') {
+            default_account_for_kind("deposit").to_string()
+        } else {
+            l.account_number.clone()
+        };
+        // Vente : crédit produit / 4191 ; avoir : débit (sens inverse)
+        let (debit, credit) = if reverse {
+            (l.ht_cents, 0)
+        } else {
+            (0, l.ht_cents)
+        };
         lines.push(EntryLineInput {
-            account_number: l.account_number.clone(),
+            account_number: account,
             label: Some(l.label.clone()),
-            debit_cents: 0,
-            credit_cents: l.ht_cents,
+            debit_cents: debit,
+            credit_cents: credit,
             vat_code: l.vat_code.clone(),
             third_party_id: None,
             comp_aux_type: None,
@@ -798,32 +1141,37 @@ fn build_vte_lines_from_invoice(inv: &Invoice) -> DbResult<Vec<EntryLineInput>> 
         _ => ht_sum, // sans / autoliquidation chantier
     };
     if inv.vat_mode == "normale" && vat > 0 {
+        let (debit, credit) = if reverse { (vat, 0) } else { (0, vat) };
         lines.push(EntryLineInput {
             account_number: "44571".into(),
-            label: Some("TVA collectée".into()),
-            debit_cents: 0,
-            credit_cents: vat,
+            label: Some(if reverse {
+                "TVA collectée (avoir)".into()
+            } else {
+                "TVA collectée".into()
+            }),
+            debit_cents: debit,
+            credit_cents: credit,
             vat_code: inv.vat_code.clone().or_else(|| {
-                inv.lines
-                    .iter()
-                    .find_map(|l| l.vat_code.clone())
+                inv.lines.iter().find_map(|l| l.vat_code.clone())
             }),
             third_party_id: None,
             comp_aux_type: None,
             comp_aux_num: None,
         });
     }
+    // Client 411 : débit TTC en vente, crédit TTC en avoir
+    let (debit, credit) = if reverse { (0, ttc) } else { (ttc, 0) };
     lines.push(EntryLineInput {
         account_number: "411".into(),
         label: Some(format!("Client {}", inv.third_party_code)),
-        debit_cents: ttc,
-        credit_cents: 0,
+        debit_cents: debit,
+        credit_cents: credit,
         vat_code: None,
         third_party_id: Some(inv.third_party_id),
         comp_aux_type: Some("client".into()),
         comp_aux_num: Some(inv.third_party_code.clone()),
     });
-    let _ = INVOICE_STATUSES; // keep statuses referenced for future issue flow
+    let _ = INVOICE_STATUSES;
     Ok(lines)
 }
 
@@ -988,6 +1336,163 @@ pub fn export_quote_pdf(
     Ok(())
 }
 
+pub fn export_invoice_pdf(
+    conn: &Connection,
+    invoice_id: i64,
+    path: &Path,
+) -> DbResult<()> {
+    let inv = get_invoice(conn, invoice_id)?;
+    let org = crate::db::load_organization(conn)?;
+    let title = match inv.kind.as_str() {
+        "deposit" => "FACTURE D'ACOMPTE",
+        "balance" => "FACTURE DE SOLDE",
+        "credit_note" => "AVOIR",
+        _ => "FACTURE",
+    };
+    let number = inv
+        .number
+        .clone()
+        .unwrap_or_else(|| format!("BROUILLON-{}", inv.id));
+    let (doc, page1, layer1) = PdfDocument::new("SasCompta Facture", Mm(210.0), Mm(297.0), "L1");
+    let font = doc
+        .add_builtin_font(BuiltinFont::Helvetica)
+        .map_err(|e| format!("PDF font: {e}"))?;
+    let mut layer = doc.get_page(page1).get_layer(layer1);
+    let mut y = 280.0;
+
+    layer.use_text(ascii_safe(&org.name), 14.0, Mm(15.0), Mm(y), &font);
+    y -= 6.0;
+    if let Some(addr) = &org.address {
+        for line in addr.lines() {
+            layer.use_text(ascii_safe(line), 9.0, Mm(15.0), Mm(y), &font);
+            y -= 4.5;
+        }
+    }
+    layer.use_text(
+        ascii_safe(&format!(
+            "SIREN {}{}",
+            org.siren,
+            org.siret
+                .as_ref()
+                .map(|s| format!(" — SIRET {s}"))
+                .unwrap_or_default()
+        )),
+        8.0,
+        Mm(15.0),
+        Mm(y),
+        &font,
+    );
+    y -= 12.0;
+    layer.use_text(
+        ascii_safe(&format!("{title} {number}")),
+        16.0,
+        Mm(15.0),
+        Mm(y),
+        &font,
+    );
+    y -= 7.0;
+    layer.use_text(
+        ascii_safe(&format!(
+            "Date {}  |  Statut {}  |  Client {} ({})",
+            inv.issue_date, inv.status, inv.third_party_name, inv.third_party_code
+        )),
+        9.0,
+        Mm(15.0),
+        Mm(y),
+        &font,
+    );
+    y -= 5.0;
+    if let Some(due) = &inv.due_date {
+        layer.use_text(
+            ascii_safe(&format!("Echeance {due}")),
+            9.0,
+            Mm(15.0),
+            Mm(y),
+            &font,
+        );
+        y -= 5.0;
+    }
+    if let Some(parent) = inv.parent_invoice_id {
+        layer.use_text(
+            ascii_safe(&format!("Document lie a facture #{parent}")),
+            8.0,
+            Mm(15.0),
+            Mm(y),
+            &font,
+        );
+        y -= 5.0;
+    }
+    y -= 4.0;
+    layer.use_text(ascii_safe("Lignes"), 11.0, Mm(15.0), Mm(y), &font);
+    y -= 6.0;
+    for line in &inv.lines {
+        if y < 40.0 {
+            let (p, l) = doc.add_page(Mm(210.0), Mm(297.0), "L");
+            layer = doc.get_page(p).get_layer(l);
+            y = 280.0;
+        }
+        let qty = line.quantity_milli as f64 / 1000.0;
+        let row = format!(
+            "{}. {}  {} {} x {} = {} HT  TVA {}%",
+            line.line_no,
+            line.label,
+            qty,
+            line.unit,
+            cents_fr(line.unit_price_cents),
+            cents_fr(line.ht_cents),
+            format_rate(line.vat_rate_bp),
+        );
+        layer.use_text(ascii_safe(&row), 8.0, Mm(15.0), Mm(y), &font);
+        y -= 5.0;
+    }
+    y -= 6.0;
+    layer.use_text(
+        ascii_safe(&format!(
+            "Total HT {}   TVA {}   Total TTC {}",
+            cents_fr(inv.ht_cents),
+            cents_fr(inv.vat_cents),
+            cents_fr(inv.ttc_cents),
+        )),
+        11.0,
+        Mm(15.0),
+        Mm(y),
+        &font,
+    );
+    y -= 8.0;
+    if let Some(notes) = &inv.notes {
+        layer.use_text(ascii_safe(&format!("Notes: {notes}")), 8.0, Mm(15.0), Mm(y), &font);
+        y -= 5.0;
+    }
+    if let Some(legal) = &inv.legal_mentions {
+        for chunk in wrap_text(legal, 95) {
+            if y < 20.0 {
+                break;
+            }
+            layer.use_text(ascii_safe(&chunk), 7.0, Mm(15.0), Mm(y), &font);
+            y -= 4.0;
+        }
+    }
+    y -= 8.0;
+    layer.use_text(
+        ascii_safe("Document genere par SasCompta."),
+        7.0,
+        Mm(15.0),
+        Mm(y),
+        &font,
+    );
+
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    doc.save(&mut BufWriter::new(File::create(path)?))
+        .map_err(|e| format!("PDF save: {e}"))?;
+    conn.execute(
+        "UPDATE invoice SET pdf_path = ?1, updated_at = ?2 WHERE id = ?3",
+        params![path.display().to_string(), now_iso(), invoice_id],
+    )?;
+    Ok(())
+}
+
 fn format_rate(bp: i32) -> String {
     format!("{}.{:02}", bp / 100, bp % 100)
 }
@@ -1057,6 +1562,32 @@ pub fn seed_demo_quotes(conn: &Connection) -> DbResult<()> {
     };
     let q = create_quote(conn, &input)?;
     set_quote_status(conn, q.id, "sent")?;
+
+    // Facture brouillon standalone (démo UI Factures)
+    let inv_input = CreateInvoiceInput {
+        kind: "standard".into(),
+        third_party_id: client_id,
+        quote_id: None,
+        parent_invoice_id: None,
+        issue_date: "2026-04-01".into(),
+        due_date: Some("2026-04-30".into()),
+        service_date: Some("2026-03-28".into()),
+        vat_mode: "normale".into(),
+        notes: Some("Maintenance annuelle détection".into()),
+        legal_mentions: None,
+        lines: vec![InvoiceLineInput {
+            label: "Contrat maintenance annuelle".into(),
+            quantity_milli: 1000,
+            unit: "u".into(),
+            unit_price_cents: 120_000,
+            ht_cents: 0,
+            vat_rate_bp: 2000,
+            vat_code: Some("T20C".into()),
+            account_number: "706".into(),
+            analytic_code: None,
+        }],
+    };
+    let _ = create_invoice(conn, &inv_input)?;
     Ok(())
 }
 
@@ -1133,5 +1664,77 @@ mod tests {
         let conn = open_connection(&path).unwrap();
         let q = list_quotes(&conn).unwrap().into_iter().next().unwrap();
         assert!(delete_quote(&conn, q.id).is_err());
+    }
+
+    #[test]
+    fn issue_numbering_credit_note_and_deposit() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("bill3.sascompta");
+        create_demo_workspace(&path).unwrap();
+        let conn = open_connection(&path).unwrap();
+
+        let draft = list_invoices(&conn)
+            .unwrap()
+            .into_iter()
+            .find(|i| i.status == "draft")
+            .expect("demo invoice");
+        assert!(draft.number.is_none());
+
+        let issued = issue_invoice(&conn, draft.id).unwrap();
+        assert_eq!(issued.status, "issued");
+        let num = issued.number.as_deref().unwrap();
+        assert!(num.starts_with("FACT-2026-"), "{num}");
+        assert!(issued.entry_id.is_some()); // VTE draft auto
+
+        let entry = get_invoice(&conn, issued.id).unwrap();
+        let entry_id = entry.entry_id.unwrap();
+        let status: String = conn
+            .query_row(
+                "SELECT status FROM entry WHERE id = ?1",
+                params![entry_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(status, "draft");
+
+        // Regenerate VTE = same draft id
+        let rebuilt = build_invoice_entry_draft(&conn, issued.id).unwrap();
+        assert_eq!(rebuilt.id, entry_id);
+
+        let credit = create_credit_note(&conn, issued.id).unwrap();
+        assert_eq!(credit.kind, "credit_note");
+        assert_eq!(credit.status, "draft");
+        assert_eq!(credit.parent_invoice_id, Some(issued.id));
+        let credit_issued = issue_invoice(&conn, credit.id).unwrap();
+        assert!(credit_issued
+            .number
+            .as_deref()
+            .unwrap()
+            .starts_with("AVO-2026-"));
+
+        let deposit = create_deposit_invoice(
+            &conn,
+            issued.id,
+            50_000,
+            2000,
+            Some("T20C".into()),
+        )
+        .unwrap();
+        assert_eq!(deposit.kind, "deposit");
+        assert_eq!(deposit.lines[0].account_number, "4191");
+        let dep_issued = issue_invoice(&conn, deposit.id).unwrap();
+        assert!(dep_issued
+            .number
+            .as_deref()
+            .unwrap()
+            .starts_with("ACMP-2026-"));
+
+        let pdf = dir.path().join("facture.pdf");
+        export_invoice_pdf(&conn, issued.id, &pdf).unwrap();
+        assert!(pdf.exists());
+
+        // Pas de double post silencieux
+        ledger::post_entry(&conn, entry_id).unwrap();
+        assert!(build_invoice_entry_draft(&conn, issued.id).is_err());
     }
 }

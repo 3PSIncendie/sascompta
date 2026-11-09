@@ -726,6 +726,31 @@ button.linkish {
   border-color: transparent;
 }
 
+.pill-status.status-issued,
+.pill-status.status-sent {
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+  border-color: transparent;
+}
+
+.pill-status.status-paid {
+  background: rgba(26, 122, 82, 0.12);
+  color: var(--ok);
+  border-color: transparent;
+}
+
+.pill-status.status-partially_paid {
+  background: rgba(18, 181, 201, 0.15);
+  color: var(--accent-ink);
+  border-color: transparent;
+}
+
+.pill-status.status-cancelled {
+  background: rgba(155, 44, 44, 0.1);
+  color: var(--danger);
+  border-color: transparent;
+}
+
 .hint {
   color: var(--ink-muted);
   font-size: 0.9rem;

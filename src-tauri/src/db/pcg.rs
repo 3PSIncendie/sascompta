@@ -37,6 +37,7 @@ pub fn seed_accounts(conn: &Connection) -> DbResult<()> {
         ("408", "Fournisseurs - factures non parvenues", 4, "liability", false),
         ("411", "Clients", 4, "asset", true),
         ("418", "Clients - factures à établir", 4, "asset", false),
+        ("4191", "Clients - avances et acomptes reçus", 4, "liability", false),
         ("421", "Personnel - rémunérations dues", 4, "liability", false),
         ("431", "Sécurité sociale", 4, "liability", false),
         ("4452", "TVA due par autoliquidation (BTP / art. 283)", 4, "liability", false),

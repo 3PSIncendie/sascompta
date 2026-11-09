@@ -616,3 +616,34 @@ pub struct Invoice {
     pub updated_at: String,
     pub lines: Vec<InvoiceLine>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InvoiceLineInput {
+    pub label: String,
+    pub quantity_milli: i64,
+    pub unit: String,
+    pub unit_price_cents: i64,
+    #[serde(default)]
+    pub ht_cents: i64,
+    pub vat_rate_bp: i32,
+    pub vat_code: Option<String>,
+    pub account_number: String,
+    pub analytic_code: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateInvoiceInput {
+    pub kind: String,
+    pub third_party_id: i64,
+    pub quote_id: Option<i64>,
+    pub parent_invoice_id: Option<i64>,
+    pub issue_date: String,
+    pub due_date: Option<String>,
+    pub service_date: Option<String>,
+    pub vat_mode: String,
+    pub notes: Option<String>,
+    pub legal_mentions: Option<String>,
+    pub lines: Vec<InvoiceLineInput>,
+}
