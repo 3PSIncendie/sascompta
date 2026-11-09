@@ -10,6 +10,7 @@ import type {
   ClosingEventInfo,
   CreateEntryInput,
   CreateFixedAssetInput,
+  CreateQuoteInput,
   CreateThirdPartyInput,
   CreateWorkspaceInput,
   DepreciationRun,
@@ -18,10 +19,12 @@ import type {
   FiscalYear,
   FixedAsset,
   GenerateDepreciationResult,
+  Invoice,
   Journal,
   LedgerFilter,
   LedgerMovement,
   PublicationPackMeta,
+  Quote,
   ThirdParty,
   UpdateOrganizationInput,
   VatCode,
@@ -168,4 +171,23 @@ export const api = {
     }),
   lastClosingEvent: () =>
     invoke<ClosingEventInfo | null>("last_closing_event"),
+
+  listQuotes: () => invoke<Quote[]>("list_quotes"),
+  getQuote: (id: number) => invoke<Quote>("get_quote", { id }),
+  createQuote: (input: CreateQuoteInput) =>
+    invoke<Quote>("create_quote", { input }),
+  updateQuote: (id: number, input: CreateQuoteInput) =>
+    invoke<Quote>("update_quote", { id, input }),
+  setQuoteStatus: (id: number, status: string) =>
+    invoke<Quote>("set_quote_status", { id, status }),
+  deleteQuote: (id: number) => invoke<void>("delete_quote", { id }),
+  exportQuotePdf: (id: number, path: string) =>
+    invoke<void>("export_quote_pdf", { id, path }),
+
+  listInvoices: () => invoke<Invoice[]>("list_invoices"),
+  getInvoice: (id: number) => invoke<Invoice>("get_invoice", { id }),
+  convertQuoteToInvoice: (quoteId: number) =>
+    invoke<Invoice>("convert_quote_to_invoice", { quoteId }),
+  buildInvoiceEntryDraft: (invoiceId: number) =>
+    invoke<Entry>("build_invoice_entry_draft", { invoiceId }),
 };

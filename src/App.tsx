@@ -14,11 +14,32 @@ import { AssetsScreen } from "./screens/AssetsScreen";
 import { StatementsScreen } from "./screens/StatementsScreen";
 import { ClosingScreen } from "./screens/ClosingScreen";
 import { ComingSoonScreen } from "./screens/ComingSoonScreen";
+import { QuotesScreen } from "./screens/QuotesScreen";
 import { api } from "./lib/api";
 import { loadGuideProgress } from "./lib/guideProgress";
 import type { NavId, WorkspaceInfo } from "./lib/types";
 
-/** Aperçu UI navigateur (`?preview=guide`) — sans backend Tauri. */
+const PREVIEW_NAV_IDS: NavId[] = [
+  "guide",
+  "ma-sas",
+  "plan",
+  "journaux",
+  "ecritures",
+  "grand-livre",
+  "tva",
+  "immos",
+  "etats",
+  "cloture",
+  "devis",
+  "factures",
+  "relances",
+  "einvoice",
+  "salaries",
+  "conges",
+  "paie",
+];
+
+/** Aperçu UI navigateur (`?preview` ou `?preview=devis`) — sans backend Tauri. */
 function previewWorkspace(): WorkspaceInfo | null {
   if (typeof window === "undefined") return null;
   if (!new URLSearchParams(window.location.search).has("preview")) return null;
@@ -45,11 +66,20 @@ function previewWorkspace(): WorkspaceInfo | null {
   };
 }
 
+function previewNav(): NavId {
+  if (typeof window === "undefined") return "guide";
+  const raw = new URLSearchParams(window.location.search).get("preview");
+  if (raw && PREVIEW_NAV_IDS.includes(raw as NavId)) return raw as NavId;
+  return "guide";
+}
+
 export default function App() {
   const [workspace, setWorkspace] = useState<WorkspaceInfo | null>(
     () => previewWorkspace(),
   );
-  const [nav, setNav] = useState<NavId>("guide");
+  const [nav, setNav] = useState<NavId>(() =>
+    previewWorkspace() ? previewNav() : "guide",
+  );
 
   async function handleClose() {
     if (previewWorkspace()) {
@@ -112,18 +142,12 @@ export default function App() {
           onWorkspaceChange={setWorkspace}
         />
       )}
-      {nav === "devis" && (
-        <ComingSoonScreen
-          group="Commercial"
-          title="Devis"
-          blurb="Chiffrez vos propositions clients, puis transformez-les en facture sans re-saisie."
-        />
-      )}
+      {nav === "devis" && <QuotesScreen />}
       {nav === "factures" && (
         <ComingSoonScreen
           group="Commercial"
           title="Factures"
-          blurb="Factures, acomptes et avoirs avec écritures VTE automatiques en brouillon."
+          blurb="Factures, acomptes et avoirs avec écritures VTE automatiques en brouillon — schéma et hooks prêts depuis les devis acceptés."
         />
       )}
       {nav === "relances" && (

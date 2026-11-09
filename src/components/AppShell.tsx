@@ -35,7 +35,7 @@ const NAV_GROUPS: NavGroup[] = [
     id: "commercial",
     label: "Commercial",
     items: [
-      { id: "devis", label: "Devis", soon: true },
+      { id: "devis", label: "Devis" },
       { id: "factures", label: "Factures", soon: true },
       { id: "relances", label: "Relances", soon: true },
       { id: "einvoice", label: "E-facture", soon: true },

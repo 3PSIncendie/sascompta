@@ -669,6 +669,63 @@ tr:hover td {
   font-size: 0.8rem;
 }
 
+.btn-row.tight {
+  gap: 0.35rem;
+  flex-wrap: wrap;
+}
+
+button.linkish {
+  background: none;
+  border: none;
+  color: var(--brand-soft);
+  font-weight: 600;
+  padding: 0;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.pill-status {
+  display: inline-block;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  padding: 0.2rem 0.45rem;
+  border-radius: 6px;
+  background: var(--surface-tint);
+  color: var(--ink-muted);
+  border: 1px solid var(--line);
+}
+
+.pill-status.status-draft {
+  background: var(--surface-tint);
+}
+
+.pill-status.status-sent {
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+  border-color: transparent;
+}
+
+.pill-status.status-accepted {
+  background: rgba(26, 122, 82, 0.12);
+  color: var(--ok);
+  border-color: transparent;
+}
+
+.pill-status.status-refused,
+.pill-status.status-expired {
+  background: rgba(155, 44, 44, 0.1);
+  color: var(--danger);
+  border-color: transparent;
+}
+
+.pill-status.status-invoiced {
+  background: rgba(11, 74, 92, 0.12);
+  color: var(--brand);
+  border-color: transparent;
+}
+
 .hint {
   color: var(--ink-muted);
   font-size: 0.9rem;

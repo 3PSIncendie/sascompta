@@ -147,12 +147,135 @@ export interface ThirdParty {
   kind: string;
   accountNumber: string;
   active: boolean;
+  siret?: string | null;
+  email?: string | null;
+  address?: string | null;
+  routingId?: string | null;
 }
 
 export interface CreateThirdPartyInput {
   code: string;
   name: string;
   kind: string;
+  siret?: string | null;
+  email?: string | null;
+  address?: string | null;
+  routingId?: string | null;
+}
+
+export type QuoteStatus =
+  | "draft"
+  | "sent"
+  | "accepted"
+  | "refused"
+  | "expired"
+  | "invoiced";
+
+export type BillingVatMode =
+  | "normale"
+  | "sans"
+  | "autoliquidation_chantier";
+
+export interface QuoteLine {
+  id: number;
+  quoteId: number;
+  lineNo: number;
+  label: string;
+  quantityMilli: number;
+  unit: string;
+  unitPriceCents: number;
+  htCents: number;
+  vatRateBp: number;
+  vatCode: string | null;
+  accountNumber: string;
+}
+
+export interface QuoteLineInput {
+  label: string;
+  quantityMilli: number;
+  unit: string;
+  unitPriceCents: number;
+  htCents?: number;
+  vatRateBp: number;
+  vatCode?: string | null;
+  accountNumber: string;
+}
+
+export interface Quote {
+  id: number;
+  number: string;
+  thirdPartyId: number;
+  thirdPartyCode: string;
+  thirdPartyName: string;
+  status: QuoteStatus | string;
+  issueDate: string;
+  validUntil: string | null;
+  currency: string;
+  htCents: number;
+  vatCents: number;
+  ttcCents: number;
+  vatMode: BillingVatMode | string;
+  notes: string | null;
+  legalMentions: string | null;
+  createdAt: string;
+  updatedAt: string;
+  lines: QuoteLine[];
+}
+
+export interface CreateQuoteInput {
+  thirdPartyId: number;
+  issueDate: string;
+  validUntil?: string | null;
+  vatMode: BillingVatMode | string;
+  notes?: string | null;
+  legalMentions?: string | null;
+  lines: QuoteLineInput[];
+}
+
+export interface InvoiceLine {
+  id: number;
+  invoiceId: number;
+  lineNo: number;
+  label: string;
+  quantityMilli: number;
+  unit: string;
+  unitPriceCents: number;
+  htCents: number;
+  vatRateBp: number;
+  vatCode: string | null;
+  accountNumber: string;
+  analyticCode: string | null;
+}
+
+export interface Invoice {
+  id: number;
+  number: string | null;
+  kind: string;
+  thirdPartyId: number;
+  thirdPartyCode: string;
+  thirdPartyName: string;
+  quoteId: number | null;
+  parentInvoiceId: number | null;
+  status: string;
+  issueDate: string;
+  dueDate: string | null;
+  serviceDate: string | null;
+  htCents: number;
+  vatCents: number;
+  ttcCents: number;
+  paidCents: number;
+  vatMode: string;
+  vatCode: string | null;
+  einvoiceProfile: string;
+  einvoiceStatus: string;
+  entryId: number | null;
+  pdfPath: string | null;
+  facturxPath: string | null;
+  notes: string | null;
+  legalMentions: string | null;
+  createdAt: string;
+  updatedAt: string;
+  lines: InvoiceLine[];
 }
 
 export interface LedgerFilter {
