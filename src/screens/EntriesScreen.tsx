@@ -24,6 +24,7 @@ import type {
   Entry,
   EntryLineInput,
   Journal,
+  NavId,
   ThirdParty,
   VatCode,
 } from "../lib/types";
@@ -38,7 +39,11 @@ const emptyLine = (): EntryLineInput => ({
 
 type EntryMode = "libre" | "guidee";
 
-export function EntriesScreen() {
+type Props = {
+  onNavigate?: (id: NavId) => void;
+};
+
+export function EntriesScreen({ onNavigate }: Props) {
   const [entries, setEntries] = useState<Entry[]>([]);
   const [journals, setJournals] = useState<Journal[]>([]);
   const [accounts, setAccounts] = useState<Account[]>([]);
@@ -373,6 +378,19 @@ export function EntriesScreen() {
           <LabelWithHelp topic="contrepartie">contrepartie</LabelWithHelp>. Tout reste
           modifiable ensuite.
         </p>
+        {onNavigate && (
+          <p>
+            Ou{" "}
+            <button
+              type="button"
+              className="linkish"
+              onClick={() => onNavigate("import-docs")}
+            >
+              importez une facture fournisseur (PDF)
+            </button>{" "}
+            : revue guidée puis brouillon ACH — validation journal toujours manuelle.
+          </p>
+        )}
       </aside>
 
       <div className="btn-row" style={{ marginBottom: "1rem" }}>

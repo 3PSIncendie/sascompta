@@ -1079,3 +1079,56 @@ pub fn export_annual_pack(
     })
     .map_err(map_err)
 }
+
+#[tauri::command]
+pub fn analyze_document_import(
+    state: State<'_, AppState>,
+    path: String,
+) -> Result<DocumentImport, String> {
+    let path_guard = state.path.lock().map_err(|e| e.to_string())?;
+    let workspace = path_guard
+        .as_ref()
+        .ok_or("Aucun workspace ouvert")?
+        .clone();
+    drop(path_guard);
+    db::with_conn(&state, |c| {
+        db::documents::analyze_document(c, &workspace, std::path::Path::new(&path))
+    })
+    .map_err(map_err)
+}
+
+#[tauri::command]
+pub fn list_document_imports(
+    state: State<'_, AppState>,
+    status: Option<String>,
+) -> Result<Vec<DocumentImport>, String> {
+    db::with_conn(&state, |c| {
+        db::documents::list_document_imports(c, status.as_deref())
+    })
+    .map_err(map_err)
+}
+
+#[tauri::command]
+pub fn get_document_import(
+    state: State<'_, AppState>,
+    id: i64,
+) -> Result<DocumentImport, String> {
+    db::with_conn(&state, |c| db::documents::get_document_import(c, id)).map_err(map_err)
+}
+
+#[tauri::command]
+pub fn confirm_document_import(
+    state: State<'_, AppState>,
+    id: i64,
+    input: ConfirmDocumentImportInput,
+) -> Result<DocumentImport, String> {
+    db::with_conn(&state, |c| {
+        db::documents::confirm_document_import(c, id, &input)
+    })
+    .map_err(map_err)
+}
+
+#[tauri::command]
+pub fn discard_document_import(state: State<'_, AppState>, id: i64) -> Result<(), String> {
+    db::with_conn(&state, |c| db::documents::discard_document_import(c, id)).map_err(map_err)
+}

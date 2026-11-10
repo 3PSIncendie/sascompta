@@ -1783,3 +1783,157 @@ label {
     transform: translateY(0);
   }
 }
+
+/* —— Import documents (lot 1 facture fournisseur) —— */
+.panel-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem 1.25rem;
+  margin-bottom: 0.75rem;
+}
+
+.panel-head p {
+  max-width: 52rem;
+}
+
+.import-dropzone {
+  margin: 0 0 1.25rem;
+  padding: 1.25rem 1.35rem;
+  border: 1.5px dashed var(--line);
+  border-radius: var(--radius);
+  background:
+    linear-gradient(135deg, rgba(82, 155, 116, 0.08), transparent 55%),
+    var(--surface);
+  transition: border-color 0.2s var(--motion-ease), background 0.2s var(--motion-ease);
+}
+
+.import-dropzone.is-over {
+  border-color: var(--brand);
+  background: var(--accent-soft);
+}
+
+.import-dropzone .tiny,
+.muted.tiny,
+.field-hint {
+  display: block;
+  margin-top: 0.35rem;
+  font-size: 0.82rem;
+  color: var(--ink-muted);
+}
+
+.field-hint.warn {
+  color: var(--accent-ink);
+}
+
+.document-import-layout {
+  display: grid;
+  grid-template-columns: minmax(200px, 260px) 1fr;
+  gap: 1.25rem;
+  align-items: start;
+}
+
+.document-import-list ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.document-import-list li button {
+  width: 100%;
+  text-align: left;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 0.65rem 0.75rem;
+  margin-bottom: 0.45rem;
+  cursor: pointer;
+  color: inherit;
+}
+
+.document-import-list li button.is-active {
+  border-color: var(--brand);
+  background: var(--surface-tint);
+  box-shadow: 0 0 0 1px rgba(58, 125, 92, 0.25);
+}
+
+.document-import-list .doc-name {
+  display: block;
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.document-import-list .doc-meta {
+  display: block;
+  font-size: 0.78rem;
+  color: var(--ink-muted);
+  margin-top: 0.15rem;
+}
+
+.document-import-review .hint-banner {
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+  border-radius: 10px;
+  padding: 0.65rem 0.85rem;
+  font-size: 0.9rem;
+}
+
+.document-import-review .form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0.75rem 1rem;
+  margin: 1rem 0;
+}
+
+.document-import-review .form-grid .span-2 {
+  grid-column: 1 / -1;
+}
+
+.proposed-lines {
+  margin: 1rem 0;
+  overflow-x: auto;
+}
+
+.proposed-lines table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+.proposed-lines th,
+.proposed-lines td {
+  text-align: left;
+  padding: 0.4rem 0.5rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.raw-extract {
+  margin-top: 1rem;
+}
+
+.raw-extract pre {
+  max-height: 180px;
+  overflow: auto;
+  background: var(--surface-tint);
+  border-radius: 8px;
+  padding: 0.75rem;
+  font-size: 0.78rem;
+  white-space: pre-wrap;
+}
+
+button.linkish {
+  background: none;
+  border: none;
+  color: var(--brand);
+  text-decoration: underline;
+  cursor: pointer;
+  padding: 0;
+  font: inherit;
+}
+
+@media (max-width: 860px) {
+  .document-import-layout {
+    grid-template-columns: 1fr;
+  }
+}
