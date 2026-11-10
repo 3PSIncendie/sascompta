@@ -8,6 +8,7 @@ import { MaSasScreen } from "./screens/MaSasScreen";
 import { ChartScreen } from "./screens/ChartScreen";
 import { JournalsScreen } from "./screens/JournalsScreen";
 import { EntriesScreen } from "./screens/EntriesScreen";
+import { DocumentImportScreen } from "./screens/DocumentImportScreen";
 import { LedgerScreen } from "./screens/LedgerScreen";
 import { TaxScreen } from "./screens/TaxScreen";
 import { AssetsScreen } from "./screens/AssetsScreen";
@@ -30,6 +31,7 @@ const PREVIEW_NAV_IDS: NavId[] = [
   "plan",
   "journaux",
   "ecritures",
+  "import-docs",
   "grand-livre",
   "tva",
   "immos",
@@ -136,7 +138,10 @@ export default function App() {
       )}
       {nav === "plan" && <ChartScreen />}
       {nav === "journaux" && <JournalsScreen />}
-      {nav === "ecritures" && <EntriesScreen />}
+      {nav === "ecritures" && <EntriesScreen onNavigate={setNav} />}
+      {nav === "import-docs" && (
+        <DocumentImportScreen onNavigate={setNav} />
+      )}
       {nav === "grand-livre" && <LedgerScreen />}
       {nav === "tva" && <TaxScreen />}
       {nav === "immos" && <AssetsScreen />}

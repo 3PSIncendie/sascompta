@@ -979,3 +979,46 @@ pub struct CreateEreportingBatchInput {
     pub kind: String,
     pub dest_path: String,
 }
+
+/// Import document (PDF/image) — revue humaine avant brouillon d’écriture.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DocumentImport {
+    pub id: i64,
+    pub doc_type: String,
+    pub source_file_name: String,
+    pub stored_path: String,
+    pub mime_type: Option<String>,
+    pub extraction_method: String,
+    pub extraction: serde_json::Value,
+    pub confidence: f64,
+    pub status: String,
+    pub entry_id: Option<i64>,
+    pub created_at: String,
+    pub confirmed_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfirmDocumentImportInput {
+    pub doc_type: String,
+    pub entry_date: String,
+    pub piece_ref: String,
+    pub label: String,
+    pub journal_code: String,
+    pub ht_cents: i64,
+    #[serde(default)]
+    pub vat_cents: Option<i64>,
+    pub rate_bp: i32,
+    pub vat_mode: String,
+    pub vat_code: String,
+    pub ht_account: String,
+    #[serde(default)]
+    pub third_party_id: Option<i64>,
+    #[serde(default)]
+    pub create_supplier_name: Option<String>,
+    #[serde(default)]
+    pub create_supplier_code: Option<String>,
+    #[serde(default)]
+    pub create_supplier_siret: Option<String>,
+}

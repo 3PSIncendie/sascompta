@@ -214,6 +214,17 @@ export const HELP: Record<string, HelpTopic> = {
       "Le numéro qui sera attribué à la prochaine émission de cette série. SasCompta refuse une valeur trop basse si un document portant ce numéro (ou un numéro supérieur) existe déjà dans le fichier.",
     example: "Série FACT, exercice 2026 → aperçu FACT-2026-0042",
   },
+  importDocType: {
+    term: "Type de document",
+    plain:
+      "Ce que SasCompta croit reconnaître (facture fournisseur, ticket, relevé…). Lot 1 : seul « Facture fournisseur » crée un brouillon ACH. Les autres types réutilisent le même écran dès qu’un modèle d’écriture est branché. Vous pouvez corriger le type avant de confirmer.",
+    example: "PDF « FA-2026-0042 » → Facture fournisseur → journal ACH",
+  },
+  importRevue: {
+    term: "Revue avant brouillon",
+    plain:
+      "Étape obligatoire : vous vérifiez date, montants HT/TVA/TTC, fournisseur et lignes proposées. Rien n’est écrit en compta tant que vous n’avez pas confirmé. La validation du journal (post) reste une seconde étape dans Écritures.",
+  },
 };
 
 export function helpPlain(key: keyof typeof HELP): string {

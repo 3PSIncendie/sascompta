@@ -705,6 +705,7 @@ export type NavId =
   | "plan"
   | "journaux"
   | "ecritures"
+  | "import-docs"
   | "grand-livre"
   | "tva"
   | "immos"

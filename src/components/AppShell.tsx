@@ -24,6 +24,7 @@ const NAV_GROUPS: NavGroup[] = [
       { id: "plan", label: "Plan comptable" },
       { id: "journaux", label: "Journaux" },
       { id: "ecritures", label: "Écritures" },
+      { id: "import-docs", label: "Import docs" },
       { id: "grand-livre", label: "Grand livre" },
       { id: "tva", label: "TVA & tiers" },
       { id: "immos", label: "Immobilisations" },

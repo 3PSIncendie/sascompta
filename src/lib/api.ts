@@ -53,6 +53,10 @@ import type {
   VatReport,
   WorkspaceInfo,
 } from "./types";
+import type {
+  ConfirmDocumentImportInput,
+  DocumentImport,
+} from "./documentImport";
 
 export const api = {
   listKnownWorkspaces: () => invoke<KnownWorkspace[]>("list_known_workspaces"),
@@ -262,6 +266,18 @@ export const api = {
     invoke<EinvoiceQueueItem>("export_facturx", { invoiceId, destDir }),
   importEinvoiceFile: (path: string) =>
     invoke<EinvoiceQueueItem>("import_einvoice_file", { path }),
+  analyzeDocumentImport: (path: string) =>
+    invoke<DocumentImport>("analyze_document_import", { path }),
+  listDocumentImports: (status?: string | null) =>
+    invoke<DocumentImport[]>("list_document_imports", {
+      status: status ?? null,
+    }),
+  getDocumentImport: (id: number) =>
+    invoke<DocumentImport>("get_document_import", { id }),
+  confirmDocumentImport: (id: number, input: ConfirmDocumentImportInput) =>
+    invoke<DocumentImport>("confirm_document_import", { id, input }),
+  discardDocumentImport: (id: number) =>
+    invoke<void>("discard_document_import", { id }),
   pdpStubSubmit: (queueId: number) =>
     invoke<EinvoiceQueueItem>("pdp_stub_submit", { queueId }),
   listEreportingBatches: () =>
