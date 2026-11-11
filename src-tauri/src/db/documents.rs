@@ -1,8 +1,8 @@
-//! Import de documents (lot 1 : PDF facture fournisseur → brouillon ACH/TVA).
+//! Import de documents → brouillon d’écriture (revue humaine obligatoire).
 //!
-//! Architecture extensible : classifiers typés + modèles de lignes par `doc_type`.
-//! Les types futurs (tickets, relevés, notes de frais, factures clients) branchent
-//! un classifier + un template sans refondre le flux analyse → revue → confirmation.
+//! Types pris en charge : facture fournisseur (ACH), facture client (VTE),
+//! note de frais / reçu (ACH ou OD), ticket de caisse (OD/ACH), relevé bancaire (BQ).
+//! Flux commun : analyse locale → revue → confirmation → `create_draft` + pièce jointe.
 
 use super::ledger;
 use super::tax;
@@ -28,9 +28,48 @@ pub const DOC_TYPES: &[&str] = &[
     "unknown",
 ];
 
-/// Types pour lesquels un modèle d’écriture est implémenté (lot 1).
+/// Types pour lesquels un modèle d’écriture est implémenté.
 pub fn posting_supported(doc_type: &str) -> bool {
-    doc_type == "supplier_invoice"
+    matches!(
+        doc_type,
+        "supplier_invoice"
+            | "customer_invoice"
+            | "expense_receipt"
+            | "bank_statement"
+            | "ticket"
+    )
+}
+
+pub fn default_journal_for(doc_type: &str) -> &'static str {
+    match doc_type {
+        "supplier_invoice" => "ACH",
+        "customer_invoice" => "VTE",
+        "expense_receipt" => "ACH",
+        "bank_statement" => "BQ",
+        "ticket" => "OD",
+        _ => "OD",
+    }
+}
+
+pub fn default_ht_account_for(doc_type: &str, reverse: bool) -> &'static str {
+    match doc_type {
+        "supplier_invoice" if reverse => "604",
+        "supplier_invoice" => "606",
+        "customer_invoice" => "706",
+        "expense_receipt" | "ticket" => "625",
+        "bank_statement" => "471",
+        _ => "606",
+    }
+}
+
+pub fn default_counterpart_for(doc_type: &str) -> &'static str {
+    match doc_type {
+        "supplier_invoice" | "expense_receipt" => "401",
+        "customer_invoice" => "411",
+        "ticket" => "530",
+        "bank_statement" => "512",
+        _ => "401",
+    }
 }
 
 pub fn migrate_documents(conn: &Connection) -> DbResult<()> {
@@ -437,11 +476,15 @@ pub fn classify_document(text: &str) -> (String, f64) {
             "supplier_invoice" => {
                 let mut v: f64 = 0.0;
                 if lower.contains("facture") {
-                    v += 0.35;
+                    v += 0.3;
                 }
-                if lower.contains("fournisseur") || lower.contains("à payer") || lower.contains("a payer")
+                if lower.contains("fournisseur")
+                    || lower.contains("à payer")
+                    || lower.contains("a payer")
+                    || lower.contains("net à payer")
+                    || lower.contains("net a payer")
                 {
-                    v += 0.15;
+                    v += 0.2;
                 }
                 if lower.contains("tva") {
                     v += 0.1;
@@ -453,53 +496,120 @@ pub fn classify_document(text: &str) -> (String, f64) {
                     v += 0.1;
                 }
                 if detect_reverse_charge(&lower) {
-                    v += 0.1;
+                    v += 0.15;
                 }
-                // Customer invoice cues reduce supplier score slightly handled elsewhere
-                v.min(0.98)
+                // Signaux client → baisser le score fournisseur
+                if lower.contains("à votre attention")
+                    || lower.contains("conditions de règlement")
+                    || lower.contains("merci de votre confiance")
+                {
+                    v -= 0.25;
+                }
+                v.max(0.0).min(0.98)
             }
             "customer_invoice" => {
                 let mut v: f64 = 0.0;
                 if lower.contains("facture") {
-                    v += 0.2;
-                }
-                if lower.contains("client") || lower.contains("à votre attention") {
                     v += 0.25;
                 }
-                if lower.contains("conditions de règlement") {
-                    v += 0.1;
+                if lower.contains("client")
+                    || lower.contains("à votre attention")
+                    || lower.contains("a votre attention")
+                {
+                    v += 0.3;
                 }
-                v.min(0.85)
+                if lower.contains("conditions de règlement")
+                    || lower.contains("conditions de reglement")
+                    || lower.contains("merci de votre confiance")
+                {
+                    v += 0.15;
+                }
+                if lower.contains("total ht") || lower.contains("total ttc") {
+                    v += 0.15;
+                }
+                if lower.contains("à payer") || lower.contains("a payer") || lower.contains("fournisseur")
+                {
+                    v -= 0.2;
+                }
+                v.max(0.0).min(0.92)
             }
             "expense_receipt" => {
                 let mut v: f64 = 0.0;
-                if lower.contains("reçu") || lower.contains("ticket de caisse") {
-                    v += 0.4;
+                if lower.contains("note de frais") || lower.contains("notes de frais") {
+                    v += 0.55;
+                }
+                if lower.contains("reçu") || lower.contains("recu ") || lower.starts_with("recu") {
+                    v += 0.35;
+                }
+                if lower.contains("justificatif") || lower.contains("remboursement frais") {
+                    v += 0.25;
+                }
+                if lower.contains("restaurant")
+                    || lower.contains("hôtel")
+                    || lower.contains("hotel")
+                    || lower.contains("taxi")
+                    || lower.contains("péage")
+                    || lower.contains("peage")
+                {
+                    v += 0.15;
                 }
                 if lower.contains("merci de votre visite") {
-                    v += 0.2;
-                }
-                v.min(0.8)
-            }
-            "bank_statement" => {
-                let mut v: f64 = 0.0;
-                if lower.contains("relevé") && lower.contains("compte") {
-                    v += 0.5;
-                }
-                if lower.contains("iban") && lower.contains("solde") {
-                    v += 0.3;
+                    v += 0.15;
                 }
                 v.min(0.9)
             }
-            "ticket" => {
+            "bank_statement" => {
                 let mut v: f64 = 0.0;
-                if lower.contains("ticket") {
+                if lower.contains("relevé de compte")
+                    || lower.contains("releve de compte")
+                    || lower.contains("relevé bancaire")
+                    || lower.contains("releve bancaire")
+                {
+                    v += 0.55;
+                }
+                if lower.contains("relevé") && lower.contains("compte") {
                     v += 0.35;
                 }
-                if lower.contains("cb ") || lower.contains("carte bancaire") {
+                if lower.contains("iban") {
                     v += 0.15;
                 }
-                v.min(0.75)
+                if lower.contains("solde")
+                    && (lower.contains("précédent")
+                        || lower.contains("precedent")
+                        || lower.contains("nouveau solde")
+                        || lower.contains("solde final"))
+                {
+                    v += 0.25;
+                }
+                if lower.contains("bic") && lower.contains("iban") {
+                    v += 0.1;
+                }
+                v.min(0.95)
+            }
+            "ticket" => {
+                let mut v: f64 = 0.0;
+                if lower.contains("ticket de caisse") {
+                    v += 0.5;
+                }
+                if lower.contains("ticket") {
+                    v += 0.25;
+                }
+                if lower.contains("cb ")
+                    || lower.contains("carte bancaire")
+                    || lower.contains("carte bleue")
+                    || lower.contains("sans contact")
+                    || lower.contains("tpe")
+                {
+                    v += 0.2;
+                }
+                if lower.contains("merci de votre visite") || lower.contains("à bientôt") {
+                    v += 0.1;
+                }
+                // Note de frais explicite gagne sur ticket
+                if lower.contains("note de frais") {
+                    v -= 0.3;
+                }
+                v.max(0.0).min(0.88)
             }
             _ => 0.05,
         };
@@ -514,8 +624,9 @@ pub fn classify_document(text: &str) -> (String, f64) {
     }
 }
 
-fn match_supplier(
+fn match_third_party(
     conn: &Connection,
+    kind: &str,
     name: Option<&str>,
     siret: Option<&str>,
 ) -> DbResult<Option<ThirdParty>> {
@@ -524,10 +635,10 @@ fn match_supplier(
         if digits.len() >= 9 {
             let found = conn
                 .query_row(
-                    "SELECT id FROM third_party WHERE kind = 'supplier'
-                     AND replace(coalesce(siret,''), ' ', '') LIKE ?1 || '%'
+                    "SELECT id FROM third_party WHERE kind = ?1
+                     AND replace(coalesce(siret,''), ' ', '') LIKE ?2 || '%'
                      LIMIT 1",
-                    params![digits],
+                    params![kind, digits],
                     |r| r.get::<_, i64>(0),
                 )
                 .optional()?;
@@ -543,13 +654,23 @@ fn match_supplier(
         if needle.len() >= 3 {
             let parties = tax::list_third_parties(conn)?;
             let hit = parties.into_iter().find(|t| {
-                t.kind == "supplier" && t.name.to_lowercase().contains(&needle)
-                    || (t.kind == "supplier" && needle.contains(&t.name.to_lowercase()))
+                t.kind == kind
+                    && (t.name.to_lowercase().contains(&needle)
+                        || needle.contains(&t.name.to_lowercase()))
             });
             return Ok(hit);
         }
     }
     Ok(None)
+}
+
+fn party_kind_for_doc(doc_type: &str) -> Option<&'static str> {
+    match doc_type {
+        "supplier_invoice" | "expense_receipt" => Some("supplier"),
+        "customer_invoice" => Some("customer"),
+        "ticket" => Some("supplier"), // commerçant optionnel
+        _ => None,
+    }
 }
 
 fn build_extraction_payload(
@@ -563,27 +684,46 @@ fn build_extraction_payload(
     let date = parse_date(text);
     let number = parse_invoice_number(text);
     let siret = parse_siret(text);
-    let supplier = parse_supplier_name(text);
-    let reverse = detect_reverse_charge(text);
+    let party_name = parse_supplier_name(text);
+    let reverse = detect_reverse_charge(text) && doc_type == "supplier_invoice";
+    let is_sale = doc_type == "customer_invoice";
+    let is_bank = doc_type == "bank_statement";
     let vat_mode = if reverse {
         "autoliquidation_sous_traitance"
-    } else if amounts.vat_cents == Some(0) || (amounts.vat_cents.is_none() && amounts.ht_cents.is_some() && amounts.ttc_cents == amounts.ht_cents)
+    } else if is_bank
+        || amounts.vat_cents == Some(0)
+        || (amounts.vat_cents.is_none()
+            && amounts.ht_cents.is_some()
+            && amounts.ttc_cents == amounts.ht_cents)
     {
         "sans"
     } else {
         "normale"
     };
     let rate = amounts.rate_bp.unwrap_or(2000);
-    let vat_code = match (vat_mode, rate) {
-        ("autoliquidation_sous_traitance", 1000) => "T10R",
-        ("autoliquidation_sous_traitance", 550) => "T55R",
-        ("autoliquidation_sous_traitance", _) => "T20R",
-        ("sans", _) => "TEX",
-        (_, 1000) => "T10D",
-        (_, 550) => "T55D",
+    let vat_code = match (vat_mode, rate, is_sale) {
+        ("autoliquidation_sous_traitance", 1000, _) => "T10R",
+        ("autoliquidation_sous_traitance", 550, _) => "T55R",
+        ("autoliquidation_sous_traitance", _, _) => "T20R",
+        ("sans", _, _) => "TEX",
+        (_, 1000, true) => "T10C",
+        (_, 550, true) => "T55C",
+        (_, _, true) => "T20C",
+        (_, 1000, false) => "T10D",
+        (_, 550, false) => "T55D",
         _ => "T20D",
     };
-    let ht_account = if reverse { "604" } else { "606" };
+    let ht_account = default_ht_account_for(doc_type, reverse);
+    let counterpart = default_counterpart_for(doc_type);
+    let journal = default_journal_for(doc_type);
+    let bank_direction = if is_bank { Some("debit") } else { None };
+    let notes = if method == "image_pending_ocr" {
+        "Texte peu lisible ou image scannée : OCR local non activé (pas d’API cloud). Vérifiez / saisissez les montants."
+    } else if is_bank {
+        "Relevé : une écriture BQ brouillon par mouvement saisi (pièce jointe = le relevé). Vérifiez sens, montant et contrepartie (souvent 471 en attente)."
+    } else {
+        "Vérifiez les champs avant de créer le brouillon d’écriture."
+    };
 
     json!({
         "rawTextPreview": text.chars().take(4000).collect::<String>(),
@@ -592,26 +732,24 @@ fn build_extraction_payload(
         "confidence": confidence,
         "issueDate": date,
         "invoiceNumber": number,
-        "supplierName": supplier,
+        "supplierName": party_name,
         "supplierSiret": siret,
         "matchedThirdPartyId": matched.map(|t| t.id),
         "matchedThirdPartyCode": matched.map(|t| t.code.clone()),
         "matchedThirdPartyName": matched.map(|t| t.name.clone()),
-        "htCents": amounts.ht_cents,
+        "htCents": amounts.ht_cents.or(amounts.ttc_cents),
         "vatCents": amounts.vat_cents,
         "ttcCents": amounts.ttc_cents,
         "rateBp": amounts.rate_bp,
         "vatMode": vat_mode,
         "vatCode": vat_code,
         "htAccount": ht_account,
-        "journalCode": if posting_supported(doc_type) { "ACH" } else { "" },
+        "counterpartAccount": counterpart,
+        "journalCode": journal,
+        "bankDirection": bank_direction,
         "reverseCharge": reverse,
         "postingSupported": posting_supported(doc_type),
-        "notes": if method == "image_pending_ocr" {
-            "Texte peu lisible ou image scannée : OCR local non activé (pas d’API cloud). Vérifiez / saisissez les montants."
-        } else {
-            "Vérifiez les champs avant de créer le brouillon d’écriture."
-        }
+        "notes": notes
     })
 }
 
@@ -696,19 +834,23 @@ pub fn analyze_document(
 
     let (text, method) = extract_text(&dest);
     let (mut doc_type, mut confidence) = classify_document(&text);
-    // Lot 1 biais : PDF facture avec montants → privilégier fournisseur si ambigü.
-    if doc_type == "customer_invoice" || doc_type == "unknown" {
+    // Facture ambiguë sans signaux client → privilégier fournisseur (cas le plus courant).
+    if doc_type == "unknown" {
         let amounts = parse_amounts(&text);
-        if amounts.ttc_cents.is_some() || amounts.ht_cents.is_some() {
-            if text.to_lowercase().contains("facture") {
-                doc_type = "supplier_invoice".into();
-                confidence = confidence.max(0.55);
-            }
+        let lower = text.to_lowercase();
+        if (amounts.ttc_cents.is_some() || amounts.ht_cents.is_some())
+            && lower.contains("facture")
+            && !lower.contains("à votre attention")
+            && !lower.contains("conditions de règlement")
+        {
+            doc_type = "supplier_invoice".into();
+            confidence = confidence.max(0.55);
         }
     }
     let siret = parse_siret(&text);
-    let supplier = parse_supplier_name(&text);
-    let matched = match_supplier(conn, supplier.as_deref(), siret.as_deref())?;
+    let party = parse_supplier_name(&text);
+    let kind = party_kind_for_doc(&doc_type).unwrap_or("supplier");
+    let matched = match_third_party(conn, kind, party.as_deref(), siret.as_deref())?;
     let payload = build_extraction_payload(
         &text,
         &method,
@@ -751,25 +893,37 @@ pub fn discard_document_import(conn: &Connection, id: i64) -> DbResult<()> {
     Ok(())
 }
 
-fn ensure_supplier_for_confirm(
+fn ensure_party_for_confirm(
     conn: &Connection,
     input: &ConfirmDocumentImportInput,
-) -> DbResult<(i64, String)> {
+    kind: &str,
+    required: bool,
+) -> DbResult<Option<(i64, String)>> {
     if let Some(id) = input.third_party_id {
         let tp = tax::list_third_parties(conn)?
             .into_iter()
             .find(|t| t.id == id)
             .ok_or_else(|| "Tiers introuvable".to_string())?;
-        return Ok((tp.id, tp.code));
+        return Ok(Some((tp.id, tp.code)));
     }
     let name = input
         .create_supplier_name
         .as_deref()
         .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .ok_or_else(|| {
-            "Choisissez un fournisseur ou indiquez un nom pour en créer un".to_string()
-        })?;
+        .filter(|s| !s.is_empty());
+    if name.is_none() {
+        if required {
+            let label = if kind == "customer" {
+                "Choisissez un client ou indiquez un nom pour en créer un"
+            } else {
+                "Choisissez un fournisseur ou indiquez un nom pour en créer un"
+            };
+            return Err(label.into());
+        }
+        return Ok(None);
+    }
+    let name = name.unwrap();
+    let prefix = if kind == "customer" { "C" } else { "F" };
     let code = input
         .create_supplier_code
         .clone()
@@ -782,21 +936,21 @@ fn ensure_supplier_for_confirm(
                     |r| r.get::<_, i64>(0),
                 )
                 .unwrap_or(1);
-            format!("F{next}")
+            format!("{prefix}{next}")
         });
     let tp = tax::create_third_party(
         conn,
         &CreateThirdPartyInput {
             code: code.clone(),
             name: name.to_string(),
-            kind: "supplier".into(),
+            kind: kind.into(),
             siret: input.create_supplier_siret.clone(),
             email: None,
             address: None,
             routing_id: None,
         },
     )?;
-    Ok((tp.id, tp.code))
+    Ok(Some((tp.id, tp.code)))
 }
 
 fn compute_vat_cents(ht: i64, rate_bp: i32) -> i64 {
@@ -804,6 +958,26 @@ fn compute_vat_cents(ht: i64, rate_bp: i32) -> i64 {
         0
     } else {
         ((ht as i128) * (rate_bp as i128) / 10_000) as i64
+    }
+}
+
+fn line(
+    account: &str,
+    label: &str,
+    debit: i64,
+    credit: i64,
+    vat_code: Option<&str>,
+    tp: Option<(i64, &str, &str)>,
+) -> EntryLineInput {
+    EntryLineInput {
+        account_number: account.into(),
+        label: Some(label.into()),
+        debit_cents: debit,
+        credit_cents: credit,
+        vat_code: vat_code.map(|s| s.into()),
+        third_party_id: tp.map(|(id, _, _)| id),
+        comp_aux_type: tp.map(|(_, kind, _)| kind.into()),
+        comp_aux_num: tp.map(|(_, _, code)| code.into()),
     }
 }
 
@@ -818,115 +992,244 @@ pub fn build_supplier_invoice_lines(
     tp_code: &str,
 ) -> Vec<EntryLineInput> {
     let ht = ht_cents.max(0);
+    let tp = Some((tp_id, "supplier", tp_code));
     match vat_mode {
         "autoliquidation_sous_traitance" => {
             let vat = compute_vat_cents(ht, rate_bp);
-            let mut lines = vec![EntryLineInput {
-                account_number: ht_account.into(),
-                label: Some("Charge / sous-traitance".into()),
-                debit_cents: ht,
-                credit_cents: 0,
-                vat_code: Some(vat_code.into()),
-                third_party_id: None,
-                comp_aux_type: None,
-                comp_aux_num: None,
-            }];
+            let mut lines = vec![line(
+                ht_account,
+                "Charge / sous-traitance",
+                ht,
+                0,
+                Some(vat_code),
+                None,
+            )];
             if vat > 0 {
-                lines.push(EntryLineInput {
-                    account_number: "44566".into(),
-                    label: Some("TVA déductible".into()),
-                    debit_cents: vat,
-                    credit_cents: 0,
-                    vat_code: Some(vat_code.into()),
-                    third_party_id: None,
-                    comp_aux_type: None,
-                    comp_aux_num: None,
-                });
-                lines.push(EntryLineInput {
-                    account_number: "4452".into(),
-                    label: Some("TVA due autoliquidation".into()),
-                    debit_cents: 0,
-                    credit_cents: vat,
-                    vat_code: Some(vat_code.into()),
-                    third_party_id: None,
-                    comp_aux_type: None,
-                    comp_aux_num: None,
-                });
+                lines.push(line(
+                    "44566",
+                    "TVA déductible",
+                    vat,
+                    0,
+                    Some(vat_code),
+                    None,
+                ));
+                lines.push(line(
+                    "4452",
+                    "TVA due autoliquidation",
+                    0,
+                    vat,
+                    Some(vat_code),
+                    None,
+                ));
             }
-            lines.push(EntryLineInput {
-                account_number: "401".into(),
-                label: Some(format!("Fournisseur {tp_code}")),
-                debit_cents: 0,
-                credit_cents: ht,
-                vat_code: None,
-                third_party_id: Some(tp_id),
-                comp_aux_type: Some("supplier".into()),
-                comp_aux_num: Some(tp_code.into()),
-            });
+            lines.push(line(
+                "401",
+                &format!("Fournisseur {tp_code}"),
+                0,
+                ht,
+                None,
+                tp,
+            ));
             lines
         }
         "sans" => {
             vec![
-                EntryLineInput {
-                    account_number: ht_account.into(),
-                    label: Some("Charge".into()),
-                    debit_cents: ht,
-                    credit_cents: 0,
-                    vat_code: Some(vat_code.into()),
-                    third_party_id: None,
-                    comp_aux_type: None,
-                    comp_aux_num: None,
-                },
-                EntryLineInput {
-                    account_number: "401".into(),
-                    label: Some(format!("Fournisseur {tp_code}")),
-                    debit_cents: 0,
-                    credit_cents: ht,
-                    vat_code: None,
-                    third_party_id: Some(tp_id),
-                    comp_aux_type: Some("supplier".into()),
-                    comp_aux_num: Some(tp_code.into()),
-                },
+                line(ht_account, "Charge", ht, 0, Some(vat_code), None),
+                line(
+                    "401",
+                    &format!("Fournisseur {tp_code}"),
+                    0,
+                    ht,
+                    None,
+                    tp,
+                ),
             ]
         }
         _ => {
-            // normale
             let vat = compute_vat_cents(ht, rate_bp);
             let ttc = ht + vat;
-            let mut lines = vec![EntryLineInput {
-                account_number: ht_account.into(),
-                label: Some("Charge".into()),
-                debit_cents: ht,
-                credit_cents: 0,
-                vat_code: Some(vat_code.into()),
-                third_party_id: None,
-                comp_aux_type: None,
-                comp_aux_num: None,
-            }];
+            let mut lines = vec![line(ht_account, "Charge", ht, 0, Some(vat_code), None)];
             if vat > 0 {
-                lines.push(EntryLineInput {
-                    account_number: "44566".into(),
-                    label: Some("TVA déductible".into()),
-                    debit_cents: vat,
-                    credit_cents: 0,
-                    vat_code: Some(vat_code.into()),
-                    third_party_id: None,
-                    comp_aux_type: None,
-                    comp_aux_num: None,
-                });
+                lines.push(line(
+                    "44566",
+                    "TVA déductible",
+                    vat,
+                    0,
+                    Some(vat_code),
+                    None,
+                ));
             }
-            lines.push(EntryLineInput {
-                account_number: "401".into(),
-                label: Some(format!("Fournisseur {tp_code}")),
-                debit_cents: 0,
-                credit_cents: ttc,
-                vat_code: None,
-                third_party_id: Some(tp_id),
-                comp_aux_type: Some("supplier".into()),
-                comp_aux_num: Some(tp_code.into()),
-            });
+            lines.push(line(
+                "401",
+                &format!("Fournisseur {tp_code}"),
+                0,
+                ttc,
+                None,
+                tp,
+            ));
             lines
         }
+    }
+}
+
+/// Facture client → journal VTE (produit + TVA collectée + 411).
+pub fn build_customer_invoice_lines(
+    ht_cents: i64,
+    vat_mode: &str,
+    rate_bp: i32,
+    vat_code: &str,
+    ht_account: &str,
+    tp_id: i64,
+    tp_code: &str,
+) -> Vec<EntryLineInput> {
+    let ht = ht_cents.max(0);
+    let tp = Some((tp_id, "customer", tp_code));
+    match vat_mode {
+        "autoliquidation_chantier" | "sans" => {
+            vec![
+                line(ht_account, "Produit", 0, ht, Some(vat_code), None),
+                line(
+                    "411",
+                    &format!("Client {tp_code}"),
+                    ht,
+                    0,
+                    None,
+                    tp,
+                ),
+            ]
+        }
+        _ => {
+            let vat = compute_vat_cents(ht, rate_bp);
+            let ttc = ht + vat;
+            let mut lines = vec![line(ht_account, "Produit", 0, ht, Some(vat_code), None)];
+            if vat > 0 {
+                lines.push(line(
+                    "44571",
+                    "TVA collectée",
+                    0,
+                    vat,
+                    Some(vat_code),
+                    None,
+                ));
+            }
+            lines.push(line(
+                "411",
+                &format!("Client {tp_code}"),
+                ttc,
+                0,
+                None,
+                tp,
+            ));
+            lines
+        }
+    }
+}
+
+/// Note de frais / ticket → charge + TVA déductible + contrepartie (401 / 512 / 530).
+pub fn build_expense_like_lines(
+    ht_cents: i64,
+    vat_mode: &str,
+    rate_bp: i32,
+    vat_code: &str,
+    ht_account: &str,
+    counterpart: &str,
+    party: Option<(i64, String)>,
+) -> Vec<EntryLineInput> {
+    let ht = ht_cents.max(0);
+    let vat = if vat_mode == "normale" {
+        compute_vat_cents(ht, rate_bp)
+    } else {
+        0
+    };
+    let ttc = ht + vat;
+    let tp = party.as_ref().map(|(id, code)| {
+        (
+            *id,
+            if counterpart.starts_with("411") {
+                "customer"
+            } else {
+                "supplier"
+            },
+            code.as_str(),
+        )
+    });
+    let mut lines = vec![line(ht_account, "Charge / frais", ht, 0, Some(vat_code), None)];
+    if vat > 0 {
+        lines.push(line(
+            "44566",
+            "TVA déductible",
+            vat,
+            0,
+            Some(vat_code),
+            None,
+        ));
+    }
+    let label = match counterpart {
+        c if c.starts_with("512") => "Banque".to_string(),
+        c if c.starts_with("530") => "Caisse".to_string(),
+        c if c.starts_with("401") => party
+            .as_ref()
+            .map(|(_, code)| format!("Fournisseur {code}"))
+            .unwrap_or_else(|| "Fournisseur".into()),
+        _ => format!("Contrepartie {counterpart}"),
+    };
+    lines.push(line(counterpart, &label, 0, ttc, None, tp));
+    lines
+}
+
+/// Relevé bancaire → une écriture BQ (512 ↔ contrepartie, souvent 471).
+/// `bank_direction`: `debit` = sortie (crédit 512), `credit` = entrée (débit 512).
+pub fn build_bank_statement_lines(
+    amount_cents: i64,
+    bank_account: &str,
+    counterpart: &str,
+    direction: &str,
+    party: Option<(i64, String)>,
+) -> Vec<EntryLineInput> {
+    let amount = amount_cents.max(0);
+    let bank = if bank_account.trim().is_empty() {
+        "512"
+    } else {
+        bank_account
+    };
+    let other = if counterpart.trim().is_empty() {
+        "471"
+    } else {
+        counterpart
+    };
+    let tp = party.as_ref().map(|(id, code)| {
+        let kind = if other.starts_with("411") {
+            "customer"
+        } else if other.starts_with("401") {
+            "supplier"
+        } else {
+            "supplier"
+        };
+        (*id, kind, code.as_str())
+    });
+    let other_label = format!("Contrepartie {other}");
+    if direction == "credit" {
+        // Entrée d'argent
+        vec![
+            line(bank, "Banque", amount, 0, None, None),
+            line(other, &other_label, 0, amount, None, tp),
+        ]
+    } else {
+        // Sortie d'argent (défaut)
+        vec![
+            line(other, &other_label, amount, 0, None, tp),
+            line(bank, "Banque", 0, amount, None, None),
+        ]
+    }
+}
+
+fn journal_for_expense_counterpart(counterpart: &str, fallback: &str) -> String {
+    if counterpart.starts_with("401") {
+        "ACH".into()
+    } else if counterpart.starts_with("512") || counterpart.starts_with("530") {
+        "OD".into()
+    } else {
+        fallback.into()
     }
 }
 
@@ -949,108 +1252,247 @@ pub fn confirm_document_import(
         return Err("Type de document invalide".into());
     }
     if !posting_supported(&doc_type) {
-        return Err(format!(
-            "Le type « {doc_type} » n’a pas encore de modèle d’écriture (lot 1 = facture fournisseur). Changez le type ou attendez l’extension."
-        )
-        .into());
+        return Err(
+            "Précisez le type de document (inconnu ne crée pas d’écriture).".into(),
+        );
     }
     let ht = input.ht_cents;
     if ht <= 0 {
-        return Err("Montant HT invalide".into());
+        return Err("Montant invalide (HT ou montant du mouvement)".into());
     }
     let vat_mode = input.vat_mode.as_str();
-    if !matches!(
-        vat_mode,
-        "normale" | "sans" | "autoliquidation_sous_traitance"
-    ) {
-        return Err("Régime TVA invalide pour une facture fournisseur".into());
-    }
-    let (tp_id, tp_code) = ensure_supplier_for_confirm(conn, input)?;
     let rate = input.rate_bp.max(0);
+    let default_vat = match doc_type.as_str() {
+        "customer_invoice" => "T20C",
+        "bank_statement" => "TEX",
+        _ => "T20D",
+    };
     let vat_code = if input.vat_code.trim().is_empty() {
-        "T20D".to_string()
+        default_vat.to_string()
     } else {
         input.vat_code.trim().to_string()
     };
     tax::ensure_vat_code(conn, &vat_code)?;
+
+    let counterpart = input
+        .counterpart_account
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| default_counterpart_for(&doc_type))
+        .to_string();
+
     let ht_account = if input.ht_account.trim().is_empty() {
-        if vat_mode == "autoliquidation_sous_traitance" {
-            "604".into()
-        } else {
-            "606".into()
-        }
+        default_ht_account_for(
+            &doc_type,
+            vat_mode == "autoliquidation_sous_traitance",
+        )
+        .to_string()
     } else {
         input.ht_account.trim().to_string()
     };
-    let lines = if let Some(v) = input.vat_cents {
-        // Respect montant TVA saisi en revue pour le mode normale
-        if vat_mode == "normale" {
-            let ttc = ht + v.max(0);
-            let mut lines = vec![EntryLineInput {
-                account_number: ht_account.clone(),
-                label: Some("Charge".into()),
-                debit_cents: ht,
-                credit_cents: 0,
-                vat_code: Some(vat_code.clone()),
-                third_party_id: None,
-                comp_aux_type: None,
-                comp_aux_num: None,
-            }];
-            if v > 0 {
-                lines.push(EntryLineInput {
-                    account_number: "44566".into(),
-                    label: Some("TVA déductible".into()),
-                    debit_cents: v,
-                    credit_cents: 0,
-                    vat_code: Some(vat_code.clone()),
-                    third_party_id: None,
-                    comp_aux_type: None,
-                    comp_aux_num: None,
-                });
+
+    let (lines, journal) = match doc_type.as_str() {
+        "supplier_invoice" => {
+            if !matches!(
+                vat_mode,
+                "normale" | "sans" | "autoliquidation_sous_traitance"
+            ) {
+                return Err("Régime TVA invalide pour une facture fournisseur".into());
             }
-            lines.push(EntryLineInput {
-                account_number: "401".into(),
-                label: Some(format!("Fournisseur {tp_code}")),
-                debit_cents: 0,
-                credit_cents: ttc,
-                vat_code: None,
-                third_party_id: Some(tp_id),
-                comp_aux_type: Some("supplier".into()),
-                comp_aux_num: Some(tp_code.clone()),
-            });
-            lines
-        } else {
-            build_supplier_invoice_lines(
-                ht, vat_mode, rate, &vat_code, &ht_account, tp_id, &tp_code,
-            )
+            let (tp_id, tp_code) = ensure_party_for_confirm(conn, input, "supplier", true)?
+                .ok_or_else(|| "Fournisseur requis".to_string())?;
+            let lines = if let Some(v) = input.vat_cents.filter(|v| *v >= 0) {
+                if vat_mode == "normale" {
+                    let ttc = ht + v;
+                    let mut lines =
+                        vec![line(&ht_account, "Charge", ht, 0, Some(&vat_code), None)];
+                    if v > 0 {
+                        lines.push(line(
+                            "44566",
+                            "TVA déductible",
+                            v,
+                            0,
+                            Some(&vat_code),
+                            None,
+                        ));
+                    }
+                    lines.push(line(
+                        "401",
+                        &format!("Fournisseur {tp_code}"),
+                        0,
+                        ttc,
+                        None,
+                        Some((tp_id, "supplier", &tp_code)),
+                    ));
+                    lines
+                } else {
+                    build_supplier_invoice_lines(
+                        ht, vat_mode, rate, &vat_code, &ht_account, tp_id, &tp_code,
+                    )
+                }
+            } else {
+                build_supplier_invoice_lines(
+                    ht, vat_mode, rate, &vat_code, &ht_account, tp_id, &tp_code,
+                )
+            };
+            let journal = input.journal_code.trim().to_string().if_empty("ACH");
+            (lines, journal)
         }
-    } else {
-        build_supplier_invoice_lines(
-            ht, vat_mode, rate, &vat_code, &ht_account, tp_id, &tp_code,
-        )
+        "customer_invoice" => {
+            if !matches!(
+                vat_mode,
+                "normale" | "sans" | "autoliquidation_chantier"
+            ) {
+                return Err("Régime TVA invalide pour une facture client".into());
+            }
+            let (tp_id, tp_code) = ensure_party_for_confirm(conn, input, "customer", true)?
+                .ok_or_else(|| "Client requis".to_string())?;
+            let lines = if let Some(v) = input.vat_cents.filter(|v| *v >= 0) {
+                if vat_mode == "normale" {
+                    let ttc = ht + v;
+                    let mut lines =
+                        vec![line(&ht_account, "Produit", 0, ht, Some(&vat_code), None)];
+                    if v > 0 {
+                        lines.push(line(
+                            "44571",
+                            "TVA collectée",
+                            0,
+                            v,
+                            Some(&vat_code),
+                            None,
+                        ));
+                    }
+                    lines.push(line(
+                        "411",
+                        &format!("Client {tp_code}"),
+                        ttc,
+                        0,
+                        None,
+                        Some((tp_id, "customer", &tp_code)),
+                    ));
+                    lines
+                } else {
+                    build_customer_invoice_lines(
+                        ht, vat_mode, rate, &vat_code, &ht_account, tp_id, &tp_code,
+                    )
+                }
+            } else {
+                build_customer_invoice_lines(
+                    ht, vat_mode, rate, &vat_code, &ht_account, tp_id, &tp_code,
+                )
+            };
+            let journal = input.journal_code.trim().to_string().if_empty("VTE");
+            (lines, journal)
+        }
+        "expense_receipt" | "ticket" => {
+            if !matches!(vat_mode, "normale" | "sans") {
+                return Err("Régime TVA invalide pour un frais / ticket (normale ou sans)".into());
+            }
+            let need_supplier = counterpart.starts_with("401");
+            let party = ensure_party_for_confirm(conn, input, "supplier", need_supplier)?;
+            let lines = if let Some(v) = input.vat_cents.filter(|v| *v > 0) {
+                if vat_mode == "normale" {
+                    let ttc = ht + v;
+                    let mut lines = vec![line(
+                        &ht_account,
+                        "Charge / frais",
+                        ht,
+                        0,
+                        Some(&vat_code),
+                        None,
+                    )];
+                    lines.push(line(
+                        "44566",
+                        "TVA déductible",
+                        v,
+                        0,
+                        Some(&vat_code),
+                        None,
+                    ));
+                    let tp = party.as_ref().map(|(id, code)| (*id, "supplier", code.as_str()));
+                    let label = if counterpart.starts_with("512") {
+                        "Banque".into()
+                    } else if counterpart.starts_with("530") {
+                        "Caisse".into()
+                    } else {
+                        party
+                            .as_ref()
+                            .map(|(_, c)| format!("Fournisseur {c}"))
+                            .unwrap_or_else(|| "Contrepartie".into())
+                    };
+                    lines.push(line(&counterpart, &label, 0, ttc, None, tp));
+                    lines
+                } else {
+                    build_expense_like_lines(
+                        ht,
+                        vat_mode,
+                        rate,
+                        &vat_code,
+                        &ht_account,
+                        &counterpart,
+                        party.clone(),
+                    )
+                }
+            } else {
+                build_expense_like_lines(
+                    ht,
+                    vat_mode,
+                    rate,
+                    &vat_code,
+                    &ht_account,
+                    &counterpart,
+                    party,
+                )
+            };
+            let fallback = default_journal_for(&doc_type);
+            let journal = if input.journal_code.trim().is_empty() {
+                journal_for_expense_counterpart(&counterpart, fallback)
+            } else {
+                input.journal_code.trim().to_string()
+            };
+            (lines, journal)
+        }
+        "bank_statement" => {
+            let direction = input
+                .bank_direction
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .unwrap_or("debit");
+            if direction != "debit" && direction != "credit" {
+                return Err("Sens bancaire invalide (debit = sortie, credit = entrée)".into());
+            }
+            // Pour BQ : ht_account = contrepartie (471…), counterpart_account = 512
+            let bank_account = if counterpart.starts_with("512") {
+                counterpart.clone()
+            } else {
+                "512".into()
+            };
+            let other = if ht_account.starts_with("512") {
+                "471".into()
+            } else {
+                ht_account.clone()
+            };
+            let party = ensure_party_for_confirm(conn, input, "supplier", false)?;
+            let lines =
+                build_bank_statement_lines(ht, &bank_account, &other, direction, party);
+            let journal = input.journal_code.trim().to_string().if_empty("BQ");
+            (lines, journal)
+        }
+        _ => return Err("Type de document non supporté pour le posting".into()),
     };
 
-    let journal = if input.journal_code.trim().is_empty() {
-        "ACH".to_string()
-    } else {
-        input.journal_code.trim().to_string()
-    };
     let label = if input.label.trim().is_empty() {
-        format!(
-            "Import facture {}",
-            input
-                .piece_ref
-                .trim()
-                .to_string()
-                .if_empty("fournisseur")
-        )
+        let piece = input.piece_ref.trim().to_string().if_empty("document");
+        format!("Import {piece}")
     } else {
         input.label.trim().to_string()
     };
     let entry = ledger::create_draft(
         conn,
         &CreateEntryInput {
-            journal_code: journal,
+            journal_code: journal.clone(),
             entry_date: input.entry_date.clone(),
             piece_ref: input.piece_ref.clone(),
             label,
@@ -1066,12 +1508,12 @@ pub fn confirm_document_import(
         mime,
     )?;
 
-    // Merge review into extraction_json for audit trail
     let mut extraction = doc.extraction;
     if let Some(obj) = extraction.as_object_mut() {
         obj.insert("confirmedDocType".into(), json!(doc_type));
         obj.insert("confirmedHtCents".into(), json!(ht));
         obj.insert("confirmedVatMode".into(), json!(vat_mode));
+        obj.insert("confirmedJournal".into(), json!(journal));
         obj.insert("confirmedEntryId".into(), json!(entry.id));
     }
     let now = now_iso();
@@ -1133,6 +1575,71 @@ Net à payer               120,00 €
         let (t, c) = classify_document(sample_invoice_text());
         assert_eq!(t, "supplier_invoice");
         assert!(c >= 0.45, "confidence {c}");
+    }
+
+    #[test]
+    fn classify_customer_invoice() {
+        let text = r#"
+FACTURE N° FAC-88
+À votre attention
+Client : ACME SAS
+Conditions de règlement : 30 jours
+Total HT 500,00
+TVA 20 % 100,00
+Total TTC 600,00
+Merci de votre confiance
+"#;
+        let (t, c) = classify_document(text);
+        assert_eq!(t, "customer_invoice");
+        assert!(c >= 0.45, "confidence {c}");
+    }
+
+    #[test]
+    fn classify_expense_and_ticket_and_bank() {
+        let (t, _) = classify_document(
+            "NOTE DE FRAIS — Restaurant Le Midi — Total TTC 45,00 — Justificatif",
+        );
+        assert_eq!(t, "expense_receipt");
+        let (t, _) = classify_document(
+            "TICKET DE CAISSE\nCarte bancaire CB ****1234\nMerci de votre visite\nTotal 12,50",
+        );
+        assert_eq!(t, "ticket");
+        let (t, _) = classify_document(
+            "RELEVÉ DE COMPTE\nIBAN FR76 1234\nSolde précédent 1000,00\nNouveau solde 850,00",
+        );
+        assert_eq!(t, "bank_statement");
+    }
+
+    #[test]
+    fn build_customer_and_expense_and_bank_balanced() {
+        let lines = build_customer_invoice_lines(
+            10_000, "normale", 2000, "T20C", "706", 2, "C001",
+        );
+        let d: i64 = lines.iter().map(|l| l.debit_cents).sum();
+        let c: i64 = lines.iter().map(|l| l.credit_cents).sum();
+        assert_eq!(d, c);
+        assert_eq!(d, 12_000);
+        assert!(lines.iter().any(|l| l.account_number == "44571"));
+
+        let lines = build_expense_like_lines(
+            5_000,
+            "normale",
+            2000,
+            "T20D",
+            "625",
+            "530",
+            None,
+        );
+        let d: i64 = lines.iter().map(|l| l.debit_cents).sum();
+        let c: i64 = lines.iter().map(|l| l.credit_cents).sum();
+        assert_eq!(d, c);
+        assert!(lines.iter().any(|l| l.account_number == "530"));
+
+        let lines = build_bank_statement_lines(15_000, "512", "471", "debit", None);
+        let d: i64 = lines.iter().map(|l| l.debit_cents).sum();
+        let c: i64 = lines.iter().map(|l| l.credit_cents).sum();
+        assert_eq!(d, c);
+        assert_eq!(d, 15_000);
     }
 
     #[test]
@@ -1243,6 +1750,8 @@ Net à payer               120,00 €
                 vat_code: "T20D".into(),
                 ht_account: "606".into(),
                 third_party_id: None,
+                counterpart_account: None,
+                bank_direction: None,
                 create_supplier_name: Some("FOURNITURES DELTA SAS".into()),
                 create_supplier_code: Some("F900".into()),
                 create_supplier_siret: Some("12345678900012".into()),
@@ -1259,6 +1768,88 @@ Net à payer               120,00 €
         let c: i64 = entry.lines.iter().map(|l| l.credit_cents).sum();
         assert_eq!(d, c);
         assert_eq!(d, 12_000);
+    }
+
+    #[test]
+    fn confirm_customer_invoice_creates_vte_draft() {
+        let dir = tempdir().unwrap();
+        let ws = dir.path().join("demo.sascompta");
+        let info = db::create_demo_workspace(&ws).unwrap();
+        let (conn, _) = db::open_workspace(&info.path, db::DEMO_PASSWORD).unwrap();
+
+        let pdf = dir.path().join("fa-client.pdf");
+        write_simple_pdf(
+            &pdf,
+            "FACTURE N° FAC-1\nÀ votre attention\nClient ACME\nTotal HT 100,00\nTVA 20,00\nTotal TTC 120,00\nConditions de règlement",
+        );
+        let doc = analyze_document(&conn, Path::new(&info.path), &pdf).unwrap();
+        let confirmed = confirm_document_import(
+            &conn,
+            doc.id,
+            &ConfirmDocumentImportInput {
+                doc_type: "customer_invoice".into(),
+                entry_date: "2026-03-15".into(),
+                piece_ref: "FAC-1".into(),
+                label: "Import FAC-1".into(),
+                journal_code: "VTE".into(),
+                ht_cents: 10_000,
+                vat_cents: Some(2_000),
+                rate_bp: 2000,
+                vat_mode: "normale".into(),
+                vat_code: "T20C".into(),
+                ht_account: "706".into(),
+                counterpart_account: Some("411".into()),
+                bank_direction: None,
+                third_party_id: None,
+                create_supplier_name: Some("ACME SAS".into()),
+                create_supplier_code: Some("C900".into()),
+                create_supplier_siret: None,
+            },
+        )
+        .unwrap();
+        let entry = ledger::get_entry(&conn, confirmed.entry_id.unwrap()).unwrap();
+        assert_eq!(entry.journal_code, "VTE");
+        assert!(entry.lines.iter().any(|l| l.account_number == "411"));
+        assert_eq!(entry.attachments.len(), 1);
+    }
+
+    #[test]
+    fn confirm_ticket_creates_od_draft() {
+        let dir = tempdir().unwrap();
+        let ws = dir.path().join("demo.sascompta");
+        let info = db::create_demo_workspace(&ws).unwrap();
+        let (conn, _) = db::open_workspace(&info.path, db::DEMO_PASSWORD).unwrap();
+
+        let pdf = dir.path().join("ticket.pdf");
+        write_simple_pdf(&pdf, "TICKET DE CAISSE\nCB ****42\nTotal TTC 25,00\nMerci");
+        let doc = analyze_document(&conn, Path::new(&info.path), &pdf).unwrap();
+        let confirmed = confirm_document_import(
+            &conn,
+            doc.id,
+            &ConfirmDocumentImportInput {
+                doc_type: "ticket".into(),
+                entry_date: "2026-03-15".into(),
+                piece_ref: "TK-1".into(),
+                label: "Ticket caisse".into(),
+                journal_code: "OD".into(),
+                ht_cents: 2_083,
+                vat_cents: Some(417),
+                rate_bp: 2000,
+                vat_mode: "normale".into(),
+                vat_code: "T20D".into(),
+                ht_account: "625".into(),
+                counterpart_account: Some("530".into()),
+                bank_direction: None,
+                third_party_id: None,
+                create_supplier_name: None,
+                create_supplier_code: None,
+                create_supplier_siret: None,
+            },
+        )
+        .unwrap();
+        let entry = ledger::get_entry(&conn, confirmed.entry_id.unwrap()).unwrap();
+        assert_eq!(entry.journal_code, "OD");
+        assert!(entry.lines.iter().any(|l| l.account_number == "530"));
     }
 
     #[test]

@@ -1013,8 +1013,15 @@ pub struct ConfirmDocumentImportInput {
     pub vat_mode: String,
     pub vat_code: String,
     pub ht_account: String,
+    /// Contrepartie (401 / 411 / 512 / 530 / 471…) — frais, tickets, relevés.
+    #[serde(default)]
+    pub counterpart_account: Option<String>,
+    /// Relevé bancaire : `debit` = sortie (crédit 512), `credit` = entrée (débit 512).
+    #[serde(default)]
+    pub bank_direction: Option<String>,
     #[serde(default)]
     pub third_party_id: Option<i64>,
+    /// Création tiers (fournisseur ou client selon le type) — nom historique lot 1.
     #[serde(default)]
     pub create_supplier_name: Option<String>,
     #[serde(default)]
