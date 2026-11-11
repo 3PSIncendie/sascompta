@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  applyDocTypeDefaults,
   buildProposedLines,
   confidenceLabel,
   DOC_TYPE_REGISTRY,
@@ -37,11 +38,14 @@ const sample: DocumentImport = {
 };
 
 describe("documentImport registry", () => {
-  it("exposes extensible doc types with only supplier posting in lot 1", () => {
+  it("exposes posting for practical document types", () => {
     expect(DOC_TYPE_REGISTRY.length).toBeGreaterThanOrEqual(5);
     expect(docTypeMeta("supplier_invoice").postingSupported).toBe(true);
-    expect(docTypeMeta("bank_statement").postingSupported).toBe(false);
-    expect(docTypeMeta("ticket").comingSoonHint).toBeTruthy();
+    expect(docTypeMeta("customer_invoice").postingSupported).toBe(true);
+    expect(docTypeMeta("expense_receipt").postingSupported).toBe(true);
+    expect(docTypeMeta("bank_statement").postingSupported).toBe(true);
+    expect(docTypeMeta("ticket").postingSupported).toBe(true);
+    expect(docTypeMeta("unknown").postingSupported).toBe(false);
   });
 
   it("maps extraction into review form", () => {
@@ -83,13 +87,57 @@ describe("documentImport registry", () => {
     );
   });
 
-  it("serializes confirm payload", () => {
+  it("builds VTE lines for customer invoice", () => {
+    const form = applyDocTypeDefaults(formFromImport(sample), "customer_invoice");
+    form.htStr = "100,00";
+    form.vatMode = "normale";
+    form.vatCode = "T20C";
+    form.rateBp = 2000;
+    const lines = buildProposedLines(form);
+    const d = lines.reduce((s, l) => s + l.debitCents, 0);
+    const c = lines.reduce((s, l) => s + l.creditCents, 0);
+    expect(d).toBe(c);
+    expect(lines.some((l) => l.accountNumber === "411")).toBe(true);
+    expect(lines.some((l) => l.accountNumber === "44571")).toBe(true);
+    expect(form.journalCode).toBe("VTE");
+  });
+
+  it("builds OD ticket lines with caisse counterpart", () => {
+    const form = applyDocTypeDefaults(formFromImport(sample), "ticket");
+    form.htStr = "10,00";
+    form.vatMode = "normale";
+    form.rateBp = 2000;
+    form.counterpartAccount = "530";
+    const lines = buildProposedLines(form);
+    const d = lines.reduce((s, l) => s + l.debitCents, 0);
+    const c = lines.reduce((s, l) => s + l.creditCents, 0);
+    expect(d).toBe(c);
+    expect(lines.some((l) => l.accountNumber === "530")).toBe(true);
+    expect(lines.some((l) => l.accountNumber === "625")).toBe(true);
+  });
+
+  it("builds BQ bank movement lines", () => {
+    const form = applyDocTypeDefaults(formFromImport(sample), "bank_statement");
+    form.htStr = "150,00";
+    form.htAccount = "471";
+    form.counterpartAccount = "512";
+    form.bankDirection = "debit";
+    const lines = buildProposedLines(form);
+    const d = lines.reduce((s, l) => s + l.debitCents, 0);
+    const c = lines.reduce((s, l) => s + l.creditCents, 0);
+    expect(d).toBe(c);
+    expect(d).toBe(15_000);
+    expect(lines.some((l) => l.accountNumber === "512")).toBe(true);
+  });
+
+  it("serializes confirm payload with counterpart", () => {
     const form = formFromImport(sample);
     const input = toConfirmInput(form, 10_000, 2_000);
     expect(input.docType).toBe("supplier_invoice");
     expect(input.htCents).toBe(10_000);
     expect(input.vatCents).toBe(2_000);
     expect(input.thirdPartyId).toBe(3);
+    expect(input.counterpartAccount).toBeTruthy();
   });
 
   it("labels confidence for beginners", () => {

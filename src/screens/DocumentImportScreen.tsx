@@ -4,16 +4,19 @@ import { LabelWithHelp } from "../components/FieldHelp";
 import { ThirdPartySelect } from "../components/ThirdPartySelect";
 import { api } from "../lib/api";
 import {
+  applyDocTypeDefaults,
   buildProposedLines,
   confidenceLabel,
   DOC_TYPE_REGISTRY,
   docTypeMeta,
   formFromImport,
   previewDocumentImports,
+  suggestedJournal,
   toConfirmInput,
   type DocumentImport,
   type ReviewFormState,
 } from "../lib/documentImport";
+import { FRAIS_SETTLEMENT_OPTIONS } from "../lib/guidedEntry";
 import { formatEuros, parseEurosToCents } from "../lib/money";
 import { isTauriRuntime } from "../lib/updater";
 import type { NavId, ThirdParty, VatCode } from "../lib/types";
@@ -60,10 +63,24 @@ export function DocumentImportScreen({ onNavigate }: Props) {
           address: null,
           routingId: null,
         },
+        {
+          id: 2,
+          code: "C001",
+          name: "ACME SAS",
+          kind: "customer",
+          accountNumber: "411",
+          active: true,
+          siret: null,
+          email: null,
+          address: null,
+          routingId: null,
+        },
       ]);
       setVatCodes([
         { code: "T20D", label: "TVA 20% déductible", rateBp: 2000, direction: "deductible", active: true },
         { code: "T10D", label: "TVA 10% déductible", rateBp: 1000, direction: "deductible", active: true },
+        { code: "T20C", label: "TVA 20% collectée", rateBp: 2000, direction: "collected", active: true },
+        { code: "T10C", label: "TVA 10% collectée", rateBp: 1000, direction: "collected", active: true },
         { code: "T20R", label: "Autoliquidation 20%", rateBp: 2000, direction: "reverse", active: true },
         { code: "TEX", label: "Exonéré", rateBp: 0, direction: "exempt", active: true },
       ]);
@@ -79,7 +96,7 @@ export function DocumentImportScreen({ onNavigate }: Props) {
       api.listVatCodes(),
     ]);
     setImports(list);
-    setTiers(t.filter((x) => x.kind === "supplier"));
+    setTiers(t);
     setVatCodes(v);
   }, []);
 
@@ -107,7 +124,7 @@ export function DocumentImportScreen({ onNavigate }: Props) {
       await reload();
       selectDoc(doc);
       setStatus(
-        `Document analysé (#${doc.id}). Vérifiez les champs puis créez le brouillon — rien n’est validé en compta tant que vous ne confirmez pas.`,
+        `Document analysé (#${doc.id}). Vérifiez le type, les montants et le journal — rien n’est validé en compta tant que vous ne confirmez pas.`,
       );
     } catch (e) {
       setError(String(e));
@@ -125,7 +142,7 @@ export function DocumentImportScreen({ onNavigate }: Props) {
       multiple: false,
       filters: [
         {
-          name: "Factures / images",
+          name: "Documents / images",
           extensions: ["pdf", "png", "jpg", "jpeg", "webp", "tif", "tiff"],
         },
       ],
@@ -138,8 +155,6 @@ export function DocumentImportScreen({ onNavigate }: Props) {
     e.preventDefault();
     setDragOver(false);
     const file = e.dataTransfer.files?.[0];
-    // Tauri webview : le chemin natif n’est pas toujours exposé via File API.
-    // On guide vers le sélecteur fichier (chemin disque requis pour copie workspace).
     if (file) {
       setStatus(
         `Fichier « ${file.name} » détecté. Utilisez « Choisir un PDF / image » pour l’importer dans le workspace (chemin local requis).`,
@@ -155,23 +170,91 @@ export function DocumentImportScreen({ onNavigate }: Props) {
 
   const meta = form ? docTypeMeta(form.docType) : null;
   const canPost = meta?.postingSupported === true;
+  const partyKind = meta?.partyKind ?? "none";
+  const showParty = partyKind !== "none" && form?.docType !== "bank_statement";
+  const partyNeeded =
+    meta?.partyRequired === true ||
+    (form != null &&
+      (form.docType === "expense_receipt" || form.docType === "ticket") &&
+      form.counterpartAccount.startsWith("401"));
+
+  const filteredTiers = useMemo(() => {
+    if (!form || partyKind === "none") return tiers;
+    return tiers.filter((t) => t.kind === partyKind);
+  }, [tiers, form, partyKind]);
+
+  const vatModeOptions = useMemo(() => {
+    if (!form) return [] as { value: ReviewFormState["vatMode"]; label: string }[];
+    if (form.docType === "customer_invoice") {
+      return [
+        { value: "normale" as const, label: "TVA classique" },
+        { value: "sans" as const, label: "Sans TVA" },
+        {
+          value: "autoliquidation_chantier" as const,
+          label: "Autoliquidation — chantier (art. 283)",
+        },
+      ];
+    }
+    if (form.docType === "supplier_invoice") {
+      return [
+        { value: "normale" as const, label: "TVA classique" },
+        { value: "sans" as const, label: "Sans TVA" },
+        {
+          value: "autoliquidation_sous_traitance" as const,
+          label: "Autoliquidation — sous-traitance (art. 283)",
+        },
+      ];
+    }
+    if (form.docType === "bank_statement") {
+      return [{ value: "sans" as const, label: "Sans TVA (mouvement bancaire)" }];
+    }
+    return [
+      { value: "normale" as const, label: "TVA classique" },
+      { value: "sans" as const, label: "Sans TVA" },
+    ];
+  }, [form]);
+
+  const filteredVatCodes = useMemo(() => {
+    if (!form) return vatCodes;
+    if (form.docType === "customer_invoice") {
+      if (form.vatMode === "sans") return vatCodes.filter((c) => c.direction === "exempt");
+      if (form.vatMode === "autoliquidation_chantier")
+        return vatCodes.filter((c) => c.direction === "reverse" || c.direction === "exempt");
+      return vatCodes.filter((c) => c.direction === "collected");
+    }
+    if (form.docType === "bank_statement") {
+      return vatCodes.filter((c) => c.direction === "exempt");
+    }
+    if (form.vatMode === "sans") return vatCodes.filter((c) => c.direction === "exempt");
+    if (form.vatMode === "autoliquidation_sous_traitance")
+      return vatCodes.filter((c) => c.direction === "reverse");
+    return vatCodes.filter((c) => c.direction === "deductible");
+  }, [form, vatCodes]);
 
   async function onConfirm() {
     if (!form || !selected) return;
     if (!canPost) {
       setError(
         meta?.comingSoonHint ||
-          "Ce type de document n’a pas encore de modèle d’écriture. Choisissez « Facture fournisseur ».",
+          "Précisez le type de document pour proposer un brouillon d’écriture.",
       );
       return;
     }
     const htCents = parseEurosToCents(form.htStr);
     if (htCents <= 0) {
-      setError("Indiquez un montant HT valide (ex. 100,00).");
+      setError(
+        form.docType === "bank_statement"
+          ? "Indiquez le montant du mouvement (ex. 150,00)."
+          : "Indiquez un montant HT valide (ex. 100,00).",
+      );
       return;
     }
-    if (!form.thirdPartyId && form.createSupplierName.trim().length < 2) {
-      setError("Choisissez un fournisseur existant ou saisissez un nom pour en créer un.");
+    if (partyNeeded && !form.thirdPartyId && form.createSupplierName.trim().length < 2) {
+      setError(
+        partyKind === "customer"
+          ? "Choisissez un client existant ou saisissez un nom pour en créer un."
+          : "Choisissez un fournisseur existant ou saisissez un nom pour en créer un.",
+      );
       return;
     }
     const vatParsed = parseEurosToCents(form.vatStr);
@@ -180,18 +263,19 @@ export function DocumentImportScreen({ onNavigate }: Props) {
     setBusy(true);
     setError(null);
     try {
+      const journal = form.journalCode || suggestedJournal(form);
       if (PREVIEW || !isTauriRuntime()) {
         setStatus(
-          "Aperçu : brouillon ACH aurait été créé après confirmation. Passez par le desktop pour persister.",
+          `Aperçu : brouillon ${journal} aurait été créé après confirmation. Passez par le desktop pour persister.`,
         );
         return;
       }
       const confirmed = await api.confirmDocumentImport(
         selected.id,
-        toConfirmInput(form, htCents, vatCents),
+        toConfirmInput({ ...form, journalCode: journal }, htCents, vatCents),
       );
       setStatus(
-        `Brouillon d’écriture #${confirmed.entryId} créé (ACH). Ouvrez Écritures pour relire puis valider — la validation journal reste manuelle.`,
+        `Brouillon d’écriture #${confirmed.entryId} créé (${journal}). Ouvrez Écritures pour relire puis valider — la validation journal reste manuelle.`,
       );
       await reload();
       setSelectedId(confirmed.id);
@@ -230,6 +314,7 @@ export function DocumentImportScreen({ onNavigate }: Props) {
 
   const pending = imports.filter((d) => d.status === "pending_review");
   const others = imports.filter((d) => d.status !== "pending_review");
+  const journalLabel = form?.journalCode || meta?.defaultJournal || "…";
 
   return (
     <div className="panel document-import-screen">
@@ -237,11 +322,11 @@ export function DocumentImportScreen({ onNavigate }: Props) {
         <div>
           <h1>Import documents</h1>
           <p>
-            Déposez une facture fournisseur (PDF ou image). SasCompta lit le texte
-            en local, propose le type et un brouillon ACH + TVA —{" "}
-            <strong>vous confirmez avant toute écriture</strong>. Les autres types
-            (tickets, relevés, frais, factures clients) réutilisent ce même écran
-            dès que leur modèle sera branché.
+            Déposez une facture, un ticket, une note de frais ou un relevé (PDF /
+            image). SasCompta lit le texte en local, propose le type et un brouillon
+            d’écriture (ACH, VTE, OD ou BQ) —{" "}
+            <strong>vous confirmez avant toute écriture</strong>. La pièce jointe
+            reste liée au brouillon.
           </p>
         </div>
         {onNavigate && (
@@ -360,17 +445,13 @@ export function DocumentImportScreen({ onNavigate }: Props) {
                     value={form.docType}
                     disabled={selected.status !== "pending_review"}
                     onChange={(e) =>
-                      setForm({
-                        ...form,
-                        docType: e.target.value,
-                        journalCode: docTypeMeta(e.target.value).defaultJournal,
-                      })
+                      setForm(applyDocTypeDefaults(form, e.target.value))
                     }
                   >
                     {DOC_TYPE_REGISTRY.map((t) => (
                       <option key={t.id} value={t.id}>
                         {t.label}
-                        {!t.postingSupported ? " (bientôt)" : ""}
+                        {!t.postingSupported ? " — à préciser" : ""}
                       </option>
                     ))}
                   </select>
@@ -415,7 +496,11 @@ export function DocumentImportScreen({ onNavigate }: Props) {
                 </label>
 
                 <label>
-                  <LabelWithHelp topic="montantHt">Montant HT (€)</LabelWithHelp>
+                  <LabelWithHelp topic="montantHt">
+                    {form.docType === "bank_statement"
+                      ? "Montant mouvement (€)"
+                      : "Montant HT (€)"}
+                  </LabelWithHelp>
                   <input
                     value={form.htStr}
                     disabled={selected.status !== "pending_review"}
@@ -425,19 +510,21 @@ export function DocumentImportScreen({ onNavigate }: Props) {
                   />
                 </label>
 
-                <label>
-                  TVA (€)
-                  <input
-                    value={form.vatStr}
-                    disabled={
-                      selected.status !== "pending_review" ||
-                      form.vatMode !== "normale"
-                    }
-                    onChange={(e) =>
-                      setForm({ ...form, vatStr: e.target.value })
-                    }
-                  />
-                </label>
+                {form.docType !== "bank_statement" && (
+                  <label>
+                    TVA (€)
+                    <input
+                      value={form.vatStr}
+                      disabled={
+                        selected.status !== "pending_review" ||
+                        form.vatMode !== "normale"
+                      }
+                      onChange={(e) =>
+                        setForm({ ...form, vatStr: e.target.value })
+                      }
+                    />
+                  </label>
+                )}
 
                 <label>
                   <LabelWithHelp topic="regimeTvaSaisie">Régime TVA</LabelWithHelp>
@@ -452,49 +539,62 @@ export function DocumentImportScreen({ onNavigate }: Props) {
                         htAccount:
                           vatMode === "autoliquidation_sous_traitance"
                             ? "604"
-                            : form.htAccount || "606",
+                            : form.docType === "customer_invoice"
+                              ? form.htAccount || "706"
+                              : form.docType === "expense_receipt" ||
+                                  form.docType === "ticket"
+                                ? form.htAccount || "625"
+                                : form.htAccount || "606",
                         vatCode:
                           vatMode === "autoliquidation_sous_traitance"
                             ? "T20R"
                             : vatMode === "sans"
                               ? "TEX"
-                              : "T20D",
+                              : form.docType === "customer_invoice"
+                                ? "T20C"
+                                : "T20D",
                       });
                     }}
                   >
-                    <option value="normale">TVA classique</option>
-                    <option value="sans">Sans TVA</option>
-                    <option value="autoliquidation_sous_traitance">
-                      Autoliquidation — sous-traitance (art. 283)
-                    </option>
-                  </select>
-                </label>
-
-                <label>
-                  <LabelWithHelp topic="codeTva">Code TVA</LabelWithHelp>
-                  <select
-                    value={form.vatCode}
-                    disabled={selected.status !== "pending_review"}
-                    onChange={(e) => {
-                      const code = e.target.value;
-                      const vc = vatCodes.find((c) => c.code === code);
-                      setForm({
-                        ...form,
-                        vatCode: code,
-                        rateBp: vc?.rateBp ?? form.rateBp,
-                      });
-                    }}
-                  >
-                    {vatCodes.map((c) => (
-                      <option key={c.code} value={c.code}>
-                        {c.code} — {c.label}
+                    {vatModeOptions.map((o) => (
+                      <option key={o.value} value={o.value}>
+                        {o.label}
                       </option>
                     ))}
                   </select>
                 </label>
 
+                {form.docType !== "bank_statement" && (
+                  <label>
+                    <LabelWithHelp topic="codeTva">Code TVA</LabelWithHelp>
+                    <select
+                      value={form.vatCode}
+                      disabled={selected.status !== "pending_review"}
+                      onChange={(e) => {
+                        const code = e.target.value;
+                        const vc = vatCodes.find((c) => c.code === code);
+                        setForm({
+                          ...form,
+                          vatCode: code,
+                          rateBp: vc?.rateBp ?? form.rateBp,
+                        });
+                      }}
+                    >
+                      {filteredVatCodes.map((c) => (
+                        <option key={c.code} value={c.code}>
+                          {c.code} — {c.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
+
                 <label>
-                  Compte charge
+                  {form.docType === "customer_invoice"
+                    ? "Compte produit"
+                    : form.docType === "bank_statement"
+                      ? "Contrepartie (souvent 471)"
+                      : "Compte charge"}
                   <input
                     value={form.htAccount}
                     disabled={selected.status !== "pending_review"}
@@ -503,6 +603,53 @@ export function DocumentImportScreen({ onNavigate }: Props) {
                     }
                   />
                 </label>
+
+                {(form.docType === "expense_receipt" ||
+                  form.docType === "ticket") && (
+                  <label>
+                    Règlement / contrepartie
+                    <select
+                      value={form.counterpartAccount}
+                      disabled={selected.status !== "pending_review"}
+                      onChange={(e) => {
+                        const counterpartAccount = e.target.value;
+                        const opt = FRAIS_SETTLEMENT_OPTIONS.find((o) =>
+                          counterpartAccount.startsWith(o.account),
+                        );
+                        setForm({
+                          ...form,
+                          counterpartAccount,
+                          journalCode: opt?.journal ?? form.journalCode,
+                        });
+                      }}
+                    >
+                      {FRAIS_SETTLEMENT_OPTIONS.map((o) => (
+                        <option key={o.account} value={o.account}>
+                          {o.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
+
+                {form.docType === "bank_statement" && (
+                  <label>
+                    Sens du mouvement
+                    <select
+                      value={form.bankDirection}
+                      disabled={selected.status !== "pending_review"}
+                      onChange={(e) =>
+                        setForm({
+                          ...form,
+                          bankDirection: e.target.value as ReviewFormState["bankDirection"],
+                        })
+                      }
+                    >
+                      <option value="debit">Sortie (crédit 512)</option>
+                      <option value="credit">Entrée (débit 512)</option>
+                    </select>
+                  </label>
+                )}
 
                 <label>
                   Journal
@@ -516,83 +663,89 @@ export function DocumentImportScreen({ onNavigate }: Props) {
                 </label>
               </div>
 
-              <div className="form-grid">
-                <label className="span-2">
-                  <LabelWithHelp topic="tiers">Fournisseur</LabelWithHelp>
-                  <ThirdPartySelect
-                    tiers={tiers}
-                    value={form.thirdPartyId}
-                    kind="supplier"
-                    disabled={selected.status !== "pending_review"}
-                    onChange={(id) =>
-                      setForm({
-                        ...form,
-                        thirdPartyId: id,
-                        createSupplierName: id ? "" : form.createSupplierName,
-                      })
-                    }
-                    onCreated={(tp) => {
-                      setTiers((prev) =>
-                        prev.some((t) => t.id === tp.id) ? prev : [...prev, tp],
-                      );
-                      setForm({
-                        ...form,
-                        thirdPartyId: tp.id,
-                        createSupplierName: "",
-                      });
-                    }}
-                  />
-                </label>
-                {!form.thirdPartyId && (
-                  <>
-                    <label>
-                      Nouveau fournisseur — nom
-                      <input
-                        value={form.createSupplierName}
-                        disabled={selected.status !== "pending_review"}
-                        placeholder="Raison sociale"
-                        onChange={(e) =>
-                          setForm({
-                            ...form,
-                            createSupplierName: e.target.value,
-                          })
-                        }
-                      />
-                    </label>
-                    <label>
-                      Code (optionnel)
-                      <input
-                        value={form.createSupplierCode}
-                        disabled={selected.status !== "pending_review"}
-                        placeholder="F003"
-                        onChange={(e) =>
-                          setForm({
-                            ...form,
-                            createSupplierCode: e.target.value,
-                          })
-                        }
-                      />
-                    </label>
-                    <label>
-                      SIRET (optionnel)
-                      <input
-                        value={form.createSupplierSiret}
-                        disabled={selected.status !== "pending_review"}
-                        onChange={(e) =>
-                          setForm({
-                            ...form,
-                            createSupplierSiret: e.target.value,
-                          })
-                        }
-                      />
-                    </label>
-                  </>
-                )}
-              </div>
+              {showParty && (
+                <div className="form-grid">
+                  <label className="span-2">
+                    <LabelWithHelp topic="tiers">
+                      {partyKind === "customer" ? "Client" : "Fournisseur"}
+                      {!partyNeeded ? " (optionnel)" : ""}
+                    </LabelWithHelp>
+                    <ThirdPartySelect
+                      tiers={filteredTiers}
+                      value={form.thirdPartyId}
+                      kind={partyKind === "customer" ? "customer" : "supplier"}
+                      disabled={selected.status !== "pending_review"}
+                      onChange={(id) =>
+                        setForm({
+                          ...form,
+                          thirdPartyId: id,
+                          createSupplierName: id ? "" : form.createSupplierName,
+                        })
+                      }
+                      onCreated={(tp) => {
+                        setTiers((prev) =>
+                          prev.some((t) => t.id === tp.id) ? prev : [...prev, tp],
+                        );
+                        setForm({
+                          ...form,
+                          thirdPartyId: tp.id,
+                          createSupplierName: "",
+                        });
+                      }}
+                    />
+                  </label>
+                  {!form.thirdPartyId && (
+                    <>
+                      <label>
+                        Nouveau {partyKind === "customer" ? "client" : "fournisseur"}{" "}
+                        — nom
+                        <input
+                          value={form.createSupplierName}
+                          disabled={selected.status !== "pending_review"}
+                          placeholder="Raison sociale"
+                          onChange={(e) =>
+                            setForm({
+                              ...form,
+                              createSupplierName: e.target.value,
+                            })
+                          }
+                        />
+                      </label>
+                      <label>
+                        Code (optionnel)
+                        <input
+                          value={form.createSupplierCode}
+                          disabled={selected.status !== "pending_review"}
+                          placeholder={partyKind === "customer" ? "C003" : "F003"}
+                          onChange={(e) =>
+                            setForm({
+                              ...form,
+                              createSupplierCode: e.target.value,
+                            })
+                          }
+                        />
+                      </label>
+                      <label>
+                        SIRET (optionnel)
+                        <input
+                          value={form.createSupplierSiret}
+                          disabled={selected.status !== "pending_review"}
+                          onChange={(e) =>
+                            setForm({
+                              ...form,
+                              createSupplierSiret: e.target.value,
+                            })
+                          }
+                        />
+                      </label>
+                    </>
+                  )}
+                </div>
+              )}
 
               {canPost && proposed.length > 0 && (
                 <div className="proposed-lines">
-                  <h3>Lignes proposées (ACH)</h3>
+                  <h3>Lignes proposées ({journalLabel})</h3>
                   <p className="muted tiny">
                     Aperçu — le brouillon ne sera créé qu’après confirmation. La
                     validation (post) reste dans Écritures.
@@ -632,7 +785,7 @@ export function DocumentImportScreen({ onNavigate }: Props) {
                     disabled={busy || !canPost}
                     onClick={() => void onConfirm()}
                   >
-                    Confirmer → brouillon ACH
+                    Confirmer → brouillon {journalLabel}
                   </button>
                   <button
                     type="button"
