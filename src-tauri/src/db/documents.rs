@@ -12,7 +12,9 @@ use chrono::Utc;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use sha2::{Digest, Sha256};
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 fn now_iso() -> String {
@@ -95,10 +97,39 @@ pub fn migrate_documents(conn: &Connection) -> DbResult<()> {
                 CHECK (status IN ('pending_review','confirmed','discarded')),
             entry_id INTEGER REFERENCES entry(id),
             created_at TEXT NOT NULL,
-            confirmed_at TEXT
+            confirmed_at TEXT,
+            source_fingerprint TEXT,
+            source_origin_path TEXT
         );
         CREATE INDEX IF NOT EXISTS idx_document_import_status
             ON document_import(status);
+        "#,
+    )?;
+    // Workspaces créés avant v14 : colonnes idempotence.
+    let mut stmt = conn.prepare("PRAGMA table_info(document_import)")?;
+    let cols: Vec<String> = stmt
+        .query_map([], |r| r.get::<_, String>(1))?
+        .filter_map(|r| r.ok())
+        .collect();
+    drop(stmt);
+    if !cols.iter().any(|c| c == "source_fingerprint") {
+        conn.execute(
+            "ALTER TABLE document_import ADD COLUMN source_fingerprint TEXT",
+            [],
+        )?;
+    }
+    if !cols.iter().any(|c| c == "source_origin_path") {
+        conn.execute(
+            "ALTER TABLE document_import ADD COLUMN source_origin_path TEXT",
+            [],
+        )?;
+    }
+    // Un même fichier (contenu) n’est importé qu’une fois tant qu’il n’est pas écarté.
+    conn.execute_batch(
+        r#"
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_document_import_fingerprint_active
+            ON document_import(source_fingerprint)
+            WHERE source_fingerprint IS NOT NULL AND status != 'discarded';
         "#,
     )?;
     Ok(())
@@ -770,11 +801,46 @@ fn row_to_import(r: &rusqlite::Row<'_>) -> rusqlite::Result<DocumentImport> {
         entry_id: r.get(9)?,
         created_at: r.get(10)?,
         confirmed_at: r.get(11)?,
+        source_fingerprint: r.get(12)?,
+        source_origin_path: r.get(13)?,
     })
 }
 
 const SELECT_COLS: &str = "id, doc_type, source_file_name, stored_path, mime_type,
-    extraction_method, extraction_json, confidence, status, entry_id, created_at, confirmed_at";
+    extraction_method, extraction_json, confidence, status, entry_id, created_at, confirmed_at,
+    source_fingerprint, source_origin_path";
+
+/// Empreinte SHA-256 hex du contenu (idempotence import).
+pub fn file_fingerprint(path: &Path) -> DbResult<String> {
+    let mut file = fs::File::open(path)?;
+    let mut hasher = Sha256::new();
+    let mut buf = [0u8; 64 * 1024];
+    loop {
+        let n = file.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+pub fn find_active_by_fingerprint(
+    conn: &Connection,
+    fingerprint: &str,
+) -> DbResult<Option<DocumentImport>> {
+    conn.query_row(
+        &format!(
+            "SELECT {SELECT_COLS} FROM document_import
+             WHERE source_fingerprint = ?1 AND status != 'discarded'
+             ORDER BY id DESC LIMIT 1"
+        ),
+        params![fingerprint],
+        row_to_import,
+    )
+    .optional()
+    .map_err(Into::into)
+}
 
 pub fn get_document_import(conn: &Connection, id: i64) -> DbResult<DocumentImport> {
     conn.query_row(
@@ -829,8 +895,30 @@ pub fn analyze_document_with_hint(
     source_path: &Path,
     type_hint: Option<&str>,
 ) -> DbResult<DocumentImport> {
+    analyze_document_idempotent(conn, workspace_path, source_path, type_hint, true)
+}
+
+/// Analyse + copie ; si `idempotent` et empreinte déjà en file (non écartée), renvoie l’existant.
+pub fn analyze_document_idempotent(
+    conn: &Connection,
+    workspace_path: &Path,
+    source_path: &Path,
+    type_hint: Option<&str>,
+    idempotent: bool,
+) -> DbResult<DocumentImport> {
     if !source_path.is_file() {
         return Err("Fichier source introuvable".into());
+    }
+    let fingerprint = file_fingerprint(source_path)?;
+    let origin = source_path
+        .canonicalize()
+        .unwrap_or_else(|_| source_path.to_path_buf())
+        .display()
+        .to_string();
+    if idempotent {
+        if let Some(existing) = find_active_by_fingerprint(conn, &fingerprint)? {
+            return Ok(existing);
+        }
     }
     let file_name = source_path
         .file_name()
@@ -867,21 +955,25 @@ pub fn analyze_document_with_hint(
     let party = parse_supplier_name(&text);
     let kind = party_kind_for_doc(&doc_type).unwrap_or("supplier");
     let matched = match_third_party(conn, kind, party.as_deref(), siret.as_deref())?;
-    let payload = build_extraction_payload(
+    let mut payload = build_extraction_payload(
         &text,
         &method,
         &doc_type,
         confidence,
         matched.as_ref(),
     );
+    if let Some(obj) = payload.as_object_mut() {
+        obj.insert("sourceFingerprint".into(), json!(fingerprint));
+        obj.insert("sourceOriginPath".into(), json!(origin));
+    }
     let mime = guess_mime(source_path);
     let now = now_iso();
     conn.execute(
         "INSERT INTO document_import(
             doc_type, source_file_name, stored_path, mime_type,
             extraction_method, extraction_json, confidence, status,
-            entry_id, created_at, confirmed_at
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'pending_review', NULL, ?8, NULL)",
+            entry_id, created_at, confirmed_at, source_fingerprint, source_origin_path
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'pending_review', NULL, ?8, NULL, ?9, ?10)",
         params![
             doc_type,
             file_name,
@@ -890,7 +982,9 @@ pub fn analyze_document_with_hint(
             method,
             payload.to_string(),
             confidence,
-            now
+            now,
+            fingerprint,
+            origin
         ],
     )?;
     let id = conn.last_insert_rowid();
@@ -1755,6 +1849,29 @@ Merci de votre confiance
         assert_eq!(doc.doc_type, "ticket");
         assert!(doc.confidence >= 0.72);
         assert_eq!(doc.status, "pending_review");
+        assert!(doc.source_fingerprint.is_some());
+    }
+
+    #[test]
+    fn analyze_same_bytes_is_idempotent() {
+        let dir = tempdir().unwrap();
+        let ws = dir.path().join("demo.sascompta");
+        let info = db::create_demo_workspace(&ws).unwrap();
+        let (conn, _) =
+            db::open_workspace(&info.path, db::DEMO_PASSWORD).unwrap();
+
+        let pdf = dir.path().join("same.pdf");
+        write_simple_pdf(&pdf, "FACTURE FA-IDEMP\nTotal TTC 10,00");
+        let a = analyze_document(&conn, Path::new(&info.path), &pdf).unwrap();
+        let copy = dir.path().join("copy-same.pdf");
+        fs::copy(&pdf, &copy).unwrap();
+        let b = analyze_document(&conn, Path::new(&info.path), &copy).unwrap();
+        assert_eq!(a.id, b.id);
+        assert_eq!(a.source_fingerprint, b.source_fingerprint);
+        let n: i64 = conn
+            .query_row("SELECT COUNT(*) FROM document_import", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 1);
     }
 
     #[test]

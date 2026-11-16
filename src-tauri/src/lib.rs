@@ -1,12 +1,14 @@
 mod commands;
 mod companion;
 pub mod db;
+mod folder_watch;
 mod models;
 mod registry;
 mod security;
 
 use companion::CompanionHub;
 use db::AppState;
+use folder_watch::FolderWatchHub;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -28,6 +30,7 @@ pub fn run() {
         })
         .manage(AppState::new())
         .manage(CompanionHub::new())
+        .manage(FolderWatchHub::new())
         .invoke_handler(tauri::generate_handler![
             commands::list_known_workspaces,
             commands::forget_known_workspace,
@@ -123,6 +126,10 @@ pub fn run() {
             companion::companion_stop,
             companion::companion_status,
             companion::companion_rotate_pairing,
+            folder_watch::folder_watch_default_path,
+            folder_watch::folder_watch_start,
+            folder_watch::folder_watch_stop,
+            folder_watch::folder_watch_status,
             commands::pdp_stub_submit,
             commands::list_ereporting_batches,
             commands::build_ereporting_batch,

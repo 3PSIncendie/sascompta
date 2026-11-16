@@ -24,10 +24,11 @@ Workspace démo : mot de passe `SecretPass1`, Demo SAS, SIREN `123456782`, exerc
 npm run check   # lint + typecheck + vitest + cargo test
 ```
 
-## Compagnon mobile (Wi‑Fi local)
+## Import documents
 
-Envoi photo/PDF depuis le téléphone vers la file **Import docs** du PC, sans cloud.
-Voir [`companion/README.md`](companion/README.md) (Expo Go / APK sideload). Sur le desktop : **Import docs** ou **Ma SAS** → *Activer le pont Wi‑Fi*.
+- **Dossier surveillé** (PC) : activez la surveillance sur `Documents/SasCompta-import` (ou un autre dossier) depuis **Import docs** / **Ma SAS**. PDF et images déposés → file « En revue » (idempotent).
+- **Compagnon mobile** (Wi‑Fi local) : envoi photo/PDF depuis le téléphone, sans cloud.
+  Voir [`companion/README.md`](companion/README.md) (Expo Go / APK sideload). Sur le desktop : **Import docs** ou **Ma SAS** → *Activer le pont Wi‑Fi*.
 
 ## Auto-update (Windows)
 

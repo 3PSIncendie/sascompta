@@ -996,6 +996,12 @@ pub struct DocumentImport {
     pub entry_id: Option<i64>,
     pub created_at: String,
     pub confirmed_at: Option<String>,
+    /// SHA-256 hex du contenu source (idempotence dossier / re-dépôt).
+    #[serde(default)]
+    pub source_fingerprint: Option<String>,
+    /// Chemin d’origine absolu (dossier surveillé), si connu.
+    #[serde(default)]
+    pub source_origin_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

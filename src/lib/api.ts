@@ -54,6 +54,7 @@ import type {
   WorkspaceInfo,
 } from "./types";
 import type { CompanionStatus } from "./companion";
+import type { FolderWatchStatus } from "./folderWatch";
 import type {
   ConfirmDocumentImportInput,
   DocumentImport,
@@ -285,6 +286,14 @@ export const api = {
   companionStatus: () => invoke<CompanionStatus>("companion_status"),
   companionRotatePairing: () =>
     invoke<CompanionStatus>("companion_rotate_pairing"),
+
+  folderWatchDefaultPath: () => invoke<string>("folder_watch_default_path"),
+  folderWatchStart: (path?: string | null) =>
+    invoke<FolderWatchStatus>("folder_watch_start", {
+      path: path ?? null,
+    }),
+  folderWatchStop: () => invoke<FolderWatchStatus>("folder_watch_stop"),
+  folderWatchStatus: () => invoke<FolderWatchStatus>("folder_watch_status"),
 
   pdpStubSubmit: (queueId: number) =>
     invoke<EinvoiceQueueItem>("pdp_stub_submit", { queueId }),
