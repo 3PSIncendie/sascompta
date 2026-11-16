@@ -303,7 +303,8 @@ export function InvoicesScreen({
 
   async function onIssue(inv: Invoice) {
     if (PREVIEW || !isTauriRuntime()) {
-      const num = `FACT-2026-${String(inv.id).padStart(4, "0")}`;
+      const ym = (inv.issueDate || "2026-04-01").slice(0, 7);
+      const num = `${ym}-${String(inv.id).padStart(4, "0")}`;
       setInvoices((prev) =>
         prev.map((x) =>
           x.id === inv.id

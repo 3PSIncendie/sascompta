@@ -13,6 +13,7 @@ import {
 } from "../modules/billing/einvoice";
 import {
   parseNextNumInput,
+  currentPreviewMonth,
   previewDocumentSequences,
   previewNumber,
 } from "../modules/billing/sequences";
@@ -242,7 +243,11 @@ export function MaSasScreen({
             return {
               ...row,
               nextNum,
-              preview: previewNumber(row.kind, row.fiscalYearLabel, nextNum),
+              preview: previewNumber(
+                row.fiscalYearLabel,
+                currentPreviewMonth(),
+                nextNum,
+              ),
             };
           }),
         );
@@ -691,14 +696,15 @@ export function MaSasScreen({
         <header className="panel-head">
           <div>
             <h2>
-              Numérotation des factures{" "}
+              Numérotation devis &amp; factures{" "}
               <FieldHelp topic="numerotationFactures" compact />
             </h2>
             <p className="muted">
-              Indiquez le <strong>prochain numéro</strong> de chaque série pour
-              continuer une numérotation déjà commencée hors SasCompta (papier,
-              autre logiciel…). Les numéros émis restent uniques et
-              chronologiques.
+              Format <code>AAAA-MM-NNNN</code> : le mois vient de la date du
+              document ; le compteur reprend chaque{" "}
+              <strong>1<sup>er</sup> janvier</strong>. Indiquez le{" "}
+              <strong>prochain numéro</strong> pour continuer une série déjà
+              commencée hors SasCompta. Les numéros déjà émis ne changent pas.
             </p>
           </div>
         </header>
@@ -706,12 +712,13 @@ export function MaSasScreen({
         <div className="help-callout">
           <strong>Comment faire ?</strong>
           <p>
-            Regardez votre <em>dernière</em> facture émise. Si c’était{" "}
-            <code>FACT-2026-0041</code>, saisissez <strong>42</strong> dans
-            « Factures ». À la prochaine émission, SasCompta attribuera{" "}
-            <code>FACT-2026-0042</code>, puis 43, 44… Idem pour acomptes (
-            <code>ACMP-</code>), avoirs (<code>AVO-</code>) et devis (
-            <code>DEV-</code>).
+            Regardez votre <em>dernière</em> facture de l’année. Si c’était{" "}
+            <code>2026-10-0041</code>, saisissez <strong>42</strong> dans
+            « Factures ». En novembre, SasCompta attribuera{" "}
+            <code>2026-11-0042</code>, puis 43, 44… jusqu’au 31/12 ; le 1
+            <sup>er</sup> janvier suivant, le compteur repart à 0001. Les
+            acomptes et avoirs partagent la série Factures. Les devis ont leur
+            propre compteur annuel.
           </p>
         </div>
 
@@ -727,7 +734,11 @@ export function MaSasScreen({
               const parsed = parseNextNumInput(draft);
               const livePreview =
                 parsed != null
-                  ? previewNumber(row.kind, row.fiscalYearLabel, parsed)
+                  ? previewNumber(
+                      row.fiscalYearLabel,
+                      currentPreviewMonth(),
+                      parsed,
+                    )
                   : "—";
               const tooLow = parsed != null && parsed < row.minNextNum;
               return (

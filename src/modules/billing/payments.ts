@@ -22,7 +22,7 @@ export function previewPayments(): Payment[] {
     {
       id: 1,
       invoiceId: 2,
-      invoiceNumber: "FACT-2026-0001",
+      invoiceNumber: "2026-03-0001",
       thirdPartyCode: "C001",
       thirdPartyName: "Client Gamma",
       paidOn: "2026-04-10",
@@ -40,7 +40,7 @@ export function previewReminders(): Reminder[] {
     {
       id: 1,
       invoiceId: 2,
-      invoiceNumber: "FACT-2026-0001",
+      invoiceNumber: "2026-03-0001",
       thirdPartyCode: "C001",
       thirdPartyName: "Client Gamma",
       level: 7,
@@ -50,12 +50,12 @@ export function previewReminders(): Reminder[] {
       sentAt: null,
       channel: "pdf",
       bodySnapshot:
-        "Relance J+7 — Facture FACT-2026-0001\nClient : Client Gamma (C001)\nReste dû : 1824,00 €",
+        "Relance J+7 — Facture 2026-03-0001\nClient : Client Gamma (C001)\nReste dû : 1824,00 €",
     },
     {
       id: 2,
       invoiceId: 2,
-      invoiceNumber: "FACT-2026-0001",
+      invoiceNumber: "2026-03-0001",
       thirdPartyCode: "C001",
       thirdPartyName: "Client Gamma",
       level: 15,

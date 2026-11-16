@@ -177,7 +177,7 @@ export function previewQuotes(): Quote[] {
   return [
     {
       id: 1,
-      number: "DEV-2026-0001",
+      number: "2026-03-0001",
       thirdPartyId: 3,
       thirdPartyCode: "C001",
       thirdPartyName: "Client Gamma",

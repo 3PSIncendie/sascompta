@@ -151,7 +151,7 @@ export function previewInvoices(): Invoice[] {
     },
     {
       id: 2,
-      number: "FACT-2026-0001",
+      number: "2026-03-0001",
       kind: "standard",
       thirdPartyId: 3,
       thirdPartyCode: "C001",
@@ -173,7 +173,7 @@ export function previewInvoices(): Invoice[] {
       entryId: 42,
       pdfPath: null,
       facturxPath: null,
-      notes: "Depuis devis DEV-2026-0001",
+      notes: "Depuis devis 2026-03-0001",
       legalMentions: null,
       createdAt: now,
       updatedAt: now,
