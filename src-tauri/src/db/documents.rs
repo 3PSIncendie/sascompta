@@ -181,16 +181,42 @@ fn is_image(path: &Path) -> bool {
     )
 }
 
+/// Normalise le texte PDF (ligatures Adobe, espaces insécables) avant classification.
+pub fn normalize_extracted_text(text: &str) -> String {
+    let mut s = text.to_string();
+    for (from, to) in [
+        ("\u{FB00}", "ff"), // ﬀ
+        ("\u{FB01}", "fi"), // ﬁ
+        ("\u{FB02}", "fl"), // ﬂ
+        ("\u{FB03}", "ffi"),
+        ("\u{FB04}", "ffl"),
+        ("\u{00A0}", " "),
+        ("\u{202F}", " "),
+        ("\u{2019}", "'"),
+        ("\u{2018}", "'"),
+        ("\u{201C}", "\""),
+        ("\u{201D}", "\""),
+    ] {
+        if s.contains(from) {
+            s = s.replace(from, to);
+        }
+    }
+    s
+}
+
 /// Extraction locale : couche texte PDF d’abord. OCR cloud non requis.
 pub fn extract_text(path: &Path) -> (String, String) {
     if is_pdf(path) {
         match pdf_extract::extract_text(path) {
             Ok(text) if text.chars().filter(|c| !c.is_whitespace()).count() >= 40 => {
-                return (text, "pdf_text".into());
+                return (normalize_extracted_text(&text), "pdf_text".into());
             }
             Ok(text) if !text.trim().is_empty() => {
                 // Texte trop pauvre → probablement scanné ; pas d’OCR cloud par défaut.
-                return (text, "image_pending_ocr".into());
+                return (
+                    normalize_extracted_text(&text),
+                    "image_pending_ocr".into(),
+                );
             }
             Ok(_) | Err(_) => {
                 return (String::new(), "image_pending_ocr".into());
@@ -817,12 +843,15 @@ pub fn classify_document_with_org(
         .map(|t| (t, 0.0))
         .collect();
 
+    // « subrogaon » / « aﬀacturage » : artefacts pdf-extract (lettre manquante / ligature).
     let outbound_sale_signals = lower.contains("devis associé")
         || lower.contains("devis associe")
         || lower.contains("numéro du devis")
         || lower.contains("numero du devis")
         || lower.contains("affacturage")
+        || lower.contains("affactur")
         || lower.contains("subrogation")
+        || lower.contains("subroga")
         || lower.contains("bon de commande")
         || lower.contains("conditions de règlement")
         || lower.contains("conditions de reglement")
@@ -1224,8 +1253,11 @@ pub fn list_document_imports(
             out.push(row?);
         }
     } else {
+        // File active seulement : ne pas remonter les imports soft-discarded historiques.
         let mut stmt = conn.prepare(&format!(
-            "SELECT {SELECT_COLS} FROM document_import ORDER BY id DESC"
+            "SELECT {SELECT_COLS} FROM document_import
+             WHERE status IN ('pending_review', 'confirmed')
+             ORDER BY id DESC"
         ))?;
         let rows = stmt.query_map([], row_to_import)?;
         for row in rows {
@@ -1254,55 +1286,33 @@ pub fn analyze_document_with_hint(
     analyze_document_idempotent(conn, workspace_path, source_path, type_hint, true)
 }
 
-/// Analyse + copie ; si `idempotent` et empreinte déjà en file (non écartée), renvoie l’existant.
-pub fn analyze_document_idempotent(
+/// Classifie + construit le payload d’extraction (partagé insert / refresh).
+fn analyze_text_pipeline(
     conn: &Connection,
-    workspace_path: &Path,
-    source_path: &Path,
+    text: &str,
+    method: &str,
     type_hint: Option<&str>,
-    idempotent: bool,
-) -> DbResult<DocumentImport> {
-    if !source_path.is_file() {
-        return Err("Fichier source introuvable".into());
-    }
-    let fingerprint = file_fingerprint(source_path)?;
-    let origin = source_path
-        .canonicalize()
-        .unwrap_or_else(|_| source_path.to_path_buf())
-        .display()
-        .to_string();
-    if idempotent {
-        if let Some(existing) = find_active_by_fingerprint(conn, &fingerprint)? {
-            return Ok(existing);
-        }
-    }
-    let file_name = source_path
-        .file_name()
-        .map(|s| s.to_string_lossy().to_string())
-        .unwrap_or_else(|| "document.pdf".into());
-    let dir = imports_dir(workspace_path);
-    fs::create_dir_all(&dir)?;
-    let stamp = Utc::now().format("%Y%m%d%H%M%S%.3f");
-    let dest = dir.join(format!("{stamp}_{file_name}"));
-    fs::copy(source_path, &dest)?;
-
-    let (text, method) = extract_text(&dest);
+    fingerprint: &str,
+    origin: &str,
+) -> DbResult<(String, f64, String, serde_json::Value)> {
     let org = super::load_organization(conn).ok();
     let org_hint = org.as_ref().map(|o| OrgClassifyHint {
         name: o.name.as_str(),
         siret: o.siret.as_deref(),
     });
-    let (mut doc_type, mut confidence) = classify_document_with_org(&text, org_hint);
+    let (mut doc_type, mut confidence) = classify_document_with_org(text, org_hint);
     // Facture ambiguë : sans signaux vente / org émetteur → privilégier fournisseur.
     if doc_type == "unknown" {
-        let amounts = parse_amounts(&text);
+        let amounts = parse_amounts(text);
         let lower = text.to_lowercase();
         let sale_like = lower.contains("à votre attention")
             || lower.contains("conditions de règlement")
             || lower.contains("devis associé")
             || lower.contains("affacturage")
+            || lower.contains("affactur")
+            || lower.contains("subroga")
             || org_hint
-                .map(|o| org_appears_as_issuer(&text, &o) && !org_appears_as_buyer(&text, &o))
+                .map(|o| org_appears_as_issuer(text, &o) && !org_appears_as_buyer(text, &o))
                 .unwrap_or(false);
         if (amounts.ttc_cents.is_some() || amounts.ht_cents.is_some())
             && lower.contains("facture")
@@ -1324,13 +1334,13 @@ pub fn analyze_document_idempotent(
             confidence = confidence.max(0.72);
         }
     }
-    let siret = parse_siret(&text);
-    let party = parse_supplier_name(&text);
+    let siret = parse_siret(text);
+    let party = parse_supplier_name(text);
     let kind = party_kind_for_doc(&doc_type).unwrap_or("supplier");
     let matched = match_third_party(conn, kind, party.as_deref(), siret.as_deref())?;
     let mut payload = build_extraction_payload(
-        &text,
-        &method,
+        text,
+        method,
         &doc_type,
         confidence,
         matched.as_ref(),
@@ -1339,6 +1349,96 @@ pub fn analyze_document_idempotent(
         obj.insert("sourceFingerprint".into(), json!(fingerprint));
         obj.insert("sourceOriginPath".into(), json!(origin));
     }
+    Ok((doc_type, confidence, method.to_string(), payload))
+}
+
+/// Rafraîchit l’extraction d’un import encore en revue (applique correctifs OCR sans doublon).
+fn refresh_pending_import(
+    conn: &Connection,
+    existing: &DocumentImport,
+    source_path: &Path,
+    type_hint: Option<&str>,
+    fingerprint: &str,
+    origin: &str,
+) -> DbResult<DocumentImport> {
+    let extract_path = if Path::new(&existing.stored_path).is_file() {
+        Path::new(&existing.stored_path)
+    } else {
+        source_path
+    };
+    let (text, method) = extract_text(extract_path);
+    let (doc_type, confidence, method, payload) =
+        analyze_text_pipeline(conn, &text, &method, type_hint, fingerprint, origin)?;
+    conn.execute(
+        "UPDATE document_import SET
+            doc_type = ?1,
+            extraction_method = ?2,
+            extraction_json = ?3,
+            confidence = ?4,
+            source_origin_path = ?5
+         WHERE id = ?6 AND status = 'pending_review'",
+        params![
+            doc_type,
+            method,
+            payload.to_string(),
+            confidence,
+            origin,
+            existing.id
+        ],
+    )?;
+    get_document_import(conn, existing.id)
+}
+
+/// Analyse + copie ; si `idempotent` :
+/// - confirmé → renvoie l’existant (pas de doublon)
+/// - en revue → **re-extrait** sur la même ligne (correctifs OCR / Ma SAS s’appliquent)
+pub fn analyze_document_idempotent(
+    conn: &Connection,
+    workspace_path: &Path,
+    source_path: &Path,
+    type_hint: Option<&str>,
+    idempotent: bool,
+) -> DbResult<DocumentImport> {
+    if !source_path.is_file() {
+        return Err("Fichier source introuvable".into());
+    }
+    let fingerprint = file_fingerprint(source_path)?;
+    let origin = source_path
+        .canonicalize()
+        .unwrap_or_else(|_| source_path.to_path_buf())
+        .display()
+        .to_string();
+    if idempotent {
+        if let Some(existing) = find_active_by_fingerprint(conn, &fingerprint)? {
+            if existing.status == "confirmed" {
+                return Ok(existing);
+            }
+            if existing.status == "pending_review" {
+                return refresh_pending_import(
+                    conn,
+                    &existing,
+                    source_path,
+                    type_hint,
+                    &fingerprint,
+                    &origin,
+                );
+            }
+            return Ok(existing);
+        }
+    }
+    let file_name = source_path
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| "document.pdf".into());
+    let dir = imports_dir(workspace_path);
+    fs::create_dir_all(&dir)?;
+    let stamp = Utc::now().format("%Y%m%d%H%M%S%.3f");
+    let dest = dir.join(format!("{stamp}_{file_name}"));
+    fs::copy(source_path, &dest)?;
+
+    let (text, method) = extract_text(&dest);
+    let (doc_type, confidence, method, payload) =
+        analyze_text_pipeline(conn, &text, &method, type_hint, &fingerprint, &origin)?;
     let mime = guess_mime(source_path);
     let now = now_iso();
     conn.execute(
@@ -1364,15 +1464,16 @@ pub fn analyze_document_idempotent(
     get_document_import(conn, id)
 }
 
+/// Supprime définitivement un import en revue (fichier + ligne) — pas de passage en « Traité ».
 pub fn discard_document_import(conn: &Connection, id: i64) -> DbResult<()> {
     let doc = get_document_import(conn, id)?;
     if doc.status == "confirmed" {
-        return Err("Import déjà confirmé — ne peut pas être écarté".into());
+        return Err("Import déjà confirmé — ne peut pas être supprimé".into());
     }
-    conn.execute(
-        "UPDATE document_import SET status = 'discarded' WHERE id = ?1",
-        params![id],
-    )?;
+    if !doc.stored_path.is_empty() {
+        let _ = fs::remove_file(&doc.stored_path);
+    }
+    conn.execute("DELETE FROM document_import WHERE id = ?1", params![id])?;
     Ok(())
 }
 
@@ -2159,6 +2260,19 @@ Total TTC                 120,00
     }
 
     #[test]
+    fn parse_and_classify_real_pdf_extract_dump() {
+        // Dump pdf-extract (ligatures déjà normalisées dans le fichier).
+        let text = include_str!("fixtures/import_ocr/2611-F-2026-1132-3PSI.pdf-extract.txt");
+        let a = parse_amounts(text);
+        assert_eq!(a.ht_cents, Some(150_000), "{a:?}");
+        assert_eq!(a.vat_cents, Some(0), "{a:?}");
+        assert_eq!(a.ttc_cents, Some(150_000), "{a:?}");
+        let (t, c) = classify_document(text);
+        assert_eq!(t, "customer_invoice", "confidence {c}");
+        assert!(detect_reverse_charge_implicit(text, &a));
+    }
+
+    #[test]
     fn classify_fixture_3psi_client_invoice_as_vte() {
         let text = include_str!("fixtures/import_ocr/2611-F-2026-1132-3PSI.txt");
         let org = OrgClassifyHint {
@@ -2376,6 +2490,99 @@ Total TTC                 120,00
             .query_row("SELECT COUNT(*) FROM document_import", [], |r| r.get(0))
             .unwrap();
         assert_eq!(n, 1);
+    }
+
+    #[test]
+    fn normalize_ligatures_unlocks_affacturage_signal() {
+        let raw = "Facture\na\u{FB00}acturage Bibby\nsubrogaon dans le cadre";
+        let norm = normalize_extracted_text(raw);
+        assert!(norm.to_lowercase().contains("affacturage"));
+        let (t, _) = classify_document(&norm);
+        // Pas assez de signaux seuls — on vérifie surtout la normalisation.
+        assert!(norm.contains("affacturage"));
+        let _ = t;
+    }
+
+    #[test]
+    fn reanalyze_pending_same_fingerprint_refreshes_bad_extraction() {
+        let dir = tempdir().unwrap();
+        let ws = dir.path().join("demo.sascompta");
+        let info = db::create_demo_workspace(&ws).unwrap();
+        let (conn, _) =
+            db::open_workspace(&info.path, db::DEMO_PASSWORD).unwrap();
+        conn.execute(
+            "UPDATE organization SET name = '3PSI', siret = '93362796000018', siren = '933627960'",
+            [],
+        )
+        .unwrap();
+
+        let pdf = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src/db/fixtures/import_ocr/2611-F-2026-1132-3PSI.pdf");
+        assert!(pdf.is_file());
+        let fp = file_fingerprint(&pdf).unwrap();
+        let dest = imports_dir(Path::new(&info.path)).join("stale.pdf");
+        fs::create_dir_all(dest.parent().unwrap()).unwrap();
+        fs::copy(&pdf, &dest).unwrap();
+        // Ancien import erroné (pré-0.6.8) encore en revue — même empreinte.
+        conn.execute(
+            "INSERT INTO document_import(
+                doc_type, source_file_name, stored_path, mime_type,
+                extraction_method, extraction_json, confidence, status,
+                entry_id, created_at, confirmed_at, source_fingerprint, source_origin_path
+             ) VALUES (
+                'supplier_invoice', '2611-F-2026-1132-3PSI.pdf', ?1, 'application/pdf',
+                'pdf_text', ?2, 0.9, 'pending_review',
+                NULL, '2026-01-01T00:00:00Z', NULL, ?3, ?4
+             )",
+            params![
+                dest.display().to_string(),
+                r#"{"htCents":100,"vatCents":150000,"ttcCents":150000,"vatMode":"normale","journalCode":"ACH","docType":"supplier_invoice"}"#,
+                fp,
+                pdf.display().to_string()
+            ],
+        )
+        .unwrap();
+        let stale_id: i64 = conn.last_insert_rowid();
+
+        let refreshed = analyze_document(&conn, Path::new(&info.path), &pdf).unwrap();
+        assert_eq!(refreshed.id, stale_id, "doit recycler la ligne en revue");
+        assert_eq!(refreshed.doc_type, "customer_invoice");
+        let vat = refreshed.extraction.get("vatCents").and_then(|v| v.as_i64());
+        let journal = refreshed
+            .extraction
+            .get("journalCode")
+            .and_then(|v| v.as_str());
+        assert_ne!(vat, Some(150_000), "TVA ne doit plus porter le TTC");
+        assert_eq!(journal, Some("VTE"));
+        let n: i64 = conn
+            .query_row("SELECT COUNT(*) FROM document_import", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 1);
+    }
+
+    #[test]
+    fn discard_hard_deletes_row_not_soft_traite() {
+        let dir = tempdir().unwrap();
+        let ws = dir.path().join("demo.sascompta");
+        let info = db::create_demo_workspace(&ws).unwrap();
+        let (conn, _) =
+            db::open_workspace(&info.path, db::DEMO_PASSWORD).unwrap();
+
+        let pdf = dir.path().join("to-delete.pdf");
+        write_simple_pdf(&pdf, "FACTURE FA-DEL\nTotal TTC 10,00");
+        let doc = analyze_document(&conn, Path::new(&info.path), &pdf).unwrap();
+        let stored = doc.stored_path.clone();
+        assert!(Path::new(&stored).is_file());
+        discard_document_import(&conn, doc.id).unwrap();
+        let n: i64 = conn
+            .query_row("SELECT COUNT(*) FROM document_import WHERE id = ?1", [doc.id], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(n, 0);
+        assert!(!Path::new(&stored).is_file());
+        let listed = list_document_imports(&conn, None).unwrap();
+        assert!(listed.iter().all(|d| d.status != "discarded"));
     }
 
     #[test]

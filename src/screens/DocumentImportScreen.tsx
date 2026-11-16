@@ -294,19 +294,17 @@ export function DocumentImportScreen({ onNavigate }: Props) {
     setBusy(true);
     try {
       if (PREVIEW || !isTauriRuntime()) {
-        setImports((prev) =>
-          prev.map((d) =>
-            d.id === selected.id ? { ...d, status: "discarded" } : d,
-          ),
-        );
-        setStatus("Import écarté (aperçu).");
+        setImports((prev) => prev.filter((d) => d.id !== selected.id));
+        setSelectedId(null);
+        setForm(null);
+        setStatus("Import supprimé (aperçu).");
         return;
       }
       await api.discardDocumentImport(selected.id);
       await reload();
       setSelectedId(null);
       setForm(null);
-      setStatus("Import écarté.");
+      setStatus("Import supprimé.");
     } catch (e) {
       setError(String(e));
     } finally {
@@ -315,7 +313,8 @@ export function DocumentImportScreen({ onNavigate }: Props) {
   }
 
   const pending = imports.filter((d) => d.status === "pending_review");
-  const others = imports.filter((d) => d.status !== "pending_review");
+  // « Traités » = confirmés uniquement — les suppressions ne doivent pas y apparaître.
+  const others = imports.filter((d) => d.status === "confirmed");
   const journalLabel = form?.journalCode || meta?.defaultJournal || "…";
 
   return (
@@ -803,7 +802,7 @@ export function DocumentImportScreen({ onNavigate }: Props) {
                     disabled={busy}
                     onClick={() => void onDiscard()}
                   >
-                    Écarter
+                    Supprimer
                   </button>
                 </div>
               )}
