@@ -4,11 +4,24 @@ export function baseUrl(host: string, port: number): string {
   return `http://${host}:${port}`;
 }
 
+function networkHint(err: unknown): string {
+  const msg = err instanceof Error ? err.message : String(err);
+  if (/Network request failed|Failed to fetch|Cleartext|CLEARTEXT|ATS/i.test(msg)) {
+    return "PC injoignable en HTTP local — même Wi‑Fi ? Pare-feu PC ? (Android : cleartext LAN requis.)";
+  }
+  return msg;
+}
+
 export async function fetchInfo(
   host: string,
   port: number,
 ): Promise<{ orgName?: string; pairingOpen?: boolean }> {
-  const res = await fetch(`${baseUrl(host, port)}/v1/info`);
+  let res: Response;
+  try {
+    res = await fetch(`${baseUrl(host, port)}/v1/info`);
+  } catch (e) {
+    throw new Error(networkHint(e));
+  }
   if (!res.ok) {
     throw new Error(`PC injoignable (HTTP ${res.status}). Même Wi‑Fi ?`);
   }
@@ -20,11 +33,16 @@ export async function pair(
   port: number,
   code: string,
 ): Promise<Session> {
-  const res = await fetch(`${baseUrl(host, port)}/v1/pair`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ code: code.trim() }),
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${baseUrl(host, port)}/v1/pair`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code: code.trim() }),
+    });
+  } catch (e) {
+    throw new Error(networkHint(e));
+  }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     throw new Error(
@@ -50,16 +68,21 @@ export async function uploadDocument(
     docType: DocTypeHint;
   },
 ): Promise<{ id: number; message?: string }> {
-  const res = await fetch(`${baseUrl(session.host, session.port)}/v1/upload`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${session.token}`,
-      "Content-Type": opts.mimeType || "application/octet-stream",
-      "X-Doc-Type": opts.docType,
-      "X-File-Name": opts.fileName,
-    },
-    body: bytes,
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${baseUrl(session.host, session.port)}/v1/upload`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${session.token}`,
+        "Content-Type": opts.mimeType || "application/octet-stream",
+        "X-Doc-Type": opts.docType,
+        "X-File-Name": opts.fileName,
+      },
+      body: bytes,
+    });
+  } catch (e) {
+    throw new Error(networkHint(e));
+  }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     throw new Error(
@@ -71,10 +94,56 @@ export async function uploadDocument(
   return { id: Number(data.id), message: data.message };
 }
 
+/**
+ * Parse le QR desktop : URI `sascompta://pair?…` (courant) ou JSON legacy.
+ */
 export function parsePairingPayload(raw: string): PairingPayload {
-  const data = JSON.parse(raw) as PairingPayload;
-  if (!data.host || !data.port || !data.code) {
+  const text = String(raw ?? "").trim();
+  if (!text) {
+    throw new Error("QR vide.");
+  }
+
+  if (text.startsWith("{")) {
+    let data: Record<string, unknown>;
+    try {
+      data = JSON.parse(text) as Record<string, unknown>;
+    } catch {
+      throw new Error("QR JSON invalide.");
+    }
+    const host = String(data.host ?? "").trim();
+    const port = Number(data.port);
+    const code = String(data.code ?? "").trim();
+    if (!host || !Number.isFinite(port) || port <= 0 || !code) {
+      throw new Error("QR invalide (host / port / code manquants).");
+    }
+    return {
+      v: Number(data.v) || 1,
+      app: typeof data.app === "string" ? data.app : undefined,
+      host,
+      port,
+      code,
+      org: typeof data.org === "string" ? data.org : undefined,
+      expiresAt: typeof data.expiresAt === "string" ? data.expiresAt : undefined,
+    };
+  }
+
+  let url: URL;
+  try {
+    url = new URL(text);
+  } catch {
+    throw new Error("QR invalide (format non reconnu).");
+  }
+  const host = (url.searchParams.get("host") || "").trim();
+  const port = Number(url.searchParams.get("port"));
+  const code = (url.searchParams.get("code") || "").trim();
+  if (!host || !Number.isFinite(port) || port <= 0 || !code) {
     throw new Error("QR invalide (host / port / code manquants).");
   }
-  return data;
+  return {
+    v: Number(url.searchParams.get("v")) || 1,
+    app: "sascompta",
+    host,
+    port,
+    code,
+  };
 }

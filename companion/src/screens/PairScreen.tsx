@@ -1,5 +1,5 @@
 import { CameraView, useCameraPermissions } from "expo-camera";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import {
   Pressable,
   StyleSheet,
@@ -22,6 +22,7 @@ export function PairScreen({ onPaired }: Props) {
   const [busy, setBusy] = useState(false);
   const [scan, setScan] = useState(false);
   const [permission, requestPermission] = useCameraPermissions();
+  const scannedLock = useRef(false);
 
   async function doPair(h: string, p: number, c: string) {
     setBusy(true);
@@ -55,12 +56,31 @@ export function PairScreen({ onPaired }: Props) {
     if (!permission?.granted) {
       const res = await requestPermission();
       if (!res.granted) {
-        setError("Autorisation caméra refusée — saisissez le code à la main.");
+        setError(
+          "Autorisation caméra refusée — saisissez l’IP et le code à la main (réglages système → SasCompta Compagnon → Caméra).",
+        );
         return;
       }
     }
+    scannedLock.current = false;
     setScan(true);
     setError(null);
+  }
+
+  function onBarcodeScanned({ data }: { data: string }) {
+    if (scannedLock.current) return;
+    scannedLock.current = true;
+    setScan(false);
+    try {
+      const payload = parsePairingPayload(data);
+      setHost(payload.host);
+      setPort(String(payload.port));
+      setCode(payload.code);
+      void doPair(payload.host, payload.port, payload.code);
+    } catch (e) {
+      scannedLock.current = false;
+      setError(e instanceof Error ? e.message : String(e));
+    }
   }
 
   return (
@@ -74,21 +94,17 @@ export function PairScreen({ onPaired }: Props) {
         <View style={styles.scannerBox}>
           <CameraView
             style={StyleSheet.absoluteFillObject}
+            facing="back"
             barcodeScannerSettings={{ barcodeTypes: ["qr"] }}
-            onBarcodeScanned={({ data }) => {
-              setScan(false);
-              try {
-                const payload = parsePairingPayload(data);
-                setHost(payload.host);
-                setPort(String(payload.port));
-                setCode(payload.code);
-                void doPair(payload.host, payload.port, payload.code);
-              } catch (e) {
-                setError(e instanceof Error ? e.message : String(e));
-              }
-            }}
+            onBarcodeScanned={onBarcodeScanned}
           />
-          <Pressable style={styles.scanCancel} onPress={() => setScan(false)}>
+          <Pressable
+            style={styles.scanCancel}
+            onPress={() => {
+              scannedLock.current = false;
+              setScan(false);
+            }}
+          >
             <Text style={styles.scanCancelText}>Fermer le scan</Text>
           </Pressable>
         </View>
