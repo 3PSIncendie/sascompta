@@ -23,7 +23,10 @@ export type PairingPayload = {
   expiresAt?: string;
 };
 
-/** Payload QR compact (ASCII) — scannable + parseable côté téléphone. */
+/**
+ * Payload QR : URL HTTP du pont (`/launch`), pas `sascompta://`.
+ * Sur Android, un schéma custom cherche une APK native absente alors qu’Expo Go suffit.
+ */
 export function buildPairingPayload(input: {
   host: string;
   port: number;
@@ -33,18 +36,37 @@ export function buildPairingPayload(input: {
 }): string {
   const params = new URLSearchParams();
   params.set("v", "1");
-  params.set("host", input.host);
-  params.set("port", String(input.port));
   params.set("code", input.code);
-  // org / expiresAt volontairement hors QR (densité + accents) — /v1/info les fournit.
-  return `sascompta://pair?${params.toString()}`;
+  // host/port dans l’autorité HTTP — densité QR + ouverture navigateur → Expo Go.
+  return `http://${input.host}:${input.port}/launch?${params.toString()}`;
+}
+
+/** Si le QR est un Intent Android, récupère l’URL de repli (page /launch). */
+function unwrapAndroidIntent(raw: string): string {
+  const text = raw.trim();
+  if (!/^intent:/i.test(text)) return text;
+  const m = text.match(/S\.browser_fallback_url=([^;]+)/i);
+  if (!m?.[1]) {
+    throw new Error(
+      "Intent Android sans URL de repli — ouvrez Expo Go, puis scannez le QR dans l’app compagnon.",
+    );
+  }
+  try {
+    return decodeURIComponent(m[1]);
+  } catch {
+    return m[1];
+  }
 }
 
 /**
- * Accepte le format URI `sascompta://pair?...` et l’ancien JSON `{host,port,code}`.
+ * Accepte :
+ * - `http(s)://{host}:{port}/launch?code=…` (courant, Android / Expo Go)
+ * - `sascompta://pair?host=&port=&code=` (legacy SC-61)
+ * - Intent Android avec `S.browser_fallback_url=…`
+ * - ancien JSON `{host,port,code}`
  */
 export function parsePairingPayload(raw: string): PairingPayload {
-  const text = raw.trim();
+  const text = unwrapAndroidIntent(String(raw ?? "").trim());
   if (!text) {
     throw new Error("QR vide.");
   }
@@ -73,16 +95,39 @@ export function parsePairingPayload(raw: string): PairingPayload {
     };
   }
 
-  // URI sascompta://pair?...  (aussi tolère http(s)://…?host=&port=&code=)
   let url: URL;
   try {
     url = new URL(text);
   } catch {
     throw new Error("QR invalide (format non reconnu).");
   }
-  const host = (url.searchParams.get("host") || "").trim();
-  const port = Number(url.searchParams.get("port"));
-  const code = (url.searchParams.get("code") || "").trim();
+
+  const code = (
+    url.searchParams.get("code") ||
+    url.searchParams.get("c") ||
+    ""
+  ).trim();
+
+  // http(s) /launch : host/port depuis l’autorité si absents de la query.
+  const host = (
+    url.searchParams.get("host") ||
+    (url.protocol === "http:" || url.protocol === "https:"
+      ? url.hostname
+      : "") ||
+    ""
+  ).trim();
+
+  let port = Number(url.searchParams.get("port"));
+  if (!Number.isFinite(port) || port <= 0) {
+    if (url.port) {
+      port = Number(url.port);
+    } else if (url.protocol === "http:") {
+      port = 80;
+    } else if (url.protocol === "https:") {
+      port = 443;
+    }
+  }
+
   if (!host || !Number.isFinite(port) || port <= 0 || !code) {
     throw new Error("QR invalide (host / port / code manquants).");
   }

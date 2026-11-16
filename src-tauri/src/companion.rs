@@ -156,14 +156,89 @@ impl CompanionHub {
     }
 }
 
-/// Payload QR compact ASCII (sans org / expires — densité + accents).
-/// Format : `sascompta://pair?v=1&host=…&port=…&code=…`
+/// Payload QR : URL HTTP du pont (pas de schéma custom `sascompta://`).
+///
+/// Sur Android, un QR `sascompta://…` déclenche un Intent vers une APK native
+/// absente (« application indisponible ») même si Expo Go est installé.
+/// `http://host:port/launch?…` ouvre le navigateur → page qui lance Expo Go.
+/// Format : `http://{host}:{port}/launch?v=1&code=…` (host/port dans l’autorité).
 fn pairing_payload(cfg: &LiveConfig) -> String {
-    // URL-encode manuel minimal (host IPv4 / code chiffres / port) — pas d’unicode.
     format!(
-        "sascompta://pair?v=1&host={}&port={}&code={}",
+        "http://{}:{}/launch?v=1&code={}",
         cfg.host, cfg.port, cfg.pairing_code
     )
+}
+
+/// Page HTML servie au scan caméra système (Android) : Intent Expo Go + code.
+fn launch_page_html(cfg: &LiveConfig, code_hint: Option<&str>) -> String {
+    let code = code_hint
+        .filter(|c| !c.is_empty())
+        .unwrap_or(cfg.pairing_code.as_str());
+    let host = &cfg.host;
+    let port = cfg.port;
+    // Intent Android → package Expo Go ; repli Play Store si absent.
+    let expo_intent = "intent://#Intent;scheme=exp;package=host.exp.exponent;S.browser_fallback_url=https://play.google.com/store/apps/details?id=host.exp.exponent;end";
+    let play = "https://play.google.com/store/apps/details?id=host.exp.exponent";
+    format!(
+        r#"<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>SasCompta — ouvrir Expo Go</title>
+<style>
+  body{{font-family:system-ui,sans-serif;margin:0;padding:1.5rem;background:#eef7f1;color:#1a3d2e}}
+  h1{{font-size:1.35rem;margin:0 0 .5rem}}
+  p{{line-height:1.45;color:#355647}}
+  .code{{font-size:2rem;letter-spacing:.35em;font-weight:800;margin:1rem 0;text-align:center}}
+  .btn{{display:block;text-align:center;text-decoration:none;background:#3a7d5c;color:#fff;
+    font-weight:700;padding:.9rem 1rem;border-radius:14px;margin:.6rem 0}}
+  .btn.secondary{{background:#fff;color:#8a4b1a;border:1px solid #f2b27a}}
+  ol{{padding-left:1.2rem;color:#355647;line-height:1.5}}
+  .muted{{font-size:.9rem;color:#4d6b5c}}
+</style>
+</head>
+<body>
+  <h1>SasCompta compagnon</h1>
+  <p>Pas d’APK native à installer. Sur Android, ouvrez le projet dans <strong>Expo Go</strong>, puis appairage Wi‑Fi local.</p>
+  <p class="code">{code}</p>
+  <a class="btn" href="{expo_intent}">Ouvrir Expo Go</a>
+  <a class="btn secondary" href="{play}">Installer Expo Go (Play Store)</a>
+  <ol>
+    <li>Ouvrez <strong>Expo Go</strong> (bouton ci‑dessus).</li>
+    <li>Chargez le projet compagnon via le QR <code>npx expo start</code> (sur le PC de dev).</li>
+    <li>Dans l’app : <strong>Scanner le QR</strong> du pont SasCompta, ou saisissez l’IP <code>{host}</code>, port <code>{port}</code> et le code.</li>
+  </ol>
+  <p class="muted">Ce lien ouvre le pont local — aucun cloud. Ne scannez pas ce QR en espérant une APK SasCompta.</p>
+</body>
+</html>"#
+    )
+}
+
+fn html_response(html: String) -> Response<Cursor<Vec<u8>>> {
+    let mut resp = Response::from_string(html).with_status_code(StatusCode(200));
+    for h in cors_headers() {
+        resp.add_header(h);
+    }
+    if let Ok(h) = Header::from_bytes(&b"Content-Type"[..], &b"text/html; charset=utf-8"[..]) {
+        resp.add_header(h);
+    }
+    resp
+}
+
+/// Extrait `code` (ou `c`) de la query string d’une URL relative (`/launch?…`).
+fn query_param(url: &str, key: &str) -> Option<String> {
+    let q = url.split_once('?')?.1;
+    for part in q.split('&') {
+        let (k, v) = part.split_once('=')?;
+        if k == key {
+            let v = v.trim();
+            if !v.is_empty() {
+                return Some(v.to_string());
+            }
+        }
+    }
+    None
 }
 
 fn render_qr_svg(payload: &str) -> Result<String, String> {
@@ -612,20 +687,19 @@ fn handle_request(
         return;
     }
 
-    if path == "/" && method == Method::Get {
-        let html = "<!doctype html><meta charset=utf-8><title>SasCompta compagnon</title>\
-            <body style='font-family:system-ui;padding:2rem'>\
-            <h1>SasCompta — pont local</h1>\
-            <p>Ce service reçoit photos et PDF depuis l’app compagnon sur le Wi‑Fi local. Aucun cloud.</p>\
-            </body>";
-        let mut resp = Response::from_string(html).with_status_code(StatusCode(200));
-        for h in cors_headers() {
-            resp.add_header(h);
-        }
-        if let Ok(h) = Header::from_bytes(&b"Content-Type"[..], &b"text/html; charset=utf-8"[..]) {
-            resp.add_header(h);
-        }
-        let _ = request.respond(resp);
+    if (path == "/" || path == "/launch") && method == Method::Get {
+        let cfg = match config.lock() {
+            Ok(c) => c.clone(),
+            Err(e) => {
+                let _ = request.respond(json_response(
+                    StatusCode(500),
+                    json!({ "error": e.to_string() }),
+                ));
+                return;
+            }
+        };
+        let code_hint = query_param(&url, "code").or_else(|| query_param(&url, "c"));
+        let _ = request.respond(html_response(launch_page_html(&cfg, code_hint.as_deref())));
         return;
     }
 
@@ -758,14 +832,13 @@ mod tests {
 
     #[test]
     fn qr_svg_renders_without_xml_prologue() {
-        let svg = render_qr_svg("sascompta://pair?v=1&host=192.168.1.10&port=17832&code=123456")
-            .unwrap();
+        let svg = render_qr_svg("http://192.168.1.10:17832/launch?v=1&code=123456").unwrap();
         assert!(svg.starts_with("<svg"), "{svg}");
         assert!(!svg.contains("<?xml"));
     }
 
     #[test]
-    fn pairing_payload_is_compact_uri() {
+    fn pairing_payload_is_http_launch_uri() {
         let cfg = LiveConfig {
             host: "192.168.1.42".into(),
             port: 17832,
@@ -777,13 +850,16 @@ mod tests {
             received_count: 0,
         };
         let p = pairing_payload(&cfg);
-        assert_eq!(
-            p,
-            "sascompta://pair?v=1&host=192.168.1.42&port=17832&code=482913"
-        );
+        assert_eq!(p, "http://192.168.1.42:17832/launch?v=1&code=482913");
+        // Pas de schéma custom (évite Intent APK manquante sur Android).
+        assert!(!p.starts_with("sascompta://"));
         // Org accentué volontairement absent du QR (densité / encodage).
         assert!(!p.contains("Lumière"));
         assert!(!p.contains("expires"));
+        let html = launch_page_html(&cfg, None);
+        assert!(html.contains("host.exp.exponent"));
+        assert!(html.contains("482913"));
+        assert!(html.contains("Ouvrir Expo Go"));
     }
 
     #[test]
@@ -848,6 +924,19 @@ mod tests {
         stream.read_to_string(&mut up_resp).unwrap();
         assert!(up_resp.contains("200"), "{up_resp}");
         assert!(up_resp.contains("pending_review") || up_resp.contains("ticket"));
+
+        // Page /launch : Intent Expo Go (pas d’APK sascompta://).
+        let launch_req = format!(
+            "GET /launch?v=1&code=123456 HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"
+        );
+        let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        stream.write_all(launch_req.as_bytes()).unwrap();
+        let mut launch_resp = String::new();
+        stream.read_to_string(&mut launch_resp).unwrap();
+        assert!(launch_resp.contains("200"), "{launch_resp}");
+        assert!(launch_resp.contains("host.exp.exponent"), "{launch_resp}");
+        assert!(launch_resp.contains("Ouvrir Expo Go"), "{launch_resp}");
+        assert!(launch_resp.contains("123456"), "{launch_resp}");
 
         stop.store(true, Ordering::SeqCst);
         let _ = TcpStream::connect(("127.0.0.1", port));

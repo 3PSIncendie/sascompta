@@ -86,8 +86,9 @@ export function PairScreen({ onPaired }: Props) {
   return (
     <View style={styles.wrap}>
       <Text style={styles.lead}>
-        Sur le PC : Ma SAS ou Import docs → « Activer le pont Wi‑Fi ». Même
-        réseau Wi‑Fi, puis scannez le QR ou tapez le code.
+        Vous êtes dans Expo Go — pas besoin d’APK. Sur le PC : Ma SAS ou Import
+        docs → « Activer le pont Wi‑Fi ». Même Wi‑Fi, puis scannez le QR du
+        pont (ou tapez IP + code).
       </Text>
 
       {scan ? (

@@ -15,10 +15,10 @@ describe("companion helpers", () => {
     const live = previewCompanionStatus(true);
     expect(live.running).toBe(true);
     expect(live.pairingCode).toHaveLength(6);
-    expect(live.qrPayload).toContain("sascompta://pair");
-    expect(live.qrPayload).toContain("host=192.168.1.42");
-    expect(live.qrPayload).toContain("port=17832");
-    expect(live.qrPayload).toContain("code=482913");
+    expect(live.qrPayload).toBe(
+      "http://192.168.1.42:17832/launch?v=1&code=482913",
+    );
+    expect(live.qrPayload).not.toContain("sascompta://");
   });
 
   it("formats endpoint", () => {
@@ -37,12 +37,13 @@ describe("companion helpers", () => {
     );
   });
 
-  it("round-trips URI pairing payload", () => {
+  it("round-trips HTTP launch pairing payload", () => {
     const raw = buildPairingPayload({
       host: "10.0.0.5",
       port: 17832,
       code: "001234",
     });
+    expect(raw).toBe("http://10.0.0.5:17832/launch?v=1&code=001234");
     const parsed = parsePairingPayload(raw);
     expect(parsed).toEqual({
       v: 1,
@@ -53,7 +54,17 @@ describe("companion helpers", () => {
     });
   });
 
-  it("parses legacy JSON QR payload", () => {
+  it("parses legacy sascompta:// and JSON QR payloads", () => {
+    expect(
+      parsePairingPayload(
+        "sascompta://pair?v=1&host=192.168.1.42&port=17832&code=482913",
+      ),
+    ).toMatchObject({
+      host: "192.168.1.42",
+      port: 17832,
+      code: "482913",
+    });
+
     const raw = JSON.stringify({
       v: 1,
       app: "sascompta",
@@ -63,6 +74,18 @@ describe("companion helpers", () => {
       org: "Demo SAS",
     });
     expect(parsePairingPayload(raw)).toMatchObject({
+      host: "192.168.1.42",
+      port: 17832,
+      code: "482913",
+    });
+  });
+
+  it("unwraps Android Intent fallback URL", () => {
+    const fallback = encodeURIComponent(
+      "http://192.168.1.42:17832/launch?v=1&code=482913",
+    );
+    const intent = `intent://#Intent;scheme=exp;package=host.exp.exponent;S.browser_fallback_url=${fallback};end`;
+    expect(parsePairingPayload(intent)).toMatchObject({
       host: "192.168.1.42",
       port: 17832,
       code: "482913",

@@ -228,8 +228,8 @@ export const HELP: Record<string, HelpTopic> = {
   compagnonMobile: {
     term: "Compagnon mobile",
     plain:
-      "Petite app sur votre téléphone pour photographier un ticket ou envoyer un PDF vers SasCompta sur le PC. Le transfert passe par le Wi‑Fi local (même réseau) : pas de cloud obligatoire. Un code court (ou QR) appairage le téléphone ; chaque document arrive dans Import docs pour revue avant écriture.",
-    example: "Photo note de frais → pont Wi‑Fi → file « En revue » sur le PC",
+      "Petite app Expo (Expo Go sur Android) pour photographier un ticket ou envoyer un PDF vers SasCompta sur le PC. Le transfert passe par le Wi‑Fi local (même réseau) : pas de cloud ni d’APK native obligatoires. Le QR du pont ouvre une page « Ouvrir Expo Go » ; ensuite vous scannez / saisissez le code dans l’app. Chaque document arrive dans Import docs pour revue avant écriture.",
+    example: "Expo Go → QR pont → photo note de frais → file « En revue »",
   },
   dossierSurveille: {
     term: "Dossier surveillé",

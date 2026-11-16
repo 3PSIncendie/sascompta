@@ -28,7 +28,7 @@ npm run check   # lint + typecheck + vitest + cargo test
 
 - **Dossier surveillé** (PC) : activez la surveillance sur `Documents/SasCompta-import` (ou un autre dossier) depuis **Import docs** / **Ma SAS**. PDF et images déposés → file « En revue » (idempotent).
 - **Compagnon mobile** (Wi‑Fi local) : envoi photo/PDF depuis le téléphone, sans cloud.
-  Voir [`companion/README.md`](companion/README.md) (Expo Go / APK sideload). Sur le desktop : **Import docs** ou **Ma SAS** → *Activer le pont Wi‑Fi*.
+  Voir [`companion/README.md`](companion/README.md) (**Android : Expo Go**, pas d’APK requise). Sur le desktop : **Import docs** ou **Ma SAS** → *Activer le pont Wi‑Fi* ; le QR ouvre une page « Ouvrir Expo Go ».
 
 ## Auto-update (Windows)
 
