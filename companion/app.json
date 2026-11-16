@@ -14,13 +14,18 @@
       "adaptiveIcon": {
         "backgroundColor": "#e8f5ee"
       },
+      "usesCleartextTraffic": true,
       "permissions": ["CAMERA", "READ_EXTERNAL_STORAGE", "READ_MEDIA_IMAGES"]
     },
     "ios": {
       "bundleIdentifier": "fr.sascompta.companion",
       "infoPlist": {
         "NSCameraUsageDescription": "Photographier tickets et factures pour SasCompta sur le PC local.",
-        "NSPhotoLibraryUsageDescription": "Choisir une photo de pièce comptable à envoyer au PC."
+        "NSPhotoLibraryUsageDescription": "Choisir une photo de pièce comptable à envoyer au PC.",
+        "NSLocalNetworkUsageDescription": "Joindre SasCompta sur le PC via le Wi‑Fi local (aucun cloud).",
+        "NSAppTransportSecurity": {
+          "NSAllowsLocalNetworking": true
+        }
       }
     },
     "plugins": [

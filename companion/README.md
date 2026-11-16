@@ -53,6 +53,18 @@ Installez l’APK via `adb install …` ou fichier partagé. Pas de compte store
 
 Port par défaut : **17832**. Fichier max ~15 Mo.
 
+### QR d’appairage
+
+Contenu (compact, ASCII) :
+
+```text
+sascompta://pair?v=1&host=192.168.1.42&port=17832&code=482913
+```
+
+L’app accepte aussi l’ancien JSON `{ "v", "host", "port", "code", … }`.
+
+HTTP clair sur le LAN : Android `usesCleartextTraffic`, iOS `NSAllowsLocalNetworking` (voir `app.json`).
+
 ## Hors périmètre MVP
 
 - Publication stores iOS/Android soignée

@@ -1,9 +1,11 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { CompanionQr } from "./CompanionQr";
 import { FieldHelp } from "./FieldHelp";
 import { api } from "../lib/api";
 import {
   companionEndpoint,
   pairingExpiresLabel,
+  pairingIsExpired,
   previewCompanionStatus,
   type CompanionStatus,
 } from "../lib/companion";
@@ -32,6 +34,7 @@ export function CompanionBridgePanel({
   const [error, setError] = useState<string | null>(null);
   const [flash, setFlash] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
+  const rotatingExpired = useRef(false);
 
   const refresh = useCallback(async () => {
     if (PREVIEW || !isTauriRuntime()) {
@@ -50,6 +53,33 @@ export function CompanionBridgePanel({
     const id = window.setInterval(() => setTick((n) => n + 1), 1000);
     return () => window.clearInterval(id);
   }, [status.running]);
+
+  // Code expiré → régénérer automatiquement pour que le QR reste scannable.
+  useEffect(() => {
+    if (!status.running || !pairingIsExpired(status.pairingExpiresAt)) {
+      rotatingExpired.current = false;
+      return;
+    }
+    if (rotatingExpired.current || busy) return;
+    rotatingExpired.current = true;
+    if (PREVIEW || !isTauriRuntime()) {
+      const s = previewCompanionStatus(true);
+      s.pairingCode = "917204";
+      setStatus(s);
+      setFlash("Code d’appairage renouvelé (aperçu).");
+      return;
+    }
+    void api
+      .companionRotatePairing()
+      .then((s) => {
+        setStatus(s);
+        setFlash("Code d’appairage renouvelé — rescanner le QR.");
+      })
+      .catch((e) => setError(String(e)))
+      .finally(() => {
+        rotatingExpired.current = false;
+      });
+  }, [status.running, status.pairingExpiresAt, busy, tick]);
 
   useEffect(() => {
     if (PREVIEW || !isTauriRuntime()) return;
@@ -182,19 +212,10 @@ export function CompanionBridgePanel({
         <div className="companion-live">
           <div className="companion-live-grid">
             <div className="companion-qr-wrap" aria-label="QR d’appairage">
-              {status.qrSvg ? (
-                <div
-                  className="companion-qr"
-                  dangerouslySetInnerHTML={{ __html: status.qrSvg }}
-                />
-              ) : (
-                <div className="companion-qr companion-qr-fallback">
-                  <p className="muted">
-                    QR indisponible en aperçu — saisissez l’adresse et le code
-                    dans l’app.
-                  </p>
-                </div>
-              )}
+              <CompanionQr
+                payload={status.qrPayload}
+                backendSvg={status.qrSvg}
+              />
             </div>
             <div className="companion-meta">
               <div className="meta-grid companion-meta-grid">

@@ -2016,9 +2016,12 @@ button.linkish {
   justify-content: center;
 }
 
-.companion-qr svg {
+.companion-qr svg,
+.companion-qr img {
   width: 100%;
   height: 100%;
+  display: block;
+  image-rendering: pixelated;
 }
 
 .companion-qr-fallback {
@@ -2040,6 +2043,8 @@ button.linkish {
 .companion-meta .mono {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 0.92rem;
+  overflow-wrap: anywhere;
+  word-break: break-all;
 }
 
 .danger-ghost {

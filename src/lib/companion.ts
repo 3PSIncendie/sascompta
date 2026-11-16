@@ -13,6 +13,96 @@ export type CompanionStatus = {
   receivedCount: number;
 };
 
+export type PairingPayload = {
+  v: number;
+  app?: string;
+  host: string;
+  port: number;
+  code: string;
+  org?: string;
+  expiresAt?: string;
+};
+
+/** Payload QR compact (ASCII) — scannable + parseable côté téléphone. */
+export function buildPairingPayload(input: {
+  host: string;
+  port: number;
+  code: string;
+  org?: string;
+  expiresAt?: string;
+}): string {
+  const params = new URLSearchParams();
+  params.set("v", "1");
+  params.set("host", input.host);
+  params.set("port", String(input.port));
+  params.set("code", input.code);
+  // org / expiresAt volontairement hors QR (densité + accents) — /v1/info les fournit.
+  return `sascompta://pair?${params.toString()}`;
+}
+
+/**
+ * Accepte le format URI `sascompta://pair?...` et l’ancien JSON `{host,port,code}`.
+ */
+export function parsePairingPayload(raw: string): PairingPayload {
+  const text = raw.trim();
+  if (!text) {
+    throw new Error("QR vide.");
+  }
+
+  if (text.startsWith("{")) {
+    let data: Record<string, unknown>;
+    try {
+      data = JSON.parse(text) as Record<string, unknown>;
+    } catch {
+      throw new Error("QR JSON invalide.");
+    }
+    const host = String(data.host ?? "").trim();
+    const port = Number(data.port);
+    const code = String(data.code ?? "").trim();
+    if (!host || !Number.isFinite(port) || port <= 0 || !code) {
+      throw new Error("QR invalide (host / port / code manquants).");
+    }
+    return {
+      v: Number(data.v) || 1,
+      app: typeof data.app === "string" ? data.app : undefined,
+      host,
+      port,
+      code,
+      org: typeof data.org === "string" ? data.org : undefined,
+      expiresAt: typeof data.expiresAt === "string" ? data.expiresAt : undefined,
+    };
+  }
+
+  // URI sascompta://pair?...  (aussi tolère http(s)://…?host=&port=&code=)
+  let url: URL;
+  try {
+    url = new URL(text);
+  } catch {
+    throw new Error("QR invalide (format non reconnu).");
+  }
+  const host = (url.searchParams.get("host") || "").trim();
+  const port = Number(url.searchParams.get("port"));
+  const code = (url.searchParams.get("code") || "").trim();
+  if (!host || !Number.isFinite(port) || port <= 0 || !code) {
+    throw new Error("QR invalide (host / port / code manquants).");
+  }
+  return {
+    v: Number(url.searchParams.get("v")) || 1,
+    app: "sascompta",
+    host,
+    port,
+    code,
+  };
+}
+
+/** Retire le prologue XML pour injection HTML sûre (WebView / innerHTML). */
+export function svgForInnerHtml(svg: string | null | undefined): string | null {
+  if (!svg) return null;
+  const idx = svg.indexOf("<svg");
+  if (idx < 0) return null;
+  return svg.slice(idx);
+}
+
 export function previewCompanionStatus(running = false): CompanionStatus {
   if (!running) {
     return {
@@ -29,14 +119,10 @@ export function previewCompanionStatus(running = false): CompanionStatus {
     };
   }
   const expires = new Date(Date.now() + 5 * 60 * 1000).toISOString();
-  const payload = JSON.stringify({
-    v: 1,
-    app: "sascompta",
+  const payload = buildPairingPayload({
     host: "192.168.1.42",
     port: 17832,
     code: "482913",
-    org: "Demo SAS",
-    expiresAt: expires,
   });
   return {
     running: true,
@@ -61,6 +147,13 @@ export function pairingExpiresLabel(iso: string | null | undefined): string {
   const m = Math.floor(sec / 60);
   const s = sec % 60;
   return m > 0 ? `${m} min ${s.toString().padStart(2, "0")} s` : `${s} s`;
+}
+
+export function pairingIsExpired(iso: string | null | undefined): boolean {
+  if (!iso) return false;
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return false;
+  return t <= Date.now();
 }
 
 export function companionEndpoint(

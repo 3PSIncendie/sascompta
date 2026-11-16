@@ -156,27 +156,30 @@ impl CompanionHub {
     }
 }
 
+/// Payload QR compact ASCII (sans org / expires — densité + accents).
+/// Format : `sascompta://pair?v=1&host=…&port=…&code=…`
 fn pairing_payload(cfg: &LiveConfig) -> String {
-    json!({
-        "v": 1,
-        "app": "sascompta",
-        "host": cfg.host,
-        "port": cfg.port,
-        "code": cfg.pairing_code,
-        "org": cfg.org_name,
-        "expiresAt": cfg.pairing_expires_at.to_rfc3339(),
-    })
-    .to_string()
+    // URL-encode manuel minimal (host IPv4 / code chiffres / port) — pas d’unicode.
+    format!(
+        "sascompta://pair?v=1&host={}&port={}&code={}",
+        cfg.host, cfg.port, cfg.pairing_code
+    )
 }
 
 fn render_qr_svg(payload: &str) -> Result<String, String> {
     let code = QrCode::new(payload.as_bytes()).map_err(|e| e.to_string())?;
-    Ok(code
+    let raw = code
         .render::<svg::Color>()
-        .min_dimensions(180, 180)
+        .min_dimensions(220, 220)
         .dark_color(svg::Color("#1a3d2e"))
         .light_color(svg::Color("#ffffff"))
-        .build())
+        .build();
+    // Strip XML prologue : dangereux pour innerHTML / WebView.
+    let svg = raw
+        .find("<svg")
+        .map(|i| raw[i..].to_string())
+        .unwrap_or(raw);
+    Ok(svg)
 }
 
 fn random_pairing_code() -> String {
@@ -754,9 +757,33 @@ mod tests {
     }
 
     #[test]
-    fn qr_svg_renders() {
-        let svg = render_qr_svg(r#"{"v":1,"host":"192.168.1.10","port":17832}"#).unwrap();
-        assert!(svg.contains("<svg"));
+    fn qr_svg_renders_without_xml_prologue() {
+        let svg = render_qr_svg("sascompta://pair?v=1&host=192.168.1.10&port=17832&code=123456")
+            .unwrap();
+        assert!(svg.starts_with("<svg"), "{svg}");
+        assert!(!svg.contains("<?xml"));
+    }
+
+    #[test]
+    fn pairing_payload_is_compact_uri() {
+        let cfg = LiveConfig {
+            host: "192.168.1.42".into(),
+            port: 17832,
+            org_name: "Atelier Lumière SAS".into(),
+            pairing_code: "482913".into(),
+            pairing_expires_at: Utc::now() + Duration::seconds(300),
+            session_token: "tok".into(),
+            session_paired: false,
+            received_count: 0,
+        };
+        let p = pairing_payload(&cfg);
+        assert_eq!(
+            p,
+            "sascompta://pair?v=1&host=192.168.1.42&port=17832&code=482913"
+        );
+        // Org accentué volontairement absent du QR (densité / encodage).
+        assert!(!p.contains("Lumière"));
+        assert!(!p.contains("expires"));
     }
 
     #[test]
