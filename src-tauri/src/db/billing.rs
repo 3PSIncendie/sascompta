@@ -15,7 +15,7 @@ pub const SCHEMA_BILLING_VERSION: i32 = 10;
 
 /// Séries documentaires configurables (compteur annuel calendaire).
 /// Les factures (standard / acompte / solde / avoir) partagent la série FACT
-/// pour garder des numéros `AAAA-MM-NNNN` uniques sans préfixe de type.
+/// (`F` + `AAAA-MMNN`) ; les devis utilisent la série DEV (`D` + `AAAA-MMNN`).
 pub const DOCUMENT_SEQUENCE_KINDS: &[&str] = &["FACT", "DEV"];
 
 const QUOTE_STATUSES: &[&str] = &[
@@ -257,9 +257,20 @@ fn validate_sequence_kind(kind: &str) -> DbResult<()> {
     }
 }
 
-/// Format d’émission : `AAAA-MM-NNNN` (MM = mois du document, NNNN = séquence annuelle).
-fn format_document_number(year: &str, month: &str, num: i64) -> String {
-    format!("{year}-{month}-{num:04}")
+/// Préfixe de série : `F` factures (y compris acomptes / avoirs), `D` devis.
+fn document_number_letter(kind: &str) -> &'static str {
+    if kind == "DEV" {
+        "D"
+    } else {
+        "F"
+    }
+}
+
+/// Format d’émission : `F2026-1101` / `D2026-1101`
+/// (`lettre` + année + `-` + mois collé à la séquence annuelle sur 2 chiffres).
+fn format_document_number(kind: &str, year: &str, month: &str, num: i64) -> String {
+    let letter = document_number_letter(kind);
+    format!("{letter}{year}-{month}{num:02}")
 }
 
 fn parse_issue_year_month(issue_date: &str) -> DbResult<(String, String)> {
@@ -294,12 +305,27 @@ fn preview_month_now() -> String {
 }
 
 /// Extrait le compteur annuel d’un numéro pour l’année civile donnée.
-/// Accepte le format actuel `AAAA-MM-NNNN` et l’ancien `PREFIX-AAAA-NNNN`.
+/// Accepte `F2026-1101` / `D2026-1101`, l’ancien `AAAA-MM-NNNN`, et `PREFIX-AAAA-NNNN`.
 fn parse_sequence_num_for_year(number: &str, kind: &str, calendar_year: &str) -> Option<i64> {
     let number = number.trim();
-    // Nouveau : 2026-11-0001
-    let new_prefix = format!("{calendar_year}-");
-    if let Some(rest) = number.strip_prefix(&new_prefix) {
+    let letter = document_number_letter(kind);
+
+    // Actuel : F2026-1101 / D2026-1101 (mois collé + séquence ≥ 2 chiffres)
+    let glued_prefix = format!("{letter}{calendar_year}-");
+    if let Some(rest) = number.strip_prefix(&glued_prefix) {
+        if rest.len() >= 3 && rest.chars().all(|c| c.is_ascii_digit()) {
+            let month = &rest[0..2];
+            let seq = &rest[2..];
+            let m: u32 = month.parse().ok()?;
+            if (1..=12).contains(&m) && !seq.is_empty() {
+                return seq.parse().ok();
+            }
+        }
+    }
+
+    // 0.6.8 : 2026-11-0001 (sans lettre, tiret entre mois et séquence)
+    let dashed_prefix = format!("{calendar_year}-");
+    if let Some(rest) = number.strip_prefix(&dashed_prefix) {
         let mut parts = rest.split('-');
         let month = parts.next()?;
         let seq = parts.next()?;
@@ -313,7 +339,8 @@ fn parse_sequence_num_for_year(number: &str, kind: &str, calendar_year: &str) ->
             return seq.parse().ok();
         }
     }
-    // Ancien : FACT-2026-0042 / DEV-2026-0001 / ACMP-… / AVO-…
+
+    // Legacy : FACT-2026-0042 / DEV-2026-0001 / ACMP-… / AVO-…
     let legacy_kinds: &[&str] = if kind == "DEV" {
         &["DEV"]
     } else {
@@ -460,7 +487,7 @@ fn document_number_exists(conn: &Connection, kind: &str, number: &str) -> DbResu
     Ok(found.is_some())
 }
 
-/// Réserve atomiquement le prochain numéro (`2026-11-0001`…).
+/// Réserve atomiquement le prochain numéro (`F2026-1101` / `D2026-1101`…).
 /// Compteur annuel calendaire (depuis le 01/01) ; MM = mois de la date d’émission.
 pub fn allocate_document_number(
     conn: &Connection,
@@ -474,7 +501,7 @@ pub fn allocate_document_number(
 
     // Garde-fou collision (numéros hors format ou importés).
     for _ in 0..10_000 {
-        let candidate = format_document_number(&year, &month, next);
+        let candidate = format_document_number(kind, &year, &month, next);
         if !document_number_exists(conn, kind, &candidate)? {
             upsert_next_num(conn, kind, &year, next + 1)?;
             return Ok(candidate);
@@ -502,7 +529,7 @@ fn sequence_info_for(
         fiscal_year_label: calendar_year.to_string(),
         next_num,
         min_next_num: min_next,
-        preview: format_document_number(calendar_year, &month, next_num),
+        preview: format_document_number(kind, calendar_year, &month, next_num),
     })
 }
 
@@ -540,7 +567,7 @@ pub fn set_document_sequences(
         let max_used = max_used_document_num(conn, kind, &year)?;
         let min_next = (max_used + 1).max(1);
         if input.next_num < min_next {
-            let conflict = format_document_number(&year, &month, max_used);
+            let conflict = format_document_number(kind, &year, &month, max_used);
             return Err(format!(
                 "Série {kind} : le prochain numéro doit être ≥ {min_next} \
                  (un document de l’année {year} porte déjà le compteur {max_used}, \
@@ -549,7 +576,7 @@ pub fn set_document_sequences(
             )
             .into());
         }
-        let candidate = format_document_number(&year, &month, input.next_num);
+        let candidate = format_document_number(kind, &year, &month, input.next_num);
         if document_number_exists(conn, kind, &candidate)? {
             return Err(format!(
                 "Série {kind} : le numéro {candidate} est déjà attribué. \
@@ -1007,7 +1034,7 @@ pub fn list_invoices(conn: &Connection) -> DbResult<Vec<Invoice>> {
 }
 
 fn sequence_kind_for_invoice(_kind: &str) -> &'static str {
-    // Une seule série annuelle pour toutes les factures (format AAAA-MM-NNNN).
+    // Une seule série annuelle pour toutes les factures (format FAAAA-MMNN).
     "FACT"
 }
 
@@ -1224,7 +1251,7 @@ pub fn delete_invoice(conn: &Connection, id: i64) -> DbResult<()> {
     Ok(())
 }
 
-/// Émet la facture : réserve le numéro (`AAAA-MM-NNNN`) + statut issued + brouillon VTE.
+/// Émet la facture : réserve le numéro (`FAAAA-MMNN`) + statut issued + brouillon VTE.
 pub fn issue_invoice(conn: &Connection, id: i64) -> DbResult<Invoice> {
     let existing = get_invoice(conn, id)?;
     if existing.status != "draft" {
@@ -2728,8 +2755,8 @@ mod tests {
         let issued = issue_invoice(&conn, draft.id).unwrap();
         assert_eq!(issued.status, "issued");
         let num = issued.number.as_deref().unwrap();
-        // Date démo facture = 2026-04-01 → 2026-04-NNNN
-        assert!(num.starts_with("2026-04-"), "{num}");
+        // Date démo facture = 2026-04-01 → F2026-04NN
+        assert!(num.starts_with("F2026-04"), "{num}");
         assert!(issued.entry_id.is_some()); // VTE draft auto
 
         let entry = get_invoice(&conn, issued.id).unwrap();
@@ -2754,8 +2781,8 @@ mod tests {
         let credit_issued = issue_invoice(&conn, credit.id).unwrap();
         let credit_num = credit_issued.number.as_deref().unwrap();
         assert!(
-            credit_num.starts_with("2026-"),
-            "avoir annuel AAAA-MM-NNNN, got {credit_num}"
+            credit_num.starts_with("F2026-"),
+            "avoir annuel FAAAA-MMNN, got {credit_num}"
         );
         assert_ne!(credit_num, num, "avoir ≠ facture d’origine");
 
@@ -2772,8 +2799,8 @@ mod tests {
         let dep_issued = issue_invoice(&conn, deposit.id).unwrap();
         let dep_num = dep_issued.number.as_deref().unwrap();
         assert!(
-            dep_num.starts_with("2026-"),
-            "acompte annuel AAAA-MM-NNNN, got {dep_num}"
+            dep_num.starts_with("F2026-"),
+            "acompte annuel FAAAA-MMNN, got {dep_num}"
         );
         assert_ne!(dep_num, num);
         assert_ne!(dep_num, credit_num);
@@ -2917,12 +2944,12 @@ mod tests {
         let fact = listed.iter().find(|s| s.kind == "FACT").unwrap();
         assert_eq!(fact.next_num, 1);
         assert!(
-            fact.preview.starts_with("2026-") && fact.preview.ends_with("-0001"),
+            fact.preview.starts_with("F2026-") && fact.preview.ends_with("01"),
             "{}",
             fact.preview
         );
 
-        // Continuer une série externe : prochain = 42 → 2026-MM-0042
+        // Continuer une série externe : prochain = 42 → F2026-MM42
         let updated = set_document_sequences(
             &conn,
             &[
@@ -2938,8 +2965,11 @@ mod tests {
         )
         .unwrap();
         let fact_preview = &updated.iter().find(|s| s.kind == "FACT").unwrap().preview;
-        assert!(fact_preview.ends_with("-0042"), "{fact_preview}");
-        assert!(fact_preview.starts_with("2026-"), "{fact_preview}");
+        assert!(fact_preview.ends_with("42"), "{fact_preview}");
+        assert!(fact_preview.starts_with("F2026-"), "{fact_preview}");
+        let dev_preview = &updated.iter().find(|s| s.kind == "DEV").unwrap().preview;
+        assert!(dev_preview.starts_with("D2026-"), "{dev_preview}");
+        assert!(dev_preview.ends_with("07"), "{dev_preview}");
 
         let draft = list_invoices(&conn)
             .unwrap()
@@ -2948,7 +2978,7 @@ mod tests {
             .expect("demo invoice");
         let issued = issue_invoice(&conn, draft.id).unwrap();
         // issue_date démo = 2026-04-01
-        assert_eq!(issued.number.as_deref(), Some("2026-04-0042"));
+        assert_eq!(issued.number.as_deref(), Some("F2026-0442"));
 
         let after = list_document_sequences(&conn).unwrap();
         let fact_after = after.iter().find(|s| s.kind == "FACT").unwrap();
@@ -2968,11 +2998,11 @@ mod tests {
 
         let deposit = create_deposit_invoice(&conn, issued.id, 10_000, 2000, None).unwrap();
         let dep_issued = issue_invoice(&conn, deposit.id).unwrap();
-        assert_eq!(dep_issued.number.as_deref(), Some("2026-04-0043"));
+        assert_eq!(dep_issued.number.as_deref(), Some("F2026-0443"));
 
         let credit = create_credit_note(&conn, issued.id).unwrap();
         let credit_issued = issue_invoice(&conn, credit.id).unwrap();
-        assert_eq!(credit_issued.number.as_deref(), Some("2026-04-0044"));
+        assert_eq!(credit_issued.number.as_deref(), Some("F2026-0444"));
     }
 
     #[test]
@@ -3021,7 +3051,7 @@ mod tests {
         )
         .unwrap();
         let nov_issued = issue_invoice(&conn, nov.id).unwrap();
-        assert_eq!(nov_issued.number.as_deref(), Some("2026-11-0001"));
+        assert_eq!(nov_issued.number.as_deref(), Some("F2026-1101"));
 
         let dec = create_invoice(
             &conn,
@@ -3042,7 +3072,7 @@ mod tests {
         .unwrap();
         let dec_issued = issue_invoice(&conn, dec.id).unwrap();
         // Même année civile → compteur continue, mois = décembre
-        assert_eq!(dec_issued.number.as_deref(), Some("2026-12-0002"));
+        assert_eq!(dec_issued.number.as_deref(), Some("F2026-1202"));
 
         let jan = create_invoice(
             &conn,
@@ -3062,10 +3092,10 @@ mod tests {
         )
         .unwrap();
         let jan_issued = issue_invoice(&conn, jan.id).unwrap();
-        // Nouvelle année civile → reprise à 0001
-        assert_eq!(jan_issued.number.as_deref(), Some("2027-01-0001"));
+        // Nouvelle année civile → reprise à 01
+        assert_eq!(jan_issued.number.as_deref(), Some("F2027-0101"));
 
-        // Devis : série séparée, même format annuel
+        // Devis : série séparée, préfixe D, même format annuel
         let q = create_quote(
             &conn,
             &CreateQuoteInput {
@@ -3089,8 +3119,8 @@ mod tests {
             },
         )
         .unwrap();
-        // Seed démo a déjà un devis 2026-03-0001 → prochain = 0002
-        assert_eq!(q.number, "2026-11-0002");
+        // Seed démo a déjà un devis D2026-0301 → prochain = 02
+        assert_eq!(q.number, "D2026-1102");
 
         let q27 = create_quote(
             &conn,
@@ -3115,7 +3145,7 @@ mod tests {
             },
         )
         .unwrap();
-        assert_eq!(q27.number, "2027-02-0001");
+        assert_eq!(q27.number, "D2027-0201");
     }
 
     #[test]
@@ -3173,6 +3203,73 @@ mod tests {
         )
         .unwrap();
         let issued = issue_invoice(&conn, draft.id).unwrap();
-        assert_eq!(issued.number.as_deref(), Some("2026-11-0042"));
+        assert_eq!(issued.number.as_deref(), Some("F2026-1142"));
+    }
+
+    #[test]
+    fn preserves_dashed_aaaa_mm_nnnn_when_continuing() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("dashed-seq.sascompta");
+        create_demo_workspace(&path).unwrap();
+        let conn = open_connection(&path).unwrap();
+
+        // Simule une facture déjà émise au format 0.6.8
+        conn.execute(
+            "UPDATE invoice SET number = '2026-10-0041', status = 'issued'
+             WHERE id = (SELECT id FROM invoice WHERE status = 'draft' LIMIT 1)",
+            [],
+        )
+        .unwrap();
+
+        let listed = list_document_sequences(&conn).unwrap();
+        let fact = listed.iter().find(|s| s.kind == "FACT").unwrap();
+        assert_eq!(fact.min_next_num, 42);
+
+        let client_id: i64 = conn
+            .query_row(
+                "SELECT id FROM third_party WHERE code = 'C001' LIMIT 1",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let draft = create_invoice(
+            &conn,
+            &CreateInvoiceInput {
+                kind: "standard".into(),
+                third_party_id: client_id,
+                quote_id: None,
+                parent_invoice_id: None,
+                issue_date: "2026-11-01".into(),
+                due_date: None,
+                service_date: None,
+                vat_mode: "normale".into(),
+                notes: None,
+                legal_mentions: None,
+                lines: vec![InvoiceLineInput {
+                    label: "Suite".into(),
+                    description: None,
+                    quantity_milli: 1000,
+                    unit: "u".into(),
+                    unit_price_cents: 1_000,
+                    ht_cents: 1_000,
+                    vat_rate_bp: 2000,
+                    vat_code: Some("T20C".into()),
+                    account_number: "706".into(),
+                    analytic_code: None,
+                }],
+            },
+        )
+        .unwrap();
+        let issued = issue_invoice(&conn, draft.id).unwrap();
+        assert_eq!(issued.number.as_deref(), Some("F2026-1142"));
+        // L’ancien numéro reste tel quel
+        let old: String = conn
+            .query_row(
+                "SELECT number FROM invoice WHERE number = '2026-10-0041'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(old, "2026-10-0041");
     }
 }

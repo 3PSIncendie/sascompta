@@ -19,6 +19,7 @@ import {
   statusLabel,
   summarizeInvoiceDraft,
 } from "../modules/billing/invoices";
+import { previewNumber } from "../modules/billing/sequences";
 import { PAYMENT_METHODS } from "../modules/billing/payments";
 import type {
   BillingVatMode,
@@ -303,8 +304,13 @@ export function InvoicesScreen({
 
   async function onIssue(inv: Invoice) {
     if (PREVIEW || !isTauriRuntime()) {
-      const ym = (inv.issueDate || "2026-04-01").slice(0, 7);
-      const num = `${ym}-${String(inv.id).padStart(4, "0")}`;
+      const issue = inv.issueDate || "2026-04-01";
+      const num = previewNumber(
+        "FACT",
+        issue.slice(0, 4),
+        issue.slice(5, 7),
+        inv.id,
+      );
       setInvoices((prev) =>
         prev.map((x) =>
           x.id === inv.id

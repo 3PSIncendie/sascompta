@@ -205,14 +205,14 @@ export const HELP: Record<string, HelpTopic> = {
   numerotationFactures: {
     term: "Numérotation des factures",
     plain:
-      "Chaque facture ou devis reçoit un numéro unique au format AAAA-MM-NNNN (ex. 2026-11-0042). Le mois (MM) est celui de la date du document ; le compteur NNNN reprend à 0001 chaque 1er janvier. Si vous avez déjà facturé hors SasCompta, indiquez ici le prochain numéro de la série annuelle.",
-    example: "Dernière facture 2026-10-0041 → prochain numéro = 42 → 2026-11-0042",
+      "Chaque facture reçoit un numéro unique au format FAAAA-MMNN (ex. F2026-1101) ; chaque devis au format DAAAA-MMNN (ex. D2026-1101). Le mois (MM) est celui de la date du document ; le compteur sur 2 chiffres reprend à 01 chaque 1er janvier. Si vous avez déjà facturé hors SasCompta, indiquez ici le prochain numéro de la série annuelle.",
+    example: "Dernière facture F2026-1041 → prochain numéro = 42 → F2026-1142",
   },
   prochainNumero: {
     term: "Prochain numéro",
     plain:
       "Le compteur annuel qui sera attribué à la prochaine émission de cette série (factures ou devis). SasCompta refuse une valeur trop basse si un document de la même année porte déjà ce numéro (ou un numéro supérieur).",
-    example: "Série Factures, année 2026 → aperçu 2026-11-0042",
+    example: "Série Factures, année 2026 → aperçu F2026-1142",
   },
   importDocType: {
     term: "Type de document",

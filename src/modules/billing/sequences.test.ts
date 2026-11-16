@@ -1,16 +1,23 @@
 import { describe, expect, it } from "vitest";
 import {
   currentPreviewMonth,
+  documentNumberLetter,
   parseNextNumInput,
   previewDocumentSequences,
   previewNumber,
 } from "./sequences";
 
 describe("document sequences helpers", () => {
-  it("formate l’aperçu AAAA-MM-NNNN", () => {
-    expect(previewNumber("2026", "11", 42)).toBe("2026-11-0042");
-    expect(previewNumber("2026", 3, 1)).toBe("2026-03-0001");
-    expect(previewNumber("2027", "01", 1)).toBe("2027-01-0001");
+  it("formate l’aperçu FAAAA-MMNN / DAAAA-MMNN", () => {
+    expect(previewNumber("FACT", "2026", "11", 1)).toBe("F2026-1101");
+    expect(previewNumber("FACT", "2026", "11", 42)).toBe("F2026-1142");
+    expect(previewNumber("DEV", "2026", 3, 1)).toBe("D2026-0301");
+    expect(previewNumber("DEV", "2027", "01", 1)).toBe("D2027-0101");
+  });
+
+  it("expose la lettre de série", () => {
+    expect(documentNumberLetter("FACT")).toBe("F");
+    expect(documentNumberLetter("DEV")).toBe("D");
   });
 
   it("parse le prochain numéro saisi", () => {
@@ -23,8 +30,8 @@ describe("document sequences helpers", () => {
   it("fournit un aperçu navigateur des 2 séries (factures + devis)", () => {
     const rows = previewDocumentSequences("2026", "11");
     expect(rows.map((r) => r.kind)).toEqual(["FACT", "DEV"]);
-    expect(rows[0].preview).toBe("2026-11-0001");
-    expect(rows[1].preview).toBe("2026-11-0001");
+    expect(rows[0].preview).toBe("F2026-1101");
+    expect(rows[1].preview).toBe("D2026-1101");
   });
 
   it("expose le mois courant pour l’aperçu", () => {
