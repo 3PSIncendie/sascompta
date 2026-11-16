@@ -231,6 +231,12 @@ export const HELP: Record<string, HelpTopic> = {
       "Petite app sur votre téléphone pour photographier un ticket ou envoyer un PDF vers SasCompta sur le PC. Le transfert passe par le Wi‑Fi local (même réseau) : pas de cloud obligatoire. Un code court (ou QR) appairage le téléphone ; chaque document arrive dans Import docs pour revue avant écriture.",
     example: "Photo note de frais → pont Wi‑Fi → file « En revue » sur le PC",
   },
+  dossierSurveille: {
+    term: "Dossier surveillé",
+    plain:
+      "Dossier de votre PC (par défaut Documents/SasCompta-import) que SasCompta surveille. Chaque nouveau PDF ou image y déposé est copié dans les pièces du workspace et mis en file Import docs pour revue humaine — mêmes types (ACH, VTE, OD, BQ) que l’import manuel. Un fichier déjà importé (même contenu) n’est pas réenfilé.",
+    example: "Scan facture → dossier SasCompta-import → file « En revue »",
+  },
 };
 
 export function helpPlain(key: keyof typeof HELP): string {

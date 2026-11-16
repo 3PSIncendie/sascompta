@@ -73,6 +73,8 @@ export type DocumentImport = {
   entryId: number | null;
   createdAt: string;
   confirmedAt: string | null;
+  sourceFingerprint?: string | null;
+  sourceOriginPath?: string | null;
 };
 
 export type ConfirmDocumentImportInput = {

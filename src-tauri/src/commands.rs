@@ -115,8 +115,10 @@ pub fn update_organization(
 pub fn close_workspace(
     state: State<'_, AppState>,
     hub: State<'_, crate::companion::CompanionHub>,
+    folder_hub: State<'_, crate::folder_watch::FolderWatchHub>,
 ) -> Result<(), String> {
     let _ = hub.stop();
+    let _ = folder_hub.stop();
     *state.conn.lock().map_err(|e| e.to_string())? = None;
     *state.path.lock().map_err(|e| e.to_string())? = None;
     Ok(())
