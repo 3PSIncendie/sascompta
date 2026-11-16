@@ -15,6 +15,7 @@ import {
   summarizeQuoteLines,
   type DraftLine,
 } from "../modules/billing/quotes";
+import { previewNumber } from "../modules/billing/sequences";
 import type {
   BillingVatMode,
   NavId,
@@ -214,7 +215,12 @@ export function QuotesScreen({
         id: editingId ?? Date.now(),
         number: editingId
           ? quotes.find((q) => q.id === editingId)?.number ?? "2026-03-PREVIEW"
-          : `${(issueDate || "2026-03-01").slice(0, 7)}-${String(quotes.length + 1).padStart(4, "0")}`,
+          : previewNumber(
+              "DEV",
+              (issueDate || "2026-03-01").slice(0, 4),
+              (issueDate || "2026-03-01").slice(5, 7),
+              quotes.length + 1,
+            ),
         thirdPartyId,
         thirdPartyCode:
           customers.find((c) => c.id === thirdPartyId)?.code ?? "Cxxx",

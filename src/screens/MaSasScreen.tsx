@@ -244,6 +244,7 @@ export function MaSasScreen({
               ...row,
               nextNum,
               preview: previewNumber(
+                row.kind,
                 row.fiscalYearLabel,
                 currentPreviewMonth(),
                 nextNum,
@@ -700,10 +701,11 @@ export function MaSasScreen({
               <FieldHelp topic="numerotationFactures" compact />
             </h2>
             <p className="muted">
-              Format <code>AAAA-MM-NNNN</code> : le mois vient de la date du
-              document ; le compteur reprend chaque{" "}
-              <strong>1<sup>er</sup> janvier</strong>. Indiquez le{" "}
-              <strong>prochain numéro</strong> pour continuer une série déjà
+              Format <code>FAAAA-MMNN</code> (factures) /{" "}
+              <code>DAAAA-MMNN</code> (devis) : le mois vient de la date du
+              document et est collé à la séquence sur 2 chiffres ; le compteur
+              reprend chaque <strong>1<sup>er</sup> janvier</strong>. Indiquez
+              le <strong>prochain numéro</strong> pour continuer une série déjà
               commencée hors SasCompta. Les numéros déjà émis ne changent pas.
             </p>
           </div>
@@ -713,12 +715,12 @@ export function MaSasScreen({
           <strong>Comment faire ?</strong>
           <p>
             Regardez votre <em>dernière</em> facture de l’année. Si c’était{" "}
-            <code>2026-10-0041</code>, saisissez <strong>42</strong> dans
+            <code>F2026-1041</code>, saisissez <strong>42</strong> dans
             « Factures ». En novembre, SasCompta attribuera{" "}
-            <code>2026-11-0042</code>, puis 43, 44… jusqu’au 31/12 ; le 1
-            <sup>er</sup> janvier suivant, le compteur repart à 0001. Les
-            acomptes et avoirs partagent la série Factures. Les devis ont leur
-            propre compteur annuel.
+            <code>F2026-1142</code>, puis 43, 44… jusqu’au 31/12 ; le 1
+            <sup>er</sup> janvier suivant, le compteur repart à 01. Les
+            acomptes et avoirs partagent la série Factures (<code>F…</code>).
+            Les devis ont leur propre compteur annuel (<code>D…</code>).
           </p>
         </div>
 
@@ -735,6 +737,7 @@ export function MaSasScreen({
               const livePreview =
                 parsed != null
                   ? previewNumber(
+                      row.kind,
                       row.fiscalYearLabel,
                       currentPreviewMonth(),
                       parsed,

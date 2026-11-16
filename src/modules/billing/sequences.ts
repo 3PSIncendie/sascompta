@@ -1,6 +1,11 @@
 import type { DocumentSequenceInfo } from "../../lib/types";
 
-/** Mois courant (1–12) pour l’aperçu AAAA-MM-NNNN. */
+/** Préfixe de série : F factures, D devis. */
+export function documentNumberLetter(kind: string): "F" | "D" {
+  return kind === "DEV" || kind === "D" ? "D" : "F";
+}
+
+/** Mois courant (1–12) pour l’aperçu FAAAA-MMNN / DAAAA-MMNN. */
 export function currentPreviewMonth(now = new Date()): string {
   return String(now.getMonth() + 1).padStart(2, "0");
 }
@@ -25,12 +30,13 @@ export function previewDocumentSequences(
     fiscalYearLabel,
     nextNum: k.next,
     minNextNum: 1,
-    preview: previewNumber(fiscalYearLabel, previewMonth, k.next),
+    preview: previewNumber(k.kind, fiscalYearLabel, previewMonth, k.next),
   }));
 }
 
-/** Format d’émission : `AAAA-MM-NNNN` (séquence annuelle depuis le 01/01). */
+/** Format d’émission : `F2026-1101` / `D2026-1101` (séquence annuelle depuis le 01/01). */
 export function previewNumber(
+  kind: string,
   year: string,
   month: string | number,
   nextNum: number,
@@ -38,7 +44,8 @@ export function previewNumber(
   const n = Number.isFinite(nextNum) && nextNum >= 1 ? Math.floor(nextNum) : 1;
   const m = String(month).replace(/\D/g, "").padStart(2, "0").slice(-2) || "01";
   const y = String(year).trim() || "2026";
-  return `${y}-${m}-${String(n).padStart(4, "0")}`;
+  const letter = documentNumberLetter(kind);
+  return `${letter}${y}-${m}${String(n).padStart(2, "0")}`;
 }
 
 export function parseNextNumInput(raw: string): number | null {
