@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=390, initial-scale=1" />
+    <title>SasCompta compagnon — mock</title>
+    <style>
+      :root {
+        --bg: #eef7f1;
+        --ink: #1a3d2e;
+        --muted: #4d6b5c;
+        --brand: #3a7d5c;
+        --accent: #f2b27a;
+        --accent-soft: #fff4e8;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: "Segoe UI", "Trebuchet MS", sans-serif;
+        background: linear-gradient(165deg, #dceee3, var(--bg) 40%, #fff8f0);
+        color: var(--ink);
+        min-height: 100vh;
+      }
+      .phone {
+        max-width: 390px;
+        margin: 0 auto;
+        padding: 1.25rem 1.1rem 2rem;
+      }
+      h1 {
+        margin: 0;
+        font-size: 1.85rem;
+        letter-spacing: -0.03em;
+      }
+      .sub { color: var(--muted); margin: 0.2rem 0 1rem; }
+      .lead { line-height: 1.45; color: var(--muted); margin-bottom: 1rem; }
+      .card {
+        background: #fff;
+        border: 1px solid #c5d9cc;
+        border-radius: 16px;
+        padding: 1rem;
+        margin-bottom: 1rem;
+      }
+      .label { font-size: 0.75rem; font-weight: 700; color: var(--muted); }
+      .org { font-size: 1.25rem; font-weight: 800; margin-top: 0.2rem; }
+      .mono { font-family: ui-monospace, monospace; font-size: 0.85rem; color: var(--muted); }
+      .chips { display: flex; flex-wrap: wrap; gap: 0.45rem; margin: 0.75rem 0 1rem; }
+      .chip {
+        border-radius: 999px;
+        border: 1px solid #c5d9cc;
+        padding: 0.45rem 0.75rem;
+        font-size: 0.8rem;
+        font-weight: 650;
+        background: #fff;
+      }
+      .chip.on { background: var(--brand); color: #fff; border-color: var(--brand); }
+      .btn {
+        display: block;
+        width: 100%;
+        text-align: center;
+        border: none;
+        border-radius: 14px;
+        padding: 0.9rem;
+        font-weight: 750;
+        font-size: 1rem;
+        margin-bottom: 0.55rem;
+        cursor: default;
+      }
+      .btn.primary { background: var(--brand); color: #fff; }
+      .btn.secondary {
+        background: var(--accent-soft);
+        color: #8a4b1a;
+        border: 1px solid var(--accent);
+      }
+      .ok { color: #1f6b45; font-weight: 650; margin: 0.5rem 0 0.75rem; }
+      .code {
+        font-size: 1.8rem;
+        letter-spacing: 0.2em;
+        font-weight: 800;
+        text-align: center;
+        padding: 0.75rem;
+        background: #fff;
+        border-radius: 12px;
+        border: 1px solid #c5d9cc;
+      }
+      .screens { display: grid; gap: 2rem; }
+      @media (min-width: 840px) {
+        body { padding: 1.5rem; }
+        .screens {
+          grid-template-columns: 1fr 1fr;
+          max-width: 860px;
+          margin: 0 auto;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="screens">
+      <section class="phone" id="pair">
+        <h1>SasCompta</h1>
+        <p class="sub">Compagnon · Wi‑Fi local</p>
+        <p class="lead">
+          Sur le PC : Import docs → Activer le pont Wi‑Fi. Même réseau, puis
+          scannez le QR ou tapez le code.
+        </p>
+        <button class="btn secondary" type="button">Scanner le QR</button>
+        <div class="card">
+          <div class="label">Adresse IP du PC</div>
+          <div class="mono">192.168.1.42</div>
+          <div class="label" style="margin-top:0.75rem">Code d’appairage</div>
+          <div class="code">482913</div>
+        </div>
+        <button class="btn primary" type="button">Appairer</button>
+      </section>
+
+      <section class="phone" id="send">
+        <h1>SasCompta</h1>
+        <p class="sub">Compagnon · Wi‑Fi local</p>
+        <div class="card">
+          <div class="label">Connecté à</div>
+          <div class="org">Demo SAS</div>
+          <div class="mono">192.168.1.42:17832</div>
+        </div>
+        <div class="label">Type de document (indice)</div>
+        <div class="chips">
+          <span class="chip on">Note de frais / reçu</span>
+          <span class="chip">Ticket de caisse</span>
+          <span class="chip">Facture fournisseur</span>
+          <span class="chip">Je ne sais pas</span>
+        </div>
+        <p class="ok">Document #7 envoyé — à revoir sur le PC avant écriture.</p>
+        <button class="btn primary" type="button">Prendre une photo</button>
+        <button class="btn secondary" type="button">Choisir une image</button>
+        <button class="btn secondary" type="button">Choisir un PDF / fichier</button>
+      </section>
+    </div>
+  </body>
+</html>

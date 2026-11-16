@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { CompanionBridgePanel } from "../components/CompanionBridgePanel";
 import { DeadlineReminders } from "../components/DeadlineReminders";
 import { FieldHelp, LabelWithHelp } from "../components/FieldHelp";
 import { api } from "../lib/api";
@@ -675,6 +676,10 @@ export function MaSasScreen({
             </div>
           </form>
         )}
+      </div>
+
+      <div className="panel nested-panel" style={{ marginTop: "1.25rem" }}>
+        <CompanionBridgePanel compact />
       </div>
 
       <div className="panel nested-panel" style={{ marginTop: "1.25rem" }}>

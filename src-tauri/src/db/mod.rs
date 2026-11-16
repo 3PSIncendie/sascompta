@@ -15,7 +15,7 @@ use crate::models::*;
 use crate::security::{hash_password, verify_password};
 use rusqlite::{params, Connection, OptionalExtension};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use thiserror::Error;
 
 pub const SCHEMA_VERSION: i32 = 13;
@@ -47,16 +47,17 @@ impl From<&str> for DbError {
 
 pub type DbResult<T> = Result<T, DbError>;
 
+/// État partagé workspace — `Arc` pour le thread HTTP compagnon (LAN).
 pub struct AppState {
-    pub conn: Mutex<Option<Connection>>,
-    pub path: Mutex<Option<PathBuf>>,
+    pub conn: Arc<Mutex<Option<Connection>>>,
+    pub path: Arc<Mutex<Option<PathBuf>>>,
 }
 
 impl AppState {
     pub fn new() -> Self {
         Self {
-            conn: Mutex::new(None),
-            path: Mutex::new(None),
+            conn: Arc::new(Mutex::new(None)),
+            path: Arc::new(Mutex::new(None)),
         }
     }
 }

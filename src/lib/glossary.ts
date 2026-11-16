@@ -225,6 +225,12 @@ export const HELP: Record<string, HelpTopic> = {
     plain:
       "Étape obligatoire : vous vérifiez type, date, montants, tiers et lignes proposées. Rien n’est écrit en compta tant que vous n’avez pas confirmé. La validation du journal (post) reste une seconde étape dans Écritures. Le fichier reste en pièce jointe du brouillon.",
   },
+  compagnonMobile: {
+    term: "Compagnon mobile",
+    plain:
+      "Petite app sur votre téléphone pour photographier un ticket ou envoyer un PDF vers SasCompta sur le PC. Le transfert passe par le Wi‑Fi local (même réseau) : pas de cloud obligatoire. Un code court (ou QR) appairage le téléphone ; chaque document arrive dans Import docs pour revue avant écriture.",
+    example: "Photo note de frais → pont Wi‑Fi → file « En revue » sur le PC",
+  },
 };
 
 export function helpPlain(key: keyof typeof HELP): string {

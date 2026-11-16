@@ -112,7 +112,11 @@ pub fn update_organization(
 }
 
 #[tauri::command]
-pub fn close_workspace(state: State<'_, AppState>) -> Result<(), String> {
+pub fn close_workspace(
+    state: State<'_, AppState>,
+    hub: State<'_, crate::companion::CompanionHub>,
+) -> Result<(), String> {
+    let _ = hub.stop();
     *state.conn.lock().map_err(|e| e.to_string())? = None;
     *state.path.lock().map_err(|e| e.to_string())? = None;
     Ok(())

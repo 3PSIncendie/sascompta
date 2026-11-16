@@ -53,6 +53,7 @@ import type {
   VatReport,
   WorkspaceInfo,
 } from "./types";
+import type { CompanionStatus } from "./companion";
 import type {
   ConfirmDocumentImportInput,
   DocumentImport,
@@ -278,6 +279,13 @@ export const api = {
     invoke<DocumentImport>("confirm_document_import", { id, input }),
   discardDocumentImport: (id: number) =>
     invoke<void>("discard_document_import", { id }),
+
+  companionStart: () => invoke<CompanionStatus>("companion_start"),
+  companionStop: () => invoke<CompanionStatus>("companion_stop"),
+  companionStatus: () => invoke<CompanionStatus>("companion_status"),
+  companionRotatePairing: () =>
+    invoke<CompanionStatus>("companion_rotate_pairing"),
+
   pdpStubSubmit: (queueId: number) =>
     invoke<EinvoiceQueueItem>("pdp_stub_submit", { queueId }),
   listEreportingBatches: () =>
