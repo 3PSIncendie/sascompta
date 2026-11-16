@@ -94,11 +94,31 @@ export async function uploadDocument(
   return { id: Number(data.id), message: data.message };
 }
 
+/** Si le QR est un Intent Android, récupère l’URL de repli (page /launch). */
+function unwrapAndroidIntent(raw: string): string {
+  const text = raw.trim();
+  if (!/^intent:/i.test(text)) return text;
+  const m = text.match(/S\.browser_fallback_url=([^;]+)/i);
+  if (!m?.[1]) {
+    throw new Error(
+      "Intent Android sans URL de repli — ouvrez Expo Go, puis saisissez IP + code.",
+    );
+  }
+  try {
+    return decodeURIComponent(m[1]);
+  } catch {
+    return m[1];
+  }
+}
+
 /**
- * Parse le QR desktop : URI `sascompta://pair?…` (courant) ou JSON legacy.
+ * Parse le QR desktop :
+ * - `http(s)://host:port/launch?code=…` (courant — ouvre Expo Go via la page)
+ * - `sascompta://pair?…` (legacy)
+ * - Intent Android + JSON legacy
  */
 export function parsePairingPayload(raw: string): PairingPayload {
-  const text = String(raw ?? "").trim();
+  const text = unwrapAndroidIntent(String(raw ?? "").trim());
   if (!text) {
     throw new Error("QR vide.");
   }
@@ -133,9 +153,32 @@ export function parsePairingPayload(raw: string): PairingPayload {
   } catch {
     throw new Error("QR invalide (format non reconnu).");
   }
-  const host = (url.searchParams.get("host") || "").trim();
-  const port = Number(url.searchParams.get("port"));
-  const code = (url.searchParams.get("code") || "").trim();
+
+  const code = (
+    url.searchParams.get("code") ||
+    url.searchParams.get("c") ||
+    ""
+  ).trim();
+
+  const host = (
+    url.searchParams.get("host") ||
+    (url.protocol === "http:" || url.protocol === "https:"
+      ? url.hostname
+      : "") ||
+    ""
+  ).trim();
+
+  let port = Number(url.searchParams.get("port"));
+  if (!Number.isFinite(port) || port <= 0) {
+    if (url.port) {
+      port = Number(url.port);
+    } else if (url.protocol === "http:") {
+      port = 80;
+    } else if (url.protocol === "https:") {
+      port = 443;
+    }
+  }
+
   if (!host || !Number.isFinite(port) || port <= 0 || !code) {
     throw new Error("QR invalide (host / port / code manquants).");
   }

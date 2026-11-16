@@ -5,6 +5,7 @@
     "version": "0.1.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
+    "scheme": "sascompta",
     "userInterfaceStyle": "light",
     "splash": {
       "backgroundColor": "#e8f5ee"
@@ -15,7 +16,19 @@
         "backgroundColor": "#e8f5ee"
       },
       "usesCleartextTraffic": true,
-      "permissions": ["CAMERA", "READ_EXTERNAL_STORAGE", "READ_MEDIA_IMAGES"]
+      "permissions": ["CAMERA", "READ_EXTERNAL_STORAGE", "READ_MEDIA_IMAGES"],
+      "intentFilters": [
+        {
+          "action": "VIEW",
+          "category": ["BROWSABLE", "DEFAULT"],
+          "data": [
+            {
+              "scheme": "sascompta",
+              "host": "pair"
+            }
+          ]
+        }
+      ]
     },
     "ios": {
       "bundleIdentifier": "fr.sascompta.companion",

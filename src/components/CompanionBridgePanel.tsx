@@ -123,7 +123,9 @@ export function CompanionBridgePanel({
       }
       const s = await api.companionStart();
       setStatus(s);
-      setFlash("Pont Wi‑Fi local démarré. Scannez le QR avec l’app compagnon.");
+      setFlash(
+        "Pont Wi‑Fi local démarré. Sur Android : Expo Go → projet compagnon → scanner ce QR (pas une APK).",
+      );
     } catch (e) {
       setError(String(e));
     } finally {
@@ -251,9 +253,11 @@ export function CompanionBridgePanel({
                 </div>
               </div>
               <p className="muted tiny">
-                Sur le téléphone : ouvrez l’app compagnon SasCompta, scannez le
-                QR (ou tapez l’adresse + le code). Chaque envoi apparaît dans la
-                file « En revue ».
+                Android : installez <strong>Expo Go</strong>, chargez le projet
+                compagnon (<code>npx expo start</code>), puis scannez ce QR{" "}
+                <em>dans</em> l’app (ou ouvrez le QR avec la caméra → page «
+                Ouvrir Expo Go »). Pas d’APK SasCompta requise. Sinon saisissez
+                l’adresse + le code. Chaque envoi arrive dans « En revue ».
               </p>
               <div className="btn-row">
                 <button
