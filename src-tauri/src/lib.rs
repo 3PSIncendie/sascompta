@@ -1,9 +1,11 @@
 mod commands;
+mod companion;
 pub mod db;
 mod models;
 mod registry;
 mod security;
 
+use companion::CompanionHub;
 use db::AppState;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -25,6 +27,7 @@ pub fn run() {
             Ok(())
         })
         .manage(AppState::new())
+        .manage(CompanionHub::new())
         .invoke_handler(tauri::generate_handler![
             commands::list_known_workspaces,
             commands::forget_known_workspace,
@@ -116,6 +119,10 @@ pub fn run() {
             commands::get_document_import,
             commands::confirm_document_import,
             commands::discard_document_import,
+            companion::companion_start,
+            companion::companion_stop,
+            companion::companion_status,
+            companion::companion_rotate_pairing,
             commands::pdp_stub_submit,
             commands::list_ereporting_batches,
             commands::build_ereporting_batch,

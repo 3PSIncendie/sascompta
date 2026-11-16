@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
+import { CompanionBridgePanel } from "../components/CompanionBridgePanel";
 import { LabelWithHelp } from "../components/FieldHelp";
 import { ThirdPartySelect } from "../components/ThirdPartySelect";
 import { api } from "../lib/api";
@@ -371,6 +372,10 @@ export function DocumentImportScreen({ onNavigate }: Props) {
           PDF scanné : complètez les montants à la revue (OCR local optionnel plus
           tard).
         </p>
+      </div>
+
+      <div className="companion-import-slot">
+        <CompanionBridgePanel onDocumentReceived={() => void reload()} />
       </div>
 
       <div className="document-import-layout">

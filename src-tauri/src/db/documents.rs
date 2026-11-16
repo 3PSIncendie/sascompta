@@ -819,6 +819,16 @@ pub fn analyze_document(
     workspace_path: &Path,
     source_path: &Path,
 ) -> DbResult<DocumentImport> {
+    analyze_document_with_hint(conn, workspace_path, source_path, None)
+}
+
+/// Comme [`analyze_document`], avec indice de type optionnel (compagnon mobile).
+pub fn analyze_document_with_hint(
+    conn: &Connection,
+    workspace_path: &Path,
+    source_path: &Path,
+    type_hint: Option<&str>,
+) -> DbResult<DocumentImport> {
     if !source_path.is_file() {
         return Err("Fichier source introuvable".into());
     }
@@ -845,6 +855,12 @@ pub fn analyze_document(
         {
             doc_type = "supplier_invoice".into();
             confidence = confidence.max(0.55);
+        }
+    }
+    if let Some(hint) = type_hint {
+        if DOC_TYPES.contains(&hint) && hint != "unknown" {
+            doc_type = hint.to_string();
+            confidence = confidence.max(0.72);
         }
     }
     let siret = parse_siret(&text);
@@ -1717,6 +1733,28 @@ Merci de votre confiance
         }
         let file = fs::File::create(path).unwrap();
         doc.save(&mut BufWriter::new(file)).unwrap();
+    }
+
+    #[test]
+    fn analyze_with_hint_overrides_classifier() {
+        let dir = tempdir().unwrap();
+        let ws = dir.path().join("demo.sascompta");
+        let info = db::create_demo_workspace(&ws).unwrap();
+        let (conn, _) =
+            db::open_workspace(&info.path, db::DEMO_PASSWORD).unwrap();
+
+        let pdf = dir.path().join("ticket-hint.pdf");
+        write_simple_pdf(&pdf, "Juste un montant 12,50 EUR");
+        let doc = analyze_document_with_hint(
+            &conn,
+            Path::new(&info.path),
+            &pdf,
+            Some("ticket"),
+        )
+        .unwrap();
+        assert_eq!(doc.doc_type, "ticket");
+        assert!(doc.confidence >= 0.72);
+        assert_eq!(doc.status, "pending_review");
     }
 
     #[test]

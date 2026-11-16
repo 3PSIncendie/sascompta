@@ -1,0 +1,41 @@
+{
+  "expo": {
+    "name": "SasCompta Compagnon",
+    "slug": "sascompta-companion",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "backgroundColor": "#e8f5ee"
+    },
+    "android": {
+      "package": "fr.sascompta.companion",
+      "adaptiveIcon": {
+        "backgroundColor": "#e8f5ee"
+      },
+      "permissions": ["CAMERA", "READ_EXTERNAL_STORAGE", "READ_MEDIA_IMAGES"]
+    },
+    "ios": {
+      "bundleIdentifier": "fr.sascompta.companion",
+      "infoPlist": {
+        "NSCameraUsageDescription": "Photographier tickets et factures pour SasCompta sur le PC local.",
+        "NSPhotoLibraryUsageDescription": "Choisir une photo de pièce comptable à envoyer au PC."
+      }
+    },
+    "plugins": [
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Autoriser la caméra pour photographier les pièces et scanner le QR d’appairage."
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Autoriser l’accès aux photos pour envoyer une pièce vers SasCompta."
+        }
+      ]
+    ]
+  }
+}

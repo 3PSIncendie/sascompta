@@ -24,6 +24,11 @@ Workspace démo : mot de passe `SecretPass1`, Demo SAS, SIREN `123456782`, exerc
 npm run check   # lint + typecheck + vitest + cargo test
 ```
 
+## Compagnon mobile (Wi‑Fi local)
+
+Envoi photo/PDF depuis le téléphone vers la file **Import docs** du PC, sans cloud.
+Voir [`companion/README.md`](companion/README.md) (Expo Go / APK sideload). Sur le desktop : **Import docs** ou **Ma SAS** → *Activer le pont Wi‑Fi*.
+
 ## Auto-update (Windows)
 
 L’app vérifie les mises à jour au démarrage et propose un bouton manuel (barre latérale).

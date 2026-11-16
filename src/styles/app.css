@@ -1937,3 +1937,87 @@ button.linkish {
     grid-template-columns: 1fr;
   }
 }
+
+/* —— Compagnon mobile (Wi‑Fi local) —— */
+.companion-import-slot {
+  margin: 0 0 1.25rem;
+}
+
+.companion-bridge {
+  padding: 1rem 1.15rem 1.15rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background:
+    linear-gradient(160deg, rgba(242, 156, 90, 0.1), transparent 45%),
+    linear-gradient(200deg, rgba(82, 155, 116, 0.1), transparent 50%),
+    var(--surface);
+}
+
+.companion-bridge.is-compact .panel-head h2 {
+  font-size: 1.15rem;
+}
+
+.companion-idle p {
+  margin: 0 0 0.85rem;
+  max-width: 40rem;
+}
+
+.companion-live-grid {
+  display: grid;
+  grid-template-columns: minmax(160px, 200px) 1fr;
+  gap: 1rem 1.25rem;
+  align-items: start;
+}
+
+.companion-qr-wrap {
+  display: flex;
+  justify-content: center;
+}
+
+.companion-qr {
+  width: 180px;
+  height: 180px;
+  padding: 0.5rem;
+  background: #fff;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.companion-qr svg {
+  width: 100%;
+  height: 100%;
+}
+
+.companion-qr-fallback {
+  text-align: center;
+  padding: 1rem;
+}
+
+.companion-code {
+  font-size: 1.65rem;
+  letter-spacing: 0.18em;
+  font-variant-numeric: tabular-nums;
+  color: var(--brand-ink, var(--ink));
+}
+
+.companion-meta-grid {
+  margin-bottom: 0.65rem;
+}
+
+.companion-meta .mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.92rem;
+}
+
+.danger-ghost {
+  color: #a33a2c;
+}
+
+@media (max-width: 720px) {
+  .companion-live-grid {
+    grid-template-columns: 1fr;
+  }
+}
