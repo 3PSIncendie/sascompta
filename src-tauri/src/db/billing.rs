@@ -13,8 +13,10 @@ use std::path::Path;
 
 pub const SCHEMA_BILLING_VERSION: i32 = 10;
 
-/// Séries documentaires configurables (préfixes d’émission).
-pub const DOCUMENT_SEQUENCE_KINDS: &[&str] = &["FACT", "ACMP", "AVO", "DEV"];
+/// Séries documentaires configurables (compteur annuel calendaire).
+/// Les factures (standard / acompte / solde / avoir) partagent la série FACT
+/// pour garder des numéros `AAAA-MM-NNNN` uniques sans préfixe de type.
+pub const DOCUMENT_SEQUENCE_KINDS: &[&str] = &["FACT", "DEV"];
 
 const QUOTE_STATUSES: &[&str] = &[
     "draft",
@@ -44,6 +46,14 @@ pub fn migrate_billing(conn: &Connection) -> DbResult<()> {
             fiscal_year_id INTEGER NOT NULL REFERENCES fiscal_year(id),
             next_num INTEGER NOT NULL DEFAULT 1 CHECK (next_num >= 1),
             PRIMARY KEY (kind, fiscal_year_id)
+        );
+
+        -- Compteur annuel calendaire (AAAA), indépendant de l’exercice comptable.
+        CREATE TABLE IF NOT EXISTS document_sequence_cal (
+            kind TEXT NOT NULL,
+            calendar_year TEXT NOT NULL,
+            next_num INTEGER NOT NULL DEFAULT 1 CHECK (next_num >= 1),
+            PRIMARY KEY (kind, calendar_year)
         );
 
         CREATE TABLE IF NOT EXISTS quote (
@@ -228,9 +238,7 @@ fn fy_label(conn: &Connection, fy_id: i64) -> DbResult<String> {
 
 fn sequence_label_fr(kind: &str) -> String {
     match kind {
-        "FACT" => "Factures (standard / solde)".into(),
-        "ACMP" => "Factures d’acompte".into(),
-        "AVO" => "Avoirs".into(),
+        "FACT" => "Factures (standard, acompte, solde, avoir)".into(),
         "DEV" => "Devis".into(),
         other => other.to_string(),
     }
@@ -241,20 +249,85 @@ fn validate_sequence_kind(kind: &str) -> DbResult<()> {
         Ok(())
     } else {
         Err(format!(
-            "Série inconnue « {kind} » (attendu : {})",
+            "Série inconnue « {kind} » (attendu : {}). \
+             Acomptes et avoirs partagent la série Factures.",
             DOCUMENT_SEQUENCE_KINDS.join(", ")
         )
         .into())
     }
 }
 
-fn format_document_number(kind: &str, fy_label: &str, num: i64) -> String {
-    format!("{kind}-{fy_label}-{num:04}")
+/// Format d’émission : `AAAA-MM-NNNN` (MM = mois du document, NNNN = séquence annuelle).
+fn format_document_number(year: &str, month: &str, num: i64) -> String {
+    format!("{year}-{month}-{num:04}")
 }
 
-fn parse_sequence_suffix(number: &str, kind: &str, fy_label: &str) -> Option<i64> {
-    let prefix = format!("{kind}-{fy_label}-");
-    number.strip_prefix(&prefix)?.parse::<i64>().ok()
+fn parse_issue_year_month(issue_date: &str) -> DbResult<(String, String)> {
+    let t = issue_date.trim();
+    if t.len() < 7 || !t.as_bytes().get(4).copied().eq(&Some(b'-')) {
+        return Err(format!(
+            "Date d’émission invalide « {issue_date} » (attendu AAAA-MM-JJ)"
+        )
+        .into());
+    }
+    let year = &t[0..4];
+    let month = &t[5..7];
+    if !year.chars().all(|c| c.is_ascii_digit())
+        || !month.chars().all(|c| c.is_ascii_digit())
+    {
+        return Err(format!(
+            "Date d’émission invalide « {issue_date} » (attendu AAAA-MM-JJ)"
+        )
+        .into());
+    }
+    let m: u32 = month
+        .parse()
+        .map_err(|_| format!("Mois invalide dans la date « {issue_date} »"))?;
+    if !(1..=12).contains(&m) {
+        return Err(format!("Mois invalide dans la date « {issue_date} »").into());
+    }
+    Ok((year.to_string(), format!("{m:02}")))
+}
+
+fn preview_month_now() -> String {
+    Utc::now().format("%m").to_string()
+}
+
+/// Extrait le compteur annuel d’un numéro pour l’année civile donnée.
+/// Accepte le format actuel `AAAA-MM-NNNN` et l’ancien `PREFIX-AAAA-NNNN`.
+fn parse_sequence_num_for_year(number: &str, kind: &str, calendar_year: &str) -> Option<i64> {
+    let number = number.trim();
+    // Nouveau : 2026-11-0001
+    let new_prefix = format!("{calendar_year}-");
+    if let Some(rest) = number.strip_prefix(&new_prefix) {
+        let mut parts = rest.split('-');
+        let month = parts.next()?;
+        let seq = parts.next()?;
+        if parts.next().is_some() {
+            return None;
+        }
+        if month.len() == 2
+            && month.chars().all(|c| c.is_ascii_digit())
+            && seq.chars().all(|c| c.is_ascii_digit())
+        {
+            return seq.parse().ok();
+        }
+    }
+    // Ancien : FACT-2026-0042 / DEV-2026-0001 / ACMP-… / AVO-…
+    let legacy_kinds: &[&str] = if kind == "DEV" {
+        &["DEV"]
+    } else {
+        &["FACT", "ACMP", "AVO"]
+    };
+    for lk in legacy_kinds {
+        let prefix = format!("{lk}-{calendar_year}-");
+        if let Some(suf) = number.strip_prefix(&prefix) {
+            if suf.chars().all(|c| c.is_ascii_digit()) {
+                return suf.parse().ok();
+            }
+        }
+    }
+    None
 }
 
 fn numbers_table_for_kind(kind: &str) -> &'static str {
@@ -265,21 +338,20 @@ fn numbers_table_for_kind(kind: &str) -> &'static str {
     }
 }
 
-/// Plus grand suffixe numérique déjà utilisé pour cette série / exercice (0 si aucun).
+/// Plus grand suffixe numérique déjà utilisé pour cette série / année civile (0 si aucun).
 pub fn max_used_document_num(
     conn: &Connection,
     kind: &str,
-    fy_label: &str,
+    calendar_year: &str,
 ) -> DbResult<i64> {
     let table = numbers_table_for_kind(kind);
-    let like = format!("{kind}-{fy_label}-%");
-    let sql = format!("SELECT number FROM {table} WHERE number LIKE ?1");
+    let sql = format!("SELECT number FROM {table} WHERE number IS NOT NULL");
     let mut stmt = conn.prepare(&sql)?;
-    let rows = stmt.query_map(params![like], |r| r.get::<_, String>(0))?;
+    let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
     let mut max = 0i64;
     for row in rows {
         let number = row?;
-        if let Some(n) = parse_sequence_suffix(&number, kind, fy_label) {
+        if let Some(n) = parse_sequence_num_for_year(&number, kind, calendar_year) {
             if n > max {
                 max = n;
             }
@@ -288,15 +360,72 @@ pub fn max_used_document_num(
     Ok(max)
 }
 
+fn migrate_sequence_cal_from_legacy(conn: &Connection) -> DbResult<()> {
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM document_sequence_cal",
+        [],
+        |r| r.get(0),
+    )?;
+    if count > 0 {
+        return Ok(());
+    }
+    conn.execute(
+        "INSERT OR IGNORE INTO document_sequence_cal(kind, calendar_year, next_num)
+         SELECT ds.kind, fy.label, ds.next_num
+         FROM document_sequence ds
+         JOIN fiscal_year fy ON fy.id = ds.fiscal_year_id
+         WHERE ds.kind IN ('FACT', 'DEV')",
+        [],
+    )?;
+    // Reprendre le max des anciennes séries acompte / avoir dans FACT.
+    for legacy in ["ACMP", "AVO"] {
+        let pairs: Vec<(String, i64)> = {
+            let mut stmt = conn.prepare(
+                "SELECT fy.label, ds.next_num
+                 FROM document_sequence ds
+                 JOIN fiscal_year fy ON fy.id = ds.fiscal_year_id
+                 WHERE ds.kind = ?1",
+            )?;
+            let mapped = stmt.query_map(params![legacy], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+            })?;
+            mapped.filter_map(|r| r.ok()).collect()
+        };
+        for (year, next_num) in pairs {
+            let current: i64 = conn
+                .query_row(
+                    "SELECT next_num FROM document_sequence_cal
+                     WHERE kind = 'FACT' AND calendar_year = ?1",
+                    params![year],
+                    |r| r.get(0),
+                )
+                .optional()?
+                .unwrap_or(1);
+            if next_num > current {
+                conn.execute(
+                    "INSERT INTO document_sequence_cal(kind, calendar_year, next_num)
+                     VALUES ('FACT', ?1, ?2)
+                     ON CONFLICT(kind, calendar_year)
+                     DO UPDATE SET next_num = excluded.next_num",
+                    params![year, next_num],
+                )?;
+            }
+        }
+    }
+    Ok(())
+}
+
 fn read_stored_next_num(
     conn: &Connection,
     kind: &str,
-    fiscal_year_id: i64,
+    calendar_year: &str,
 ) -> DbResult<i64> {
+    migrate_sequence_cal_from_legacy(conn)?;
     Ok(conn
         .query_row(
-            "SELECT next_num FROM document_sequence WHERE kind = ?1 AND fiscal_year_id = ?2",
-            params![kind, fiscal_year_id],
+            "SELECT next_num FROM document_sequence_cal
+             WHERE kind = ?1 AND calendar_year = ?2",
+            params![kind, calendar_year],
             |r| r.get(0),
         )
         .optional()?
@@ -306,17 +435,18 @@ fn read_stored_next_num(
 fn upsert_next_num(
     conn: &Connection,
     kind: &str,
-    fiscal_year_id: i64,
+    calendar_year: &str,
     next_num: i64,
 ) -> DbResult<()> {
     if next_num < 1 {
         return Err("Le prochain numéro doit être ≥ 1".into());
     }
+    migrate_sequence_cal_from_legacy(conn)?;
     conn.execute(
-        "INSERT INTO document_sequence(kind, fiscal_year_id, next_num)
+        "INSERT INTO document_sequence_cal(kind, calendar_year, next_num)
          VALUES (?1, ?2, ?3)
-         ON CONFLICT(kind, fiscal_year_id) DO UPDATE SET next_num = excluded.next_num",
-        params![kind, fiscal_year_id, next_num],
+         ON CONFLICT(kind, calendar_year) DO UPDATE SET next_num = excluded.next_num",
+        params![kind, calendar_year, next_num],
     )?;
     Ok(())
 }
@@ -330,23 +460,23 @@ fn document_number_exists(conn: &Connection, kind: &str, number: &str) -> DbResu
     Ok(found.is_some())
 }
 
-/// Réserve atomiquement le prochain numéro (FACT-2026-0001…).
-/// Lit le compteur, le plafonne au-dessus des documents déjà numérotés, incrémente.
+/// Réserve atomiquement le prochain numéro (`2026-11-0001`…).
+/// Compteur annuel calendaire (depuis le 01/01) ; MM = mois de la date d’émission.
 pub fn allocate_document_number(
     conn: &Connection,
     kind: &str,
-    fiscal_year_id: i64,
+    issue_date: &str,
 ) -> DbResult<String> {
-    let label = fy_label(conn, fiscal_year_id)?;
-    let stored = read_stored_next_num(conn, kind, fiscal_year_id)?;
-    let max_used = max_used_document_num(conn, kind, &label)?;
+    let (year, month) = parse_issue_year_month(issue_date)?;
+    let stored = read_stored_next_num(conn, kind, &year)?;
+    let max_used = max_used_document_num(conn, kind, &year)?;
     let mut next = stored.max(max_used + 1).max(1);
 
     // Garde-fou collision (numéros hors format ou importés).
     for _ in 0..10_000 {
-        let candidate = format_document_number(kind, &label, next);
+        let candidate = format_document_number(&year, &month, next);
         if !document_number_exists(conn, kind, &candidate)? {
-            upsert_next_num(conn, kind, fiscal_year_id, next + 1)?;
+            upsert_next_num(conn, kind, &year, next + 1)?;
             return Ok(candidate);
         }
         next += 1;
@@ -358,24 +488,25 @@ fn sequence_info_for(
     conn: &Connection,
     kind: &str,
     fiscal_year_id: i64,
-    fy_label_str: &str,
+    calendar_year: &str,
 ) -> DbResult<DocumentSequenceInfo> {
-    let max_used = max_used_document_num(conn, kind, fy_label_str)?;
+    let max_used = max_used_document_num(conn, kind, calendar_year)?;
     let min_next = (max_used + 1).max(1);
-    let stored = read_stored_next_num(conn, kind, fiscal_year_id)?;
+    let stored = read_stored_next_num(conn, kind, calendar_year)?;
     let next_num = stored.max(min_next);
+    let month = preview_month_now();
     Ok(DocumentSequenceInfo {
         kind: kind.to_string(),
         label: sequence_label_fr(kind),
         fiscal_year_id,
-        fiscal_year_label: fy_label_str.to_string(),
+        fiscal_year_label: calendar_year.to_string(),
         next_num,
         min_next_num: min_next,
-        preview: format_document_number(kind, fy_label_str, next_num),
+        preview: format_document_number(calendar_year, &month, next_num),
     })
 }
 
-/// Compteurs de l’exercice ouvert (FACT / ACMP / AVO / DEV).
+/// Compteurs de l’année civile de l’exercice ouvert (FACT / DEV).
 pub fn list_document_sequences(conn: &Connection) -> DbResult<Vec<DocumentSequenceInfo>> {
     let fy_id = open_fy_id(conn)?;
     let label = fy_label(conn, fy_id)?;
@@ -386,7 +517,7 @@ pub fn list_document_sequences(conn: &Connection) -> DbResult<Vec<DocumentSequen
     Ok(out)
 }
 
-/// Définit le prochain numéro d’une ou plusieurs séries (exercice ouvert).
+/// Définit le prochain numéro d’une ou plusieurs séries (année civile de l’exercice ouvert).
 pub fn set_document_sequences(
     conn: &Connection,
     inputs: &[SetDocumentSequenceInput],
@@ -395,7 +526,8 @@ pub fn set_document_sequences(
         return Err("Aucun compteur à enregistrer".into());
     }
     let fy_id = open_fy_id(conn)?;
-    let label = fy_label(conn, fy_id)?;
+    let year = fy_label(conn, fy_id)?;
+    let month = preview_month_now();
     for input in inputs {
         let kind = input.kind.trim();
         validate_sequence_kind(kind)?;
@@ -405,18 +537,19 @@ pub fn set_document_sequences(
             )
             .into());
         }
-        let max_used = max_used_document_num(conn, kind, &label)?;
+        let max_used = max_used_document_num(conn, kind, &year)?;
         let min_next = (max_used + 1).max(1);
         if input.next_num < min_next {
-            let conflict = format_document_number(kind, &label, max_used);
+            let conflict = format_document_number(&year, &month, max_used);
             return Err(format!(
                 "Série {kind} : le prochain numéro doit être ≥ {min_next} \
-                 (le document {conflict} existe déjà). Indiquez le numéro \
-                 suivant votre dernière facture hors SasCompta."
+                 (un document de l’année {year} porte déjà le compteur {max_used}, \
+                 ex. {conflict}). Indiquez le numéro suivant votre dernière \
+                 pièce hors SasCompta."
             )
             .into());
         }
-        let candidate = format_document_number(kind, &label, input.next_num);
+        let candidate = format_document_number(&year, &month, input.next_num);
         if document_number_exists(conn, kind, &candidate)? {
             return Err(format!(
                 "Série {kind} : le numéro {candidate} est déjà attribué. \
@@ -424,7 +557,7 @@ pub fn set_document_sequences(
             )
             .into());
         }
-        upsert_next_num(conn, kind, fy_id, input.next_num)?;
+        upsert_next_num(conn, kind, &year, input.next_num)?;
     }
     list_document_sequences(conn)
 }
@@ -650,8 +783,7 @@ pub fn create_quote(conn: &Connection, input: &CreateQuoteInput) -> DbResult<Quo
     if input.lines.is_empty() {
         return Err("Ajoutez au moins une ligne au devis".into());
     }
-    let fy_id = open_fy_id(conn)?;
-    let number = allocate_document_number(conn, "DEV", fy_id)?;
+    let number = allocate_document_number(conn, "DEV", &input.issue_date)?;
     let (ht, vat, ttc, lines) = recompute_quote_totals(&input.lines, &input.vat_mode);
     let now = now_iso();
     let legal = input
@@ -874,12 +1006,9 @@ pub fn list_invoices(conn: &Connection) -> DbResult<Vec<Invoice>> {
     Ok(out)
 }
 
-fn sequence_kind_for_invoice(kind: &str) -> &'static str {
-    match kind {
-        "deposit" => "ACMP",
-        "credit_note" => "AVO",
-        _ => "FACT", // standard | balance
-    }
+fn sequence_kind_for_invoice(_kind: &str) -> &'static str {
+    // Une seule série annuelle pour toutes les factures (format AAAA-MM-NNNN).
+    "FACT"
 }
 
 fn validate_invoice_kind(kind: &str) -> DbResult<()> {
@@ -1095,7 +1224,7 @@ pub fn delete_invoice(conn: &Connection, id: i64) -> DbResult<()> {
     Ok(())
 }
 
-/// Émet la facture : réserve le numéro (FACT/ACMP/AVO) + statut issued + brouillon VTE.
+/// Émet la facture : réserve le numéro (`AAAA-MM-NNNN`) + statut issued + brouillon VTE.
 pub fn issue_invoice(conn: &Connection, id: i64) -> DbResult<Invoice> {
     let existing = get_invoice(conn, id)?;
     if existing.status != "draft" {
@@ -1107,9 +1236,8 @@ pub fn issue_invoice(conn: &Connection, id: i64) -> DbResult<Invoice> {
     if existing.number.is_some() {
         return Err("Numéro déjà attribué".into());
     }
-    let fy_id = open_fy_id(conn)?;
     let seq = sequence_kind_for_invoice(&existing.kind);
-    let number = allocate_document_number(conn, seq, fy_id)?;
+    let number = allocate_document_number(conn, seq, &existing.issue_date)?;
     let now = now_iso();
     conn.execute(
         "UPDATE invoice SET number = ?1, status = 'issued', updated_at = ?2 WHERE id = ?3",
@@ -2600,7 +2728,8 @@ mod tests {
         let issued = issue_invoice(&conn, draft.id).unwrap();
         assert_eq!(issued.status, "issued");
         let num = issued.number.as_deref().unwrap();
-        assert!(num.starts_with("FACT-2026-"), "{num}");
+        // Date démo facture = 2026-04-01 → 2026-04-NNNN
+        assert!(num.starts_with("2026-04-"), "{num}");
         assert!(issued.entry_id.is_some()); // VTE draft auto
 
         let entry = get_invoice(&conn, issued.id).unwrap();
@@ -2623,11 +2752,12 @@ mod tests {
         assert_eq!(credit.status, "draft");
         assert_eq!(credit.parent_invoice_id, Some(issued.id));
         let credit_issued = issue_invoice(&conn, credit.id).unwrap();
-        assert!(credit_issued
-            .number
-            .as_deref()
-            .unwrap()
-            .starts_with("AVO-2026-"));
+        let credit_num = credit_issued.number.as_deref().unwrap();
+        assert!(
+            credit_num.starts_with("2026-"),
+            "avoir annuel AAAA-MM-NNNN, got {credit_num}"
+        );
+        assert_ne!(credit_num, num, "avoir ≠ facture d’origine");
 
         let deposit = create_deposit_invoice(
             &conn,
@@ -2640,11 +2770,13 @@ mod tests {
         assert_eq!(deposit.kind, "deposit");
         assert_eq!(deposit.lines[0].account_number, "4191");
         let dep_issued = issue_invoice(&conn, deposit.id).unwrap();
-        assert!(dep_issued
-            .number
-            .as_deref()
-            .unwrap()
-            .starts_with("ACMP-2026-"));
+        let dep_num = dep_issued.number.as_deref().unwrap();
+        assert!(
+            dep_num.starts_with("2026-"),
+            "acompte annuel AAAA-MM-NNNN, got {dep_num}"
+        );
+        assert_ne!(dep_num, num);
+        assert_ne!(dep_num, credit_num);
 
         let pdf = dir.path().join("facture.pdf");
         export_invoice_pdf(&conn, issued.id, &pdf).unwrap();
@@ -2689,7 +2821,8 @@ mod tests {
         )
         .unwrap();
         assert!(pay.entry_id.is_some());
-        assert!(pay.lettre.as_ref().unwrap().contains("FACT"));
+        let expected_lettre = issued.number.as_ref().unwrap().replace('-', "");
+        assert_eq!(pay.lettre.as_deref(), Some(expected_lettre.as_str()));
         let partial = get_invoice(&conn, issued.id).unwrap();
         assert_eq!(partial.status, "partially_paid");
 
@@ -2783,9 +2916,13 @@ mod tests {
         assert_eq!(listed.len(), DOCUMENT_SEQUENCE_KINDS.len());
         let fact = listed.iter().find(|s| s.kind == "FACT").unwrap();
         assert_eq!(fact.next_num, 1);
-        assert!(fact.preview.starts_with("FACT-2026-"));
+        assert!(
+            fact.preview.starts_with("2026-") && fact.preview.ends_with("-0001"),
+            "{}",
+            fact.preview
+        );
 
-        // Continuer une série externe : prochain = 42 → FACT-2026-0042
+        // Continuer une série externe : prochain = 42 → 2026-MM-0042
         let updated = set_document_sequences(
             &conn,
             &[
@@ -2794,20 +2931,15 @@ mod tests {
                     next_num: 42,
                 },
                 SetDocumentSequenceInput {
-                    kind: "ACMP".into(),
-                    next_num: 3,
-                },
-                SetDocumentSequenceInput {
-                    kind: "AVO".into(),
+                    kind: "DEV".into(),
                     next_num: 7,
                 },
             ],
         )
         .unwrap();
-        assert_eq!(
-            updated.iter().find(|s| s.kind == "FACT").unwrap().preview,
-            "FACT-2026-0042"
-        );
+        let fact_preview = &updated.iter().find(|s| s.kind == "FACT").unwrap().preview;
+        assert!(fact_preview.ends_with("-0042"), "{fact_preview}");
+        assert!(fact_preview.starts_with("2026-"), "{fact_preview}");
 
         let draft = list_invoices(&conn)
             .unwrap()
@@ -2815,7 +2947,8 @@ mod tests {
             .find(|i| i.status == "draft")
             .expect("demo invoice");
         let issued = issue_invoice(&conn, draft.id).unwrap();
-        assert_eq!(issued.number.as_deref(), Some("FACT-2026-0042"));
+        // issue_date démo = 2026-04-01
+        assert_eq!(issued.number.as_deref(), Some("2026-04-0042"));
 
         let after = list_document_sequences(&conn).unwrap();
         let fact_after = after.iter().find(|s| s.kind == "FACT").unwrap();
@@ -2835,10 +2968,211 @@ mod tests {
 
         let deposit = create_deposit_invoice(&conn, issued.id, 10_000, 2000, None).unwrap();
         let dep_issued = issue_invoice(&conn, deposit.id).unwrap();
-        assert_eq!(dep_issued.number.as_deref(), Some("ACMP-2026-0003"));
+        assert_eq!(dep_issued.number.as_deref(), Some("2026-04-0043"));
 
         let credit = create_credit_note(&conn, issued.id).unwrap();
         let credit_issued = issue_invoice(&conn, credit.id).unwrap();
-        assert_eq!(credit_issued.number.as_deref(), Some("AVO-2026-0007"));
+        assert_eq!(credit_issued.number.as_deref(), Some("2026-04-0044"));
+    }
+
+    #[test]
+    fn annual_sequence_format_and_year_rollover() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("rollover.sascompta");
+        create_demo_workspace(&path).unwrap();
+        let conn = open_connection(&path).unwrap();
+
+        let client_id: i64 = conn
+            .query_row(
+                "SELECT id FROM third_party WHERE code = 'C001' LIMIT 1",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+
+        let line = InvoiceLineInput {
+            label: "Prestation".into(),
+            description: None,
+            quantity_milli: 1000,
+            unit: "u".into(),
+            unit_price_cents: 10_000,
+            ht_cents: 10_000,
+            vat_rate_bp: 2000,
+            vat_code: Some("T20C".into()),
+            account_number: "706".into(),
+            analytic_code: None,
+        };
+
+        let nov = create_invoice(
+            &conn,
+            &CreateInvoiceInput {
+                kind: "standard".into(),
+                third_party_id: client_id,
+                quote_id: None,
+                parent_invoice_id: None,
+                issue_date: "2026-11-15".into(),
+                due_date: None,
+                service_date: None,
+                vat_mode: "normale".into(),
+                notes: None,
+                legal_mentions: None,
+                lines: vec![line.clone()],
+            },
+        )
+        .unwrap();
+        let nov_issued = issue_invoice(&conn, nov.id).unwrap();
+        assert_eq!(nov_issued.number.as_deref(), Some("2026-11-0001"));
+
+        let dec = create_invoice(
+            &conn,
+            &CreateInvoiceInput {
+                kind: "standard".into(),
+                third_party_id: client_id,
+                quote_id: None,
+                parent_invoice_id: None,
+                issue_date: "2026-12-20".into(),
+                due_date: None,
+                service_date: None,
+                vat_mode: "normale".into(),
+                notes: None,
+                legal_mentions: None,
+                lines: vec![line.clone()],
+            },
+        )
+        .unwrap();
+        let dec_issued = issue_invoice(&conn, dec.id).unwrap();
+        // Même année civile → compteur continue, mois = décembre
+        assert_eq!(dec_issued.number.as_deref(), Some("2026-12-0002"));
+
+        let jan = create_invoice(
+            &conn,
+            &CreateInvoiceInput {
+                kind: "standard".into(),
+                third_party_id: client_id,
+                quote_id: None,
+                parent_invoice_id: None,
+                issue_date: "2027-01-05".into(),
+                due_date: None,
+                service_date: None,
+                vat_mode: "normale".into(),
+                notes: None,
+                legal_mentions: None,
+                lines: vec![line],
+            },
+        )
+        .unwrap();
+        let jan_issued = issue_invoice(&conn, jan.id).unwrap();
+        // Nouvelle année civile → reprise à 0001
+        assert_eq!(jan_issued.number.as_deref(), Some("2027-01-0001"));
+
+        // Devis : série séparée, même format annuel
+        let q = create_quote(
+            &conn,
+            &CreateQuoteInput {
+                third_party_id: client_id,
+                issue_date: "2026-11-01".into(),
+                valid_until: None,
+                vat_mode: "normale".into(),
+                notes: None,
+                legal_mentions: None,
+                lines: vec![QuoteLineInput {
+                    label: "Étude".into(),
+                    description: None,
+                    quantity_milli: 1000,
+                    unit: "u".into(),
+                    unit_price_cents: 5_000,
+                    ht_cents: 0,
+                    vat_rate_bp: 2000,
+                    vat_code: Some("T20C".into()),
+                    account_number: "706".into(),
+                }],
+            },
+        )
+        .unwrap();
+        // Seed démo a déjà un devis 2026-03-0001 → prochain = 0002
+        assert_eq!(q.number, "2026-11-0002");
+
+        let q27 = create_quote(
+            &conn,
+            &CreateQuoteInput {
+                third_party_id: client_id,
+                issue_date: "2027-02-10".into(),
+                valid_until: None,
+                vat_mode: "normale".into(),
+                notes: None,
+                legal_mentions: None,
+                lines: vec![QuoteLineInput {
+                    label: "Étude 2027".into(),
+                    description: None,
+                    quantity_milli: 1000,
+                    unit: "u".into(),
+                    unit_price_cents: 5_000,
+                    ht_cents: 0,
+                    vat_rate_bp: 2000,
+                    vat_code: Some("T20C".into()),
+                    account_number: "706".into(),
+                }],
+            },
+        )
+        .unwrap();
+        assert_eq!(q27.number, "2027-02-0001");
+    }
+
+    #[test]
+    fn preserves_legacy_prefixed_numbers_when_continuing() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("legacy-seq.sascompta");
+        create_demo_workspace(&path).unwrap();
+        let conn = open_connection(&path).unwrap();
+
+        // Simule une facture déjà émise hors nouveau format
+        conn.execute(
+            "UPDATE invoice SET number = 'FACT-2026-0041', status = 'issued'
+             WHERE id = (SELECT id FROM invoice WHERE status = 'draft' LIMIT 1)",
+            [],
+        )
+        .unwrap();
+
+        let listed = list_document_sequences(&conn).unwrap();
+        let fact = listed.iter().find(|s| s.kind == "FACT").unwrap();
+        assert_eq!(fact.min_next_num, 42);
+
+        let client_id: i64 = conn
+            .query_row(
+                "SELECT id FROM third_party WHERE code = 'C001' LIMIT 1",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let draft = create_invoice(
+            &conn,
+            &CreateInvoiceInput {
+                kind: "standard".into(),
+                third_party_id: client_id,
+                quote_id: None,
+                parent_invoice_id: None,
+                issue_date: "2026-11-01".into(),
+                due_date: None,
+                service_date: None,
+                vat_mode: "normale".into(),
+                notes: None,
+                legal_mentions: None,
+                lines: vec![InvoiceLineInput {
+                    label: "Suite".into(),
+                    description: None,
+                    quantity_milli: 1000,
+                    unit: "u".into(),
+                    unit_price_cents: 1_000,
+                    ht_cents: 1_000,
+                    vat_rate_bp: 2000,
+                    vat_code: Some("T20C".into()),
+                    account_number: "706".into(),
+                    analytic_code: None,
+                }],
+            },
+        )
+        .unwrap();
+        let issued = issue_invoice(&conn, draft.id).unwrap();
+        assert_eq!(issued.number.as_deref(), Some("2026-11-0042"));
     }
 }

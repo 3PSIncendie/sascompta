@@ -213,8 +213,8 @@ export function QuotesScreen({
       const fake: Quote = {
         id: editingId ?? Date.now(),
         number: editingId
-          ? quotes.find((q) => q.id === editingId)?.number ?? "DEV-2026-PREVIEW"
-          : `DEV-2026-${String(quotes.length + 1).padStart(4, "0")}`,
+          ? quotes.find((q) => q.id === editingId)?.number ?? "2026-03-PREVIEW"
+          : `${(issueDate || "2026-03-01").slice(0, 7)}-${String(quotes.length + 1).padStart(4, "0")}`,
         thirdPartyId,
         thirdPartyCode:
           customers.find((c) => c.id === thirdPartyId)?.code ?? "Cxxx",
