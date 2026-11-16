@@ -1,10 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
 import { save } from "@tauri-apps/plugin-dialog";
+import { BillingDocumentPreview } from "../components/BillingDocumentPreview";
 import { BillingLinesEditor } from "../components/BillingLinesEditor";
 import { ThirdPartySelect } from "../components/ThirdPartySelect";
 import { api } from "../lib/api";
 import { formatEuros, parseEurosToCents } from "../lib/money";
 import { isTauriRuntime } from "../lib/updater";
+import {
+  buildBillingDocumentPreview,
+  draftPreviewNumber,
+} from "../modules/billing/documentPreview";
 import {
   BILLING_VAT_MODE_OPTIONS,
   buildCreateInput,
@@ -19,6 +24,7 @@ import { previewNumber } from "../modules/billing/sequences";
 import type {
   BillingVatMode,
   NavId,
+  Organization,
   Quote,
   QuoteStatus,
   ThirdParty,
@@ -39,8 +45,10 @@ function statusLabel(status: string): string {
 }
 
 export function QuotesScreen({
+  organization,
   onNavigate,
 }: {
+  organization: Organization;
   onNavigate?: (id: NavId) => void;
 }) {
   const [quotes, setQuotes] = useState<Quote[]>([]);
@@ -164,6 +172,25 @@ export function QuotesScreen({
   useEffect(() => {
     void refresh();
   }, []);
+
+  /** Mode `?quoteEdit=1` : préremplit client + ligne démo pour l’aperçu live. */
+  useEffect(() => {
+    if (!PREVIEW_EDIT || customers.length === 0) return;
+    if (thirdPartyId) return;
+    setThirdPartyId(customers[0]!.id);
+    setIssueDate("2026-03-15");
+    setValidUntil("2026-04-15");
+    setNotes("Installation détection incendie — atelier");
+    const line = emptyDraftLine(2000, "T20C");
+    line.label = "Centrale détection addressable";
+    line.description =
+      "Fourniture centrale + boucles adressables\nMise en service incluse";
+    line.quantity = "1";
+    line.unit = "u";
+    line.unitPriceEuros = "2500,00";
+    line.accountNumber = "707";
+    setLines([line]);
+  }, [customers, thirdPartyId]);
 
   function startCreate() {
     setEditingId(null);
@@ -374,6 +401,43 @@ export function QuotesScreen({
     setThirdPartyId(tier.id);
   }
 
+  const selectedCustomer = useMemo(
+    () => customers.find((c) => c.id === thirdPartyId) ?? null,
+    [customers, thirdPartyId],
+  );
+
+  const existingNumber = useMemo(() => {
+    if (editingId == null) return null;
+    return quotes.find((q) => q.id === editingId)?.number ?? null;
+  }, [editingId, quotes]);
+
+  const livePreview = useMemo(
+    () =>
+      buildBillingDocumentPreview({
+        docKind: "quote",
+        title: "Devis",
+        number: draftPreviewNumber("DEV", issueDate, existingNumber),
+        issueDate,
+        secondaryDate: validUntil,
+        secondaryDateLabel: "Date d'expiration",
+        org: organization,
+        client: selectedCustomer,
+        vatMode,
+        notes,
+        lines,
+      }),
+    [
+      existingNumber,
+      issueDate,
+      lines,
+      notes,
+      organization,
+      selectedCustomer,
+      validUntil,
+      vatMode,
+    ],
+  );
+
   if (mode === "edit") {
     return (
       <div className="panel">
@@ -381,8 +445,8 @@ export function QuotesScreen({
           <div>
             <h1>{editingId ? "Modifier le devis" : "Nouveau devis"}</h1>
             <p className="muted">
-              Lignes HT (titre + détails), régime TVA (dont chantier BTP) et
-              totaux TTC.
+              Saisie à gauche, aperçu PDF live à droite — totaux et mentions
+              se mettent à jour au fil de la saisie.
             </p>
           </div>
           <button type="button" className="ghost" onClick={() => setMode("list")}>
@@ -392,109 +456,119 @@ export function QuotesScreen({
 
         {error ? <p className="error">{error}</p> : null}
 
-        <form className="stack gap" onSubmit={(e) => void onSave(e)}>
-          <div className="split-2">
-            <label className="field">
-              Client
-              <ThirdPartySelect
-                value={thirdPartyId || null}
-                onChange={(id) => setThirdPartyId(id ?? 0)}
-                tiers={customers}
-                onCreated={onCustomerCreated}
-                kind="customer"
-                required
-                emptyLabel="Choisir…"
-              />
-            </label>
-            <label className="field">
-              Régime TVA
-              <select
-                value={vatMode}
-                onChange={(e) => {
-                  const mode = e.target.value as BillingVatMode;
-                  setVatMode(mode);
-                  const first = vatCodes.find((c) =>
-                    mode === "sans"
-                      ? c.direction === "exempt"
-                      : mode === "autoliquidation_chantier"
-                        ? c.direction === "reverse"
-                        : c.direction === "collected",
-                  );
-                  if (first) {
-                    setLines((prev) =>
-                      prev.map((l) => ({
-                        ...l,
-                        vatCode: first.code,
-                        vatRateBp: first.rateBp,
-                      })),
+        <div className="billing-edit-split">
+          <form
+            className="stack gap billing-edit-form"
+            onSubmit={(e) => void onSave(e)}
+          >
+            <div className="split-2">
+              <label className="field">
+                Client
+                <ThirdPartySelect
+                  value={thirdPartyId || null}
+                  onChange={(id) => setThirdPartyId(id ?? 0)}
+                  tiers={customers}
+                  onCreated={onCustomerCreated}
+                  kind="customer"
+                  required
+                  emptyLabel="Choisir…"
+                />
+              </label>
+              <label className="field">
+                Régime TVA
+                <select
+                  value={vatMode}
+                  onChange={(e) => {
+                    const mode = e.target.value as BillingVatMode;
+                    setVatMode(mode);
+                    const first = vatCodes.find((c) =>
+                      mode === "sans"
+                        ? c.direction === "exempt"
+                        : mode === "autoliquidation_chantier"
+                          ? c.direction === "reverse"
+                          : c.direction === "collected",
                     );
-                  }
-                }}
-              >
-                {BILLING_VAT_MODE_OPTIONS.map((o) => (
-                  <option key={o.id} value={o.id}>
-                    {o.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              Date
-              <input
-                type="date"
-                value={issueDate}
-                onChange={(e) => setIssueDate(e.target.value)}
-                required
-              />
-            </label>
-            <label>
-              Valable jusqu’au
-              <input
-                type="date"
-                value={validUntil}
-                onChange={(e) => setValidUntil(e.target.value)}
-              />
-            </label>
-          </div>
+                    if (first) {
+                      setLines((prev) =>
+                        prev.map((l) => ({
+                          ...l,
+                          vatCode: first.code,
+                          vatRateBp: first.rateBp,
+                        })),
+                      );
+                    }
+                  }}
+                >
+                  {BILLING_VAT_MODE_OPTIONS.map((o) => (
+                    <option key={o.id} value={o.id}>
+                      {o.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Date
+                <input
+                  type="date"
+                  value={issueDate}
+                  onChange={(e) => setIssueDate(e.target.value)}
+                  required
+                />
+              </label>
+              <label>
+                Valable jusqu’au
+                <input
+                  type="date"
+                  value={validUntil}
+                  onChange={(e) => setValidUntil(e.target.value)}
+                />
+              </label>
+            </div>
 
-          <p className="hint">
-            {BILLING_VAT_MODE_OPTIONS.find((o) => o.id === vatMode)?.help}
-          </p>
+            <p className="hint">
+              {BILLING_VAT_MODE_OPTIONS.find((o) => o.id === vatMode)?.help}
+            </p>
 
-          <BillingLinesEditor
-            lines={lines}
-            onChange={setLines}
-            vatCodes={collectedCodes}
-            vatMode={vatMode}
-          />
-
-          <label>
-            Notes
-            <textarea
-              rows={2}
-              value={notes}
-              onChange={(e) => setNotes(e.target.value)}
+            <BillingLinesEditor
+              lines={lines}
+              onChange={setLines}
+              vatCodes={collectedCodes}
+              vatMode={vatMode}
             />
-          </label>
 
-          <div className="summary-strip">
-            <span>
-              HT <strong>{formatEuros(totals.htCents)}</strong>
-            </span>
-            <span>
-              TVA <strong>{formatEuros(totals.vatCents)}</strong>
-            </span>
-            <span>
-              TTC <strong>{formatEuros(totals.ttcCents)}</strong>
-            </span>
-          </div>
+            <label>
+              Notes
+              <textarea
+                rows={2}
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
+              />
+            </label>
 
-          <div className="btn-row">
-            <button type="submit" className="primary" disabled={busy}>
-              Enregistrer
-            </button>
-          </div>
-        </form>
+            <div className="summary-strip">
+              <span>
+                HT <strong>{formatEuros(totals.htCents)}</strong>
+              </span>
+              <span>
+                TVA <strong>{formatEuros(totals.vatCents)}</strong>
+              </span>
+              <span>
+                TTC <strong>{formatEuros(totals.ttcCents)}</strong>
+              </span>
+            </div>
+
+            <div className="btn-row">
+              <button type="submit" className="primary" disabled={busy}>
+                Enregistrer
+              </button>
+            </div>
+          </form>
+
+          <BillingDocumentPreview
+            model={livePreview}
+            label="Aperçu live du devis"
+          />
+        </div>
       </div>
     );
   }

@@ -1,10 +1,16 @@
 import { useEffect, useMemo, useState } from "react";
 import { open, save } from "@tauri-apps/plugin-dialog";
+import { BillingDocumentPreview } from "../components/BillingDocumentPreview";
 import { BillingLinesEditor } from "../components/BillingLinesEditor";
 import { ThirdPartySelect } from "../components/ThirdPartySelect";
 import { api } from "../lib/api";
 import { formatEuros, parseEurosToCents } from "../lib/money";
 import { isTauriRuntime } from "../lib/updater";
+import {
+  buildBillingDocumentPreview,
+  draftPreviewNumber,
+  invoiceTitleForKind,
+} from "../modules/billing/documentPreview";
 import {
   BILLING_VAT_MODE_OPTIONS,
   type DraftLine,
@@ -26,6 +32,7 @@ import type {
   Invoice,
   InvoiceKind,
   NavId,
+  Organization,
   ThirdParty,
   VatCode,
 } from "../lib/types";
@@ -41,8 +48,10 @@ const PREVIEW_EDIT =
   new URLSearchParams(window.location.search).get("invoiceEdit") === "1";
 
 export function InvoicesScreen({
+  organization,
   onNavigate,
 }: {
+  organization: Organization;
   onNavigate?: (id: NavId) => void;
 }) {
   const [invoices, setInvoices] = useState<Invoice[]>([]);
@@ -162,6 +171,24 @@ export function InvoicesScreen({
   useEffect(() => {
     void refresh();
   }, []);
+
+  /** Mode `?invoiceEdit=1` : préremplit client + ligne démo pour l’aperçu live. */
+  useEffect(() => {
+    if (!PREVIEW_EDIT || customers.length === 0) return;
+    if (thirdPartyId) return;
+    setThirdPartyId(customers[0]!.id);
+    setIssueDate("2026-04-01");
+    setDueDate("2026-04-30");
+    setNotes("Prestation démonstration");
+    const line = emptyDraftLine(2000, "T20C");
+    line.label = "Prestation";
+    line.description = "Intervention sur site";
+    line.quantity = "1";
+    line.unit = "u";
+    line.unitPriceEuros = "1500,00";
+    line.accountNumber = defaultAccountForKind(kind);
+    setLines([line]);
+  }, [customers, thirdPartyId, kind]);
 
   function startCreate(k: InvoiceKind = "standard") {
     setEditingId(null);
@@ -528,6 +555,48 @@ export function InvoicesScreen({
     setThirdPartyId(tier.id);
   }
 
+  const selectedCustomer = useMemo(
+    () => customers.find((c) => c.id === thirdPartyId) ?? null,
+    [customers, thirdPartyId],
+  );
+
+  const existingNumber = useMemo(() => {
+    if (editingId == null) return null;
+    return invoices.find((i) => i.id === editingId)?.number ?? null;
+  }, [editingId, invoices]);
+
+  const livePreview = useMemo(() => {
+    const extraMeta =
+      parentInvoiceId != null
+        ? [{ label: "Document lié", value: `#${parentInvoiceId}` }]
+        : undefined;
+    return buildBillingDocumentPreview({
+      docKind: "invoice",
+      title: invoiceTitleForKind(kind),
+      number: draftPreviewNumber("FACT", issueDate, existingNumber),
+      issueDate,
+      secondaryDate: dueDate,
+      secondaryDateLabel: "Date d'échéance",
+      org: organization,
+      client: selectedCustomer,
+      vatMode,
+      notes,
+      lines,
+      extraMeta,
+    });
+  }, [
+    dueDate,
+    existingNumber,
+    issueDate,
+    kind,
+    lines,
+    notes,
+    organization,
+    parentInvoiceId,
+    selectedCustomer,
+    vatMode,
+  ]);
+
   async function onPostEntry(entryId: number, journalHint: string) {
     if (PREVIEW || !isTauriRuntime()) {
       setStatus(
@@ -569,8 +638,8 @@ export function InvoicesScreen({
                 : `Nouveau — ${kindLabel(kind)}`}
             </h1>
             <p className="muted">
-              Titre + détails par ligne ; l’émission réserve le numéro et
-              prépare le brouillon VTE.
+              Saisie à gauche, aperçu PDF live à droite — le numéro définitif
+              est réservé à l’émission (brouillon VTE).
             </p>
           </div>
           <button type="button" className="ghost" onClick={() => setMode("list")}>
@@ -580,129 +649,139 @@ export function InvoicesScreen({
 
         {error ? <p className="error">{error}</p> : null}
 
-        <form className="stack gap" onSubmit={(e) => void onSave(e)}>
-          <div className="split-2">
-            <label className="field">
-              Type
-              <select
-                value={kind}
-                onChange={(e) => {
-                  const k = e.target.value as InvoiceKind;
-                  setKind(k);
-                  setLines((prev) =>
-                    prev.map((l) => ({
-                      ...l,
-                      accountNumber: defaultAccountForKind(k),
-                    })),
-                  );
-                }}
-                disabled={!!editingId}
-              >
-                <option value="standard">Facture</option>
-                <option value="deposit">Acompte</option>
-                <option value="balance">Solde</option>
-                <option value="credit_note">Avoir</option>
-              </select>
-            </label>
-            <label className="field">
-              Client
-              <ThirdPartySelect
-                value={thirdPartyId || null}
-                onChange={(id) => setThirdPartyId(id ?? 0)}
-                tiers={customers}
-                onCreated={onCustomerCreated}
-                kind="customer"
-                required
-                emptyLabel="Choisir…"
-              />
-            </label>
-            <label>
-              Régime TVA
-              <select
-                value={vatMode}
-                onChange={(e) => setVatMode(e.target.value as BillingVatMode)}
-              >
-                {BILLING_VAT_MODE_OPTIONS.map((o) => (
-                  <option key={o.id} value={o.id}>
-                    {o.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              Facture liée (acompte / solde / avoir)
-              <select
-                value={parentInvoiceId ?? ""}
-                onChange={(e) =>
-                  setParentInvoiceId(
-                    e.target.value ? Number(e.target.value) : null,
-                  )
-                }
-              >
-                <option value="">—</option>
-                {invoices
-                  .filter((i) => i.id !== editingId)
-                  .map((i) => (
-                    <option key={i.id} value={i.id}>
-                      {i.number ?? `#${i.id}`} — {kindLabel(i.kind)}
+        <div className="billing-edit-split">
+          <form
+            className="stack gap billing-edit-form"
+            onSubmit={(e) => void onSave(e)}
+          >
+            <div className="split-2">
+              <label className="field">
+                Type
+                <select
+                  value={kind}
+                  onChange={(e) => {
+                    const k = e.target.value as InvoiceKind;
+                    setKind(k);
+                    setLines((prev) =>
+                      prev.map((l) => ({
+                        ...l,
+                        accountNumber: defaultAccountForKind(k),
+                      })),
+                    );
+                  }}
+                  disabled={!!editingId}
+                >
+                  <option value="standard">Facture</option>
+                  <option value="deposit">Acompte</option>
+                  <option value="balance">Solde</option>
+                  <option value="credit_note">Avoir</option>
+                </select>
+              </label>
+              <label className="field">
+                Client
+                <ThirdPartySelect
+                  value={thirdPartyId || null}
+                  onChange={(id) => setThirdPartyId(id ?? 0)}
+                  tiers={customers}
+                  onCreated={onCustomerCreated}
+                  kind="customer"
+                  required
+                  emptyLabel="Choisir…"
+                />
+              </label>
+              <label>
+                Régime TVA
+                <select
+                  value={vatMode}
+                  onChange={(e) => setVatMode(e.target.value as BillingVatMode)}
+                >
+                  {BILLING_VAT_MODE_OPTIONS.map((o) => (
+                    <option key={o.id} value={o.id}>
+                      {o.label}
                     </option>
                   ))}
-              </select>
-            </label>
-            <label>
-              Date
-              <input
-                type="date"
-                value={issueDate}
-                onChange={(e) => setIssueDate(e.target.value)}
-                required
-              />
-            </label>
-            <label>
-              Échéance
-              <input
-                type="date"
-                value={dueDate}
-                onChange={(e) => setDueDate(e.target.value)}
-              />
-            </label>
-          </div>
+                </select>
+              </label>
+              <label>
+                Facture liée (acompte / solde / avoir)
+                <select
+                  value={parentInvoiceId ?? ""}
+                  onChange={(e) =>
+                    setParentInvoiceId(
+                      e.target.value ? Number(e.target.value) : null,
+                    )
+                  }
+                >
+                  <option value="">—</option>
+                  {invoices
+                    .filter((i) => i.id !== editingId)
+                    .map((i) => (
+                      <option key={i.id} value={i.id}>
+                        {i.number ?? `#${i.id}`} — {kindLabel(i.kind)}
+                      </option>
+                    ))}
+                </select>
+              </label>
+              <label>
+                Date
+                <input
+                  type="date"
+                  value={issueDate}
+                  onChange={(e) => setIssueDate(e.target.value)}
+                  required
+                />
+              </label>
+              <label>
+                Échéance
+                <input
+                  type="date"
+                  value={dueDate}
+                  onChange={(e) => setDueDate(e.target.value)}
+                />
+              </label>
+            </div>
 
-          <BillingLinesEditor
-            lines={lines}
-            onChange={setLines}
-            vatCodes={collectedCodes}
-            vatMode={vatMode}
-            defaultAccount={defaultAccountForKind(kind)}
-          />
-
-          <label className="field">
-            Notes
-            <textarea
-              rows={2}
-              value={notes}
-              onChange={(e) => setNotes(e.target.value)}
+            <BillingLinesEditor
+              lines={lines}
+              onChange={setLines}
+              vatCodes={collectedCodes}
+              vatMode={vatMode}
+              defaultAccount={defaultAccountForKind(kind)}
             />
-          </label>
 
-          <div className="summary-strip">
-            <span>
-              HT <strong>{formatEuros(totals.htCents)}</strong>
-            </span>
-            <span>
-              TVA <strong>{formatEuros(totals.vatCents)}</strong>
-            </span>
-            <span>
-              TTC <strong>{formatEuros(totals.ttcCents)}</strong>
-            </span>
-          </div>
+            <label className="field">
+              Notes
+              <textarea
+                rows={2}
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
+              />
+            </label>
 
-          <div className="btn-row">
-            <button type="submit" className="primary" disabled={busy}>
-              Enregistrer brouillon
-            </button>
-          </div>
-        </form>
+            <div className="summary-strip">
+              <span>
+                HT <strong>{formatEuros(totals.htCents)}</strong>
+              </span>
+              <span>
+                TVA <strong>{formatEuros(totals.vatCents)}</strong>
+              </span>
+              <span>
+                TTC <strong>{formatEuros(totals.ttcCents)}</strong>
+              </span>
+            </div>
+
+            <div className="btn-row">
+              <button type="submit" className="primary" disabled={busy}>
+                Enregistrer brouillon
+              </button>
+            </div>
+          </form>
+
+          <BillingDocumentPreview
+            model={livePreview}
+            label="Aperçu live de la facture"
+          />
+        </div>
       </div>
     );
   }
