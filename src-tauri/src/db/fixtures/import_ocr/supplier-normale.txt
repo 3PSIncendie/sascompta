@@ -1,0 +1,15 @@
+FOURNITURES DELTA SAS
+12 rue de l'Industrie
+SIRET 12345678900012
+
+FACTURE N° FA-2026-0042
+Date : 15/03/2026
+
+Facturé à : 3PSI MAINTENANCE
+Désignation                  HT
+Fournitures bureau        100,00
+
+Total HT                  100,00
+TVA 20 %                   20,00
+Total TTC                 120,00
+Net à payer               120,00 €

@@ -102,6 +102,44 @@ describe("documentImport registry", () => {
     expect(form.journalCode).toBe("VTE");
   });
 
+  it("maps fixture F-2026-1132 (3PSI) to VTE + autoliquidation chantier HT=TTC", () => {
+    const fixture: DocumentImport = {
+      ...sample,
+      docType: "customer_invoice",
+      sourceFileName: "2611-F-2026-1132-3PSI.pdf",
+      extraction: {
+        issueDate: "2026-11-13",
+        invoiceNumber: "F-2026-1132",
+        supplierName: "ATLANTIQUE AUTOMATISME INCENDIE",
+        htCents: 150_000,
+        vatCents: 0,
+        ttcCents: 150_000,
+        rateBp: 0,
+        vatMode: "autoliquidation_chantier",
+        vatCode: "T20C",
+        htAccount: "706",
+        counterpartAccount: "411",
+        journalCode: "VTE",
+        reverseCharge: true,
+      },
+      confidence: 0.85,
+    };
+    const form = formFromImport(fixture);
+    expect(form.docType).toBe("customer_invoice");
+    expect(form.journalCode).toBe("VTE");
+    expect(form.htStr).toBe("1500,00");
+    expect(form.vatStr).toBe("0,00");
+    expect(form.vatMode).toBe("autoliquidation_chantier");
+    const lines = buildProposedLines(form);
+    const d = lines.reduce((s, l) => s + l.debitCents, 0);
+    const c = lines.reduce((s, l) => s + l.creditCents, 0);
+    expect(d).toBe(c);
+    expect(d).toBe(150_000);
+    expect(lines.some((l) => l.accountNumber === "44571")).toBe(false);
+    expect(lines.some((l) => l.accountNumber === "411")).toBe(true);
+    expect(lines.some((l) => l.accountNumber === "706")).toBe(true);
+  });
+
   it("builds OD ticket lines with caisse counterpart", () => {
     const form = applyDocTypeDefaults(formFromImport(sample), "ticket");
     form.htStr = "10,00";

@@ -217,9 +217,19 @@ pub struct ParsedAmounts {
 fn parse_fr_amount_to_cents(raw: &str) -> Option<i64> {
     let cleaned: String = raw
         .chars()
-        .filter(|c| c.is_ascii_digit() || *c == ',' || *c == '.' || *c == ' ')
+        .filter(|c| {
+            c.is_ascii_digit()
+                || *c == ','
+                || *c == '.'
+                || *c == ' '
+                || *c == '\u{00a0}'
+                || *c == '\u{202f}'
+        })
         .collect();
-    let cleaned = cleaned.replace(' ', "");
+    let cleaned = cleaned
+        .replace(' ', "")
+        .replace('\u{00a0}', "")
+        .replace('\u{202f}', "");
     if cleaned.is_empty() {
         return None;
     }
@@ -235,29 +245,153 @@ fn parse_fr_amount_to_cents(raw: &str) -> Option<i64> {
     Some((value * 100.0).round() as i64)
 }
 
-fn find_amount_after(text: &str, labels: &[&str]) -> Option<i64> {
+/// Extrait les montants FR d’une fenêtre en conservant les espaces milliers (`1 500,00`).
+fn scan_fr_amounts(window: &str) -> Vec<i64> {
+    let chars: Vec<char> = window.chars().collect();
+    let n = chars.len();
+    let mut i = 0;
+    let mut out = Vec::new();
+    while i < n {
+        if !chars[i].is_ascii_digit() {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        let mut raw = String::new();
+        while i < n {
+            let c = chars[i];
+            if c.is_ascii_digit() {
+                raw.push(c);
+                i += 1;
+            } else if (c == ' ' || c == '\u{00a0}' || c == '\u{202f}')
+                && i + 1 < n
+                && chars[i + 1].is_ascii_digit()
+            {
+                // séparateur de milliers — ne pas couper le nombre
+                i += 1;
+            } else if c == '.'
+                && i + 1 < n
+                && chars[i + 1].is_ascii_digit()
+                && !raw.contains('.')
+                && !raw.contains(',')
+            {
+                // millier (1.500,00) ou décimal (1500.00) — on garde et on normalise après
+                raw.push('.');
+                i += 1;
+            } else if c == ',' && i + 1 < n && chars[i + 1].is_ascii_digit() {
+                raw.push(',');
+                i += 1;
+                // jusqu’à 2 décimales
+                let mut dec = 0;
+                while i < n && chars[i].is_ascii_digit() && dec < 2 {
+                    raw.push(chars[i]);
+                    i += 1;
+                    dec += 1;
+                }
+                break;
+            } else {
+                break;
+            }
+        }
+        // Éviter les faux positifs : taux seuls « 0 » / « 20 » sans décimale si suivis de %
+        let followed_by_percent = chars
+            .get(i..)
+            .map(|rest| {
+                let s: String = rest.iter().take(4).collect::<String>();
+                let t = s.trim_start();
+                t.starts_with('%') || t.starts_with(" %")
+            })
+            .unwrap_or(false);
+        if followed_by_percent && !raw.contains(',') && !raw.contains('.') {
+            // laisser i où il est ; ne pas enregistrer le taux comme montant
+            continue;
+        }
+        if let Some(v) = parse_fr_amount_to_cents(&raw) {
+            // Ignorer les numéros trop longs (SIRET / IBAN fragments)
+            if raw.chars().filter(|c| c.is_ascii_digit()).count() <= 10 {
+                let _ = start;
+                out.push(v);
+            }
+        }
+    }
+    out
+}
+
+fn label_match_indices(lower: &str, label: &str) -> Vec<usize> {
+    let needle = label.to_lowercase();
+    let mut out = Vec::new();
+    let mut from = 0;
+    while let Some(rel) = lower[from..].find(&needle) {
+        let idx = from + rel;
+        out.push(idx);
+        from = idx + needle.len().max(1);
+        if from >= lower.len() {
+            break;
+        }
+    }
+    out
+}
+
+/// Cherche un montant après des libellés. `allow_zero` pour la TVA (0,00 €).
+/// Préfère la **dernière** occurrence utile (évite l’en-tête de colonne « Total HT »).
+fn find_amount_after(text: &str, labels: &[&str], allow_zero: bool) -> Option<i64> {
     let lower = text.to_lowercase();
+    let mut best: Option<(usize, i64)> = None; // (label_index, amount)
     for label in labels {
         let needle = label.to_lowercase();
-        if let Some(idx) = lower.find(&needle) {
-            let after = &text[idx + label.len()..];
-            let window: String = after.chars().take(48).collect();
-            // Prefer amounts with currency / decimal
-            let re_candidates = window
-                .split(|c: char| c == '\n' || c == '\r' || c == '|')
-                .flat_map(|part| part.split_whitespace())
-                .filter_map(|tok| {
-                    let t = tok.trim_matches(|c: char| {
-                        !c.is_ascii_digit() && c != ',' && c != '.' && c != ' '
-                    });
-                    if t.chars().any(|c| c.is_ascii_digit()) {
-                        parse_fr_amount_to_cents(t)
-                    } else {
-                        None
-                    }
-                })
-                .collect::<Vec<_>>();
-            if let Some(v) = re_candidates.into_iter().find(|v| *v > 0) {
+        for idx in label_match_indices(&lower, &needle) {
+            let after = text.get(idx + label.len()..).unwrap_or("");
+            // Fenêtre : ligne courante puis quelques lignes (montants souvent sous le libellé)
+            let window: String = after.chars().take(96).collect();
+            // En-tête de tableau : « Total HT » suivi de qty / taux → ignorer
+            let window_l = window.to_lowercase();
+            if window_l.contains("qté")
+                || window_l.contains("qty")
+                || window_l.contains("prix unitaire")
+                || (window_l.contains("tva (%)") && !needle.contains("tva"))
+            {
+                continue;
+            }
+            let amounts = scan_fr_amounts(&window);
+            let chosen = if allow_zero {
+                amounts.into_iter().find(|v| *v >= 0)
+            } else {
+                amounts.into_iter().find(|v| *v > 0)
+            };
+            if let Some(v) = chosen {
+                if best.map(|(bi, _)| idx >= bi).unwrap_or(true) {
+                    best = Some((idx, v));
+                }
+            }
+        }
+    }
+    best.map(|(_, v)| v)
+}
+
+fn find_vat_amount(text: &str) -> Option<i64> {
+    // Libellés de montant TVA d’abord (y compris 0,00)
+    if let Some(v) = find_amount_after(
+        text,
+        &[
+            "montant total de la tva",
+            "montant de la tva",
+            "total tva",
+            "montant tva",
+            "dont tva",
+        ],
+        true,
+    ) {
+        return Some(v);
+    }
+    // « TVA 20 %   20,00 » — même ligne uniquement, en sautant le taux
+    let lower = text.to_lowercase();
+    for label in ["tva 20", "tva 10", "tva 5,5", "tva 5.5", "t.v.a.", "tva :", "tva:"] {
+        for idx in label_match_indices(&lower, label) {
+            let after = text.get(idx + label.len()..).unwrap_or("");
+            let same_line: String = after.chars().take_while(|c| *c != '\n' && *c != '\r').collect();
+            let amounts = scan_fr_amounts(&same_line);
+            // Premier montant monétaire de la ligne (scan saute déjà les « 20 % »)
+            if let Some(v) = amounts.into_iter().find(|v| *v > 0) {
                 return Some(v);
             }
         }
@@ -272,6 +406,7 @@ pub fn parse_amounts(text: &str) -> ParsedAmounts {
             "total ht",
             "montant ht",
             "net ht",
+            "base ht",
             "hors taxe",
             "hors taxes",
             "total h.t.",
@@ -279,19 +414,9 @@ pub fn parse_amounts(text: &str) -> ParsedAmounts {
             "ht :",
             "ht:",
         ],
+        false,
     );
-    let mut vat = find_amount_after(
-        text,
-        &[
-            "total tva",
-            "montant tva",
-            "tva 20",
-            "tva 10",
-            "tva 5,5",
-            "tva :",
-            "tva:",
-        ],
-    );
+    let mut vat = find_vat_amount(text);
     let mut ttc = find_amount_after(
         text,
         &[
@@ -302,11 +427,29 @@ pub fn parse_amounts(text: &str) -> ParsedAmounts {
             "ttc :",
             "ttc:",
         ],
+        false,
     );
+
+    // Si TVA a capturé le TTC (ancien bug « TVA 20 % » → ligne Total TTC)
+    if let (Some(v), Some(t)) = (vat, ttc) {
+        if v == t {
+            if let Some(h) = ht {
+                if t >= h {
+                    vat = Some(t - h);
+                }
+            } else {
+                vat = None;
+            }
+        }
+    }
 
     // Infer missing sides
     if ht.is_none() && ttc.is_some() && vat.is_some() {
-        ht = Some(ttc.unwrap() - vat.unwrap());
+        let t = ttc.unwrap();
+        let v = vat.unwrap();
+        if t >= v {
+            ht = Some(t - v);
+        }
     }
     if ttc.is_none() && ht.is_some() && vat.is_some() {
         ttc = Some(ht.unwrap() + vat.unwrap());
@@ -314,9 +457,15 @@ pub fn parse_amounts(text: &str) -> ParsedAmounts {
     if vat.is_none() && ht.is_some() && ttc.is_some() && ttc.unwrap() >= ht.unwrap() {
         vat = Some(ttc.unwrap() - ht.unwrap());
     }
+    // Cohérence finale HT + TVA = TTC
+    if let (Some(h), Some(v), Some(t)) = (ht, vat, ttc) {
+        if (h + v - t).abs() > 1 && t >= h {
+            vat = Some(t - h);
+        }
+    }
 
     let rate_bp = match (ht, vat) {
-        (Some(h), Some(v)) if h > 0 => {
+        (Some(h), Some(v)) if h > 0 && v > 0 => {
             let bp = ((v as f64) * 10_000.0 / (h as f64)).round() as i32;
             if (1800..=2200).contains(&bp) {
                 Some(2000)
@@ -328,9 +477,15 @@ pub fn parse_amounts(text: &str) -> ParsedAmounts {
                 Some(bp)
             }
         }
+        (Some(h), Some(0)) if h > 0 => {
+            // TVA nulle affichée — pas de taux implicite 20 %
+            Some(0)
+        }
         _ => {
             let lower = text.to_lowercase();
-            if lower.contains("20 %") || lower.contains("20%") || lower.contains("tva 20") {
+            if lower.contains("0 %") || lower.contains("0%") {
+                Some(0)
+            } else if lower.contains("20 %") || lower.contains("20%") || lower.contains("tva 20") {
                 Some(2000)
             } else if lower.contains("10 %") || lower.contains("10%") {
                 Some(1000)
@@ -399,6 +554,8 @@ pub fn parse_date(text: &str) -> Option<String> {
 pub fn parse_invoice_number(text: &str) -> Option<String> {
     let lower = text.to_lowercase();
     for label in [
+        "numéro de facture",
+        "numero de facture",
         "n° de facture",
         "no de facture",
         "n° facture",
@@ -483,18 +640,176 @@ pub fn parse_supplier_name(text: &str) -> Option<String> {
     lines.first().map(|s| (*s).to_string())
 }
 
+fn is_franchise_vat_mention(lower: &str) -> bool {
+    lower.contains("franchise en base")
+        || lower.contains("293 b")
+        || lower.contains("293b")
+        || lower.contains("article 293")
+        || lower.contains("art. 293")
+}
+
+/// Mentions explicites d’autoliquidation / reverse charge (art. 283).
 pub fn detect_reverse_charge(text: &str) -> bool {
     let lower = text.to_lowercase();
     lower.contains("autoliquidation")
         || lower.contains("auto-liquidation")
+        || lower.contains("auto liquidation")
         || lower.contains("art. 283")
+        || lower.contains("art 283")
         || lower.contains("article 283")
         || lower.contains("tva due par le preneur")
+        || lower.contains("due par le preneur")
         || lower.contains("autoliquide")
+        || lower.contains("autoliquidée")
+        || lower.contains("autoliquidee")
+        || lower.contains("reverse charge")
+        || lower.contains("vat reverse")
+}
+
+/// Autoliquidation implicite : TVA 0 affichée, HT = TTC, pas de franchise 293 B.
+pub fn detect_reverse_charge_implicit(text: &str, amounts: &ParsedAmounts) -> bool {
+    if detect_reverse_charge(text) {
+        return true;
+    }
+    let lower = text.to_lowercase();
+    if is_franchise_vat_mention(&lower) {
+        return false;
+    }
+    let zero_rate_shown = lower.contains("0 %")
+        || lower.contains("0%")
+        || (lower.contains("tva (%)")
+            && (lower.contains(" 0 %") || lower.contains("\t0 %") || lower.contains("\n0 %")));
+    let zero_vat = amounts.vat_cents == Some(0) || zero_rate_shown;
+    let ht_eq_ttc = matches!(
+        (amounts.ht_cents, amounts.ttc_cents),
+        (Some(h), Some(t)) if h == t && h > 0
+    );
+    // Facture (pas ticket) avec TVA à 0 et HT = TTC → reverse B2B typique
+    zero_vat
+        && ht_eq_ttc
+        && lower.contains("facture")
+        && (lower.contains("tva") || lower.contains("total ht"))
+}
+
+/// Contexte société (Ma SAS) pour distinguer émetteur (VTE) vs destinataire (ACH).
+#[derive(Debug, Clone, Copy)]
+pub struct OrgClassifyHint<'a> {
+    pub name: &'a str,
+    pub siret: Option<&'a str>,
+}
+
+fn normalize_digits(s: &str) -> String {
+    s.chars().filter(|c| c.is_ascii_digit()).collect()
+}
+
+/// Positions (byte index) des suites de 9–14 chiffres (SIREN/SIRET), espaces ignorés.
+fn siret_like_positions(text: &str) -> Vec<(usize, String)> {
+    let chars: Vec<(usize, char)> = text.char_indices().collect();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i].1.is_ascii_digit() {
+            let start = chars[i].0;
+            let mut digits = String::new();
+            let mut j = i;
+            while j < chars.len() {
+                let c = chars[j].1;
+                if c.is_ascii_digit() {
+                    digits.push(c);
+                    j += 1;
+                } else if (c == ' ' || c == '\u{00a0}')
+                    && j + 1 < chars.len()
+                    && chars[j + 1].1.is_ascii_digit()
+                    && digits.len() < 14
+                {
+                    j += 1;
+                } else {
+                    break;
+                }
+                if digits.len() >= 14 {
+                    break;
+                }
+            }
+            if digits.len() == 14 || digits.len() == 9 {
+                out.push((start, digits));
+            }
+            i = j.max(i + 1);
+        } else {
+            i += 1;
+        }
+    }
+    out
+}
+
+fn org_appears_as_issuer(text: &str, org: &OrgClassifyHint<'_>) -> bool {
+    let lower = text.to_lowercase();
+    let name = org.name.trim().to_lowercase();
+    let mut name_hit = false;
+    if name.len() >= 3 {
+        if let Some(pos) = lower.find(&name) {
+            // Nom société dans la première moitié → souvent en-tête émetteur
+            name_hit = pos < lower.len() / 2;
+        }
+    }
+    if let Some(siret) = org.siret {
+        let dig = normalize_digits(siret);
+        if dig.len() >= 9 {
+            let runs = siret_like_positions(text);
+            if let Some((pos, _)) = runs.iter().find(|(_, d)| d.starts_with(&dig) || dig.starts_with(d))
+            {
+                // Org = premier SIRET/SIREN du document → émetteur
+                if runs.first().map(|(p, _)| p) == Some(pos) {
+                    return true;
+                }
+                // Sinon, SIRET org encore dans la première moitié du texte
+                if *pos < text.len() / 2 {
+                    return true;
+                }
+            }
+        }
+    }
+    name_hit
+}
+
+fn org_appears_as_buyer(text: &str, org: &OrgClassifyHint<'_>) -> bool {
+    let lower = text.to_lowercase();
+    let name = org.name.trim().to_lowercase();
+    for marker in [
+        "facturé à",
+        "facture a",
+        "client :",
+        "client:",
+        "destinataire",
+        "à l'attention",
+        "a l'attention",
+        "livré à",
+        "livre a",
+    ] {
+        if let Some(idx) = lower.find(marker) {
+            let window: String = lower.chars().skip(idx).take(160).collect();
+            if name.len() >= 3 && window.contains(&name) {
+                return true;
+            }
+            if let Some(siret) = org.siret {
+                let dig = normalize_digits(siret);
+                if dig.len() >= 9 && normalize_digits(&window).contains(&dig) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
 }
 
 /// Classifiers typés — score indépendant ; le meilleur gagne si confiance ≥ seuil.
 pub fn classify_document(text: &str) -> (String, f64) {
+    classify_document_with_org(text, None)
+}
+
+pub fn classify_document_with_org(
+    text: &str,
+    org: Option<OrgClassifyHint<'_>>,
+) -> (String, f64) {
     let lower = text.to_lowercase();
     let mut scores: Vec<(&str, f64)> = DOC_TYPES
         .iter()
@@ -502,67 +817,99 @@ pub fn classify_document(text: &str) -> (String, f64) {
         .map(|t| (t, 0.0))
         .collect();
 
+    let outbound_sale_signals = lower.contains("devis associé")
+        || lower.contains("devis associe")
+        || lower.contains("numéro du devis")
+        || lower.contains("numero du devis")
+        || lower.contains("affacturage")
+        || lower.contains("subrogation")
+        || lower.contains("bon de commande")
+        || lower.contains("conditions de règlement")
+        || lower.contains("conditions de reglement")
+        || lower.contains("merci de votre confiance");
+
+    let buyer_block = lower.contains("facturé à")
+        || lower.contains("facture a")
+        || lower.contains("client :")
+        || lower.contains("client:")
+        || lower.contains("à votre attention")
+        || lower.contains("a votre attention");
+
     for (t, s) in scores.iter_mut() {
         *s = match *t {
             "supplier_invoice" => {
                 let mut v: f64 = 0.0;
                 if lower.contains("facture") {
-                    v += 0.3;
+                    v += 0.25;
                 }
-                if lower.contains("fournisseur")
-                    || lower.contains("à payer")
-                    || lower.contains("a payer")
-                    || lower.contains("net à payer")
-                    || lower.contains("net a payer")
-                {
+                // Signaux acheteur (nous recevons) — « net à payer » seulement hors vente sortante
+                if lower.contains("fournisseur") {
+                    v += 0.25;
+                }
+                if lower.contains("facturé à") || lower.contains("facture a") {
+                    // « Facturé à : … » → facture reçue (ACH) sauf si org = émetteur
                     v += 0.2;
-                }
-                if lower.contains("tva") {
-                    v += 0.1;
                 }
                 if lower.contains("total ht") || lower.contains("total ttc") {
-                    v += 0.2;
+                    v += 0.15;
                 }
-                if lower.contains("siret") {
-                    v += 0.1;
+                if !outbound_sale_signals
+                    && (lower.contains("net à payer") || lower.contains("net a payer"))
+                {
+                    v += 0.15;
                 }
                 if detect_reverse_charge(&lower) {
                     v += 0.15;
                 }
-                // Signaux client → baisser le score fournisseur
+                if lower.contains("sous-traitance") {
+                    v += 0.1;
+                }
+                if outbound_sale_signals {
+                    v -= 0.4;
+                }
                 if lower.contains("à votre attention")
-                    || lower.contains("conditions de règlement")
                     || lower.contains("merci de votre confiance")
+                    || (lower.contains("client :") || lower.contains("client:"))
                 {
-                    v -= 0.25;
+                    v -= 0.3;
+                }
+                if let Some(o) = org {
+                    if org_appears_as_issuer(text, &o) && !org_appears_as_buyer(text, &o) {
+                        v -= 0.45;
+                    }
+                    if org_appears_as_buyer(text, &o) {
+                        v += 0.4;
+                    }
                 }
                 v.max(0.0).min(0.98)
             }
             "customer_invoice" => {
                 let mut v: f64 = 0.0;
                 if lower.contains("facture") {
-                    v += 0.25;
+                    v += 0.2;
                 }
-                if lower.contains("client")
-                    || lower.contains("à votre attention")
-                    || lower.contains("a votre attention")
-                {
-                    v += 0.3;
+                if buyer_block {
+                    v += 0.35;
                 }
-                if lower.contains("conditions de règlement")
-                    || lower.contains("conditions de reglement")
-                    || lower.contains("merci de votre confiance")
-                {
-                    v += 0.15;
+                if outbound_sale_signals {
+                    v += 0.35;
                 }
                 if lower.contains("total ht") || lower.contains("total ttc") {
-                    v += 0.15;
+                    v += 0.1;
                 }
-                if lower.contains("à payer") || lower.contains("a payer") || lower.contains("fournisseur")
-                {
-                    v -= 0.2;
+                // Ne plus pénaliser « à payer » / « net à payer » (standard aussi en vente)
+                if lower.contains("fournisseur") && !buyer_block {
+                    v -= 0.25;
                 }
-                v.max(0.0).min(0.92)
+                if let Some(o) = org {
+                    if org_appears_as_issuer(text, &o) && !org_appears_as_buyer(text, &o) {
+                        v += 0.5;
+                    }
+                    if org_appears_as_buyer(text, &o) {
+                        v -= 0.4;
+                    }
+                }
+                v.max(0.0).min(0.98)
             }
             "expense_receipt" => {
                 let mut v: f64 = 0.0;
@@ -716,11 +1063,14 @@ fn build_extraction_payload(
     let number = parse_invoice_number(text);
     let siret = parse_siret(text);
     let party_name = parse_supplier_name(text);
-    let reverse = detect_reverse_charge(text) && doc_type == "supplier_invoice";
+    let reverse = detect_reverse_charge_implicit(text, &amounts)
+        && matches!(doc_type, "supplier_invoice" | "customer_invoice");
     let is_sale = doc_type == "customer_invoice";
     let is_bank = doc_type == "bank_statement";
-    let vat_mode = if reverse {
+    let vat_mode = if reverse && doc_type == "supplier_invoice" {
         "autoliquidation_sous_traitance"
+    } else if reverse && is_sale {
+        "autoliquidation_chantier"
     } else if is_bank
         || amounts.vat_cents == Some(0)
         || (amounts.vat_cents.is_none()
@@ -731,11 +1081,17 @@ fn build_extraction_payload(
     } else {
         "normale"
     };
-    let rate = amounts.rate_bp.unwrap_or(2000);
+    // Autoliquidation : la facture affiche souvent 0 % — conserver 20 % pour le calcul ACH (44566/4452).
+    let rate = match amounts.rate_bp {
+        Some(0) if reverse => 2000,
+        Some(r) => r,
+        None => 2000,
+    };
     let vat_code = match (vat_mode, rate, is_sale) {
         ("autoliquidation_sous_traitance", 1000, _) => "T10R",
         ("autoliquidation_sous_traitance", 550, _) => "T55R",
         ("autoliquidation_sous_traitance", _, _) => "T20R",
+        ("autoliquidation_chantier", _, _) => "T20C",
         ("sans", _, _) => "TEX",
         (_, 1000, true) => "T10C",
         (_, 550, true) => "T55C",
@@ -744,7 +1100,7 @@ fn build_extraction_payload(
         (_, 550, false) => "T55D",
         _ => "T20D",
     };
-    let ht_account = default_ht_account_for(doc_type, reverse);
+    let ht_account = default_ht_account_for(doc_type, reverse && doc_type == "supplier_invoice");
     let counterpart = default_counterpart_for(doc_type);
     let journal = default_journal_for(doc_type);
     let bank_direction = if is_bank { Some("debit") } else { None };
@@ -931,17 +1287,34 @@ pub fn analyze_document_idempotent(
     fs::copy(source_path, &dest)?;
 
     let (text, method) = extract_text(&dest);
-    let (mut doc_type, mut confidence) = classify_document(&text);
-    // Facture ambiguë sans signaux client → privilégier fournisseur (cas le plus courant).
+    let org = super::load_organization(conn).ok();
+    let org_hint = org.as_ref().map(|o| OrgClassifyHint {
+        name: o.name.as_str(),
+        siret: o.siret.as_deref(),
+    });
+    let (mut doc_type, mut confidence) = classify_document_with_org(&text, org_hint);
+    // Facture ambiguë : sans signaux vente / org émetteur → privilégier fournisseur.
     if doc_type == "unknown" {
         let amounts = parse_amounts(&text);
         let lower = text.to_lowercase();
+        let sale_like = lower.contains("à votre attention")
+            || lower.contains("conditions de règlement")
+            || lower.contains("devis associé")
+            || lower.contains("affacturage")
+            || org_hint
+                .map(|o| org_appears_as_issuer(&text, &o) && !org_appears_as_buyer(&text, &o))
+                .unwrap_or(false);
         if (amounts.ttc_cents.is_some() || amounts.ht_cents.is_some())
             && lower.contains("facture")
-            && !lower.contains("à votre attention")
-            && !lower.contains("conditions de règlement")
+            && !sale_like
         {
             doc_type = "supplier_invoice".into();
+            confidence = confidence.max(0.55);
+        } else if sale_like
+            && (amounts.ttc_cents.is_some() || amounts.ht_cents.is_some())
+            && lower.contains("facture")
+        {
+            doc_type = "customer_invoice".into();
             confidence = confidence.max(0.55);
         }
     }
@@ -1759,6 +2132,137 @@ Merci de votre confiance
         assert_eq!(a.vat_cents, Some(2_000));
         assert_eq!(a.ttc_cents, Some(12_000));
         assert_eq!(a.rate_bp, Some(2000));
+    }
+
+    #[test]
+    fn parse_amounts_skips_tva_rate_line_grabbing_ttc() {
+        // Régression : « TVA 20 % » seul puis Total TTC ne doit pas mettre 120 en TVA.
+        let text = r#"
+Total HT                  100,00
+TVA 20 %
+Total TTC                 120,00
+"#;
+        let a = parse_amounts(text);
+        assert_eq!(a.ht_cents, Some(10_000));
+        assert_eq!(a.ttc_cents, Some(12_000));
+        assert_eq!(a.vat_cents, Some(2_000));
+    }
+
+    #[test]
+    fn parse_amounts_thousand_spaces_and_summary_not_column_header() {
+        let text = include_str!("fixtures/import_ocr/2611-F-2026-1132-3PSI.txt");
+        let a = parse_amounts(text);
+        assert_eq!(a.ht_cents, Some(150_000), "HT 1 500,00 — got {a:?}");
+        assert_eq!(a.vat_cents, Some(0), "TVA 0,00 — got {a:?}");
+        assert_eq!(a.ttc_cents, Some(150_000), "TTC 1 500,00 — got {a:?}");
+        assert_eq!(a.rate_bp, Some(0));
+    }
+
+    #[test]
+    fn classify_fixture_3psi_client_invoice_as_vte() {
+        let text = include_str!("fixtures/import_ocr/2611-F-2026-1132-3PSI.txt");
+        let org = OrgClassifyHint {
+            name: "3PSI",
+            siret: Some("93362796000018"),
+        };
+        let (t, c) = classify_document_with_org(text, Some(org));
+        assert_eq!(t, "customer_invoice", "confidence {c}");
+        assert!(c >= 0.45, "confidence {c}");
+        // Même sans org : affacturage + devis associé → vente
+        let (t2, c2) = classify_document(text);
+        assert_eq!(t2, "customer_invoice", "sans org confidence {c2}");
+    }
+
+    #[test]
+    fn classify_supplier_when_org_is_buyer() {
+        let text = include_str!("fixtures/import_ocr/supplier-normale.txt");
+        let org = OrgClassifyHint {
+            name: "3PSI",
+            siret: Some("93362796000018"),
+        };
+        let (t, c) = classify_document_with_org(text, Some(org));
+        assert_eq!(t, "supplier_invoice", "confidence {c}");
+    }
+
+    #[test]
+    fn fixture_3psi_autoliquidation_chantier_on_zero_vat() {
+        let text = include_str!("fixtures/import_ocr/2611-F-2026-1132-3PSI.txt");
+        let amounts = parse_amounts(text);
+        assert!(detect_reverse_charge_implicit(text, &amounts));
+        let payload = build_extraction_payload(text, "pdf_text", "customer_invoice", 0.8, None);
+        assert_eq!(
+            payload.get("vatMode").and_then(|v| v.as_str()),
+            Some("autoliquidation_chantier")
+        );
+        assert_eq!(payload.get("htCents").and_then(|v| v.as_i64()), Some(150_000));
+        assert_eq!(payload.get("vatCents").and_then(|v| v.as_i64()), Some(0));
+        assert_eq!(payload.get("ttcCents").and_then(|v| v.as_i64()), Some(150_000));
+        assert_eq!(payload.get("journalCode").and_then(|v| v.as_str()), Some("VTE"));
+        assert_eq!(payload.get("reverseCharge").and_then(|v| v.as_bool()), Some(true));
+    }
+
+    #[test]
+    fn fixture_supplier_autoliquidation_283() {
+        let text = include_str!("fixtures/import_ocr/supplier-autoliquidation-283.txt");
+        assert!(detect_reverse_charge(text));
+        let amounts = parse_amounts(text);
+        assert_eq!(amounts.ht_cents, Some(200_000));
+        assert_eq!(amounts.vat_cents, Some(0));
+        assert_eq!(amounts.ttc_cents, Some(200_000));
+        let (t, _) = classify_document_with_org(
+            text,
+            Some(OrgClassifyHint {
+                name: "3PSI",
+                siret: Some("93362796000018"),
+            }),
+        );
+        assert_eq!(t, "supplier_invoice");
+        let payload = build_extraction_payload(text, "pdf_text", "supplier_invoice", 0.8, None);
+        assert_eq!(
+            payload.get("vatMode").and_then(|v| v.as_str()),
+            Some("autoliquidation_sous_traitance")
+        );
+        assert_eq!(payload.get("htAccount").and_then(|v| v.as_str()), Some("604"));
+    }
+
+    #[test]
+    fn analyze_real_pdf_fixture_3psi_f_2026_1132() {
+        let dir = tempdir().unwrap();
+        let ws = dir.path().join("demo.sascompta");
+        let info = db::create_demo_workspace(&ws).unwrap();
+        let (conn, _) = db::open_workspace(&info.path, db::DEMO_PASSWORD).unwrap();
+        // Aligner Ma SAS sur l’émetteur du PDF (3PSI)
+        conn.execute(
+            "UPDATE organization SET name = '3PSI', siret = '93362796000018', siren = '933627960'",
+            [],
+        )
+        .unwrap();
+
+        let pdf = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src/db/fixtures/import_ocr/2611-F-2026-1132-3PSI.pdf");
+        assert!(pdf.is_file(), "missing fixture PDF {pdf:?}");
+        let doc = analyze_document(&conn, Path::new(&info.path), &pdf).unwrap();
+        assert_eq!(doc.doc_type, "customer_invoice");
+        let ht = doc.extraction.get("htCents").and_then(|v| v.as_i64());
+        let vat = doc.extraction.get("vatCents").and_then(|v| v.as_i64());
+        let ttc = doc.extraction.get("ttcCents").and_then(|v| v.as_i64());
+        let mode = doc.extraction.get("vatMode").and_then(|v| v.as_str());
+        let journal = doc.extraction.get("journalCode").and_then(|v| v.as_str());
+        // pdf-extract may scramble layout; text fixture covers exact amounts.
+        // PDF path must at least classify VTE and not put TTC into TVA as a huge error.
+        assert_eq!(journal, Some("VTE"));
+        assert!(
+            matches!(mode, Some("autoliquidation_chantier") | Some("sans")),
+            "vatMode={mode:?}"
+        );
+        if let (Some(h), Some(v), Some(t)) = (ht, vat, ttc) {
+            assert_eq!(h, 150_000, "ht={h} vat={v} ttc={t} extraction={:?}", doc.extraction);
+            assert_eq!(v, 0);
+            assert_eq!(t, 150_000);
+            assert_eq!(mode, Some("autoliquidation_chantier"));
+        }
+        assert_ne!(vat, Some(150_000), "TVA must not receive the TTC amount");
+        assert_ne!(ht, Some(100), "must not parse '1' from '1 500,00' as HT");
     }
 
     #[test]
