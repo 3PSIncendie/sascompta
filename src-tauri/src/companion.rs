@@ -35,6 +35,11 @@ pub struct CompanionStatus {
     pub running: bool,
     pub host: Option<String>,
     pub port: Option<u16>,
+    /// IPv4 LAN candidats (Wi‑Fi / Ethernet) pour corriger le QR si l’IP auto est fausse.
+    pub lan_addresses: Vec<String>,
+    /// Écoute réelle du pont (`0.0.0.0` = joignable sur toutes les interfaces).
+    pub bind_address: Option<String>,
+    pub host_is_loopback: bool,
     pub org_name: Option<String>,
     pub pairing_code: Option<String>,
     pub pairing_expires_at: Option<String>,
@@ -50,6 +55,9 @@ impl CompanionStatus {
             running: false,
             host: None,
             port: None,
+            lan_addresses: Vec::new(),
+            bind_address: None,
+            host_is_loopback: false,
             org_name: None,
             pairing_code: None,
             pairing_expires_at: None,
@@ -100,10 +108,15 @@ impl CompanionHub {
         };
         let qr_payload = pairing_payload(&cfg);
         let qr_svg = render_qr_svg(&qr_payload).ok();
+        let lan_addresses = list_lan_ipv4();
+        let host_is_loopback = is_loopback_host(&cfg.host);
         CompanionStatus {
             running: true,
-            host: Some(cfg.host),
+            host: Some(cfg.host.clone()),
             port: Some(cfg.port),
+            lan_addresses,
+            bind_address: Some("0.0.0.0".into()),
+            host_is_loopback,
             org_name: Some(cfg.org_name),
             pairing_code: Some(cfg.pairing_code),
             pairing_expires_at: Some(cfg.pairing_expires_at.to_rfc3339()),
@@ -112,6 +125,25 @@ impl CompanionHub {
             qr_svg,
             received_count: cfg.received_count,
         }
+    }
+
+    pub fn set_advertised_host(&self, host: String) -> Result<CompanionStatus, String> {
+        let host = host.trim().to_string();
+        if !is_plausible_ipv4(&host) {
+            return Err("Adresse IPv4 invalide (ex. 192.168.1.42).".into());
+        }
+        let guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(running) = guard.as_ref() else {
+            return Err("Le pont compagnon n’est pas démarré.".into());
+        };
+        let mut cfg = running.config.lock().map_err(|e| e.to_string())?;
+        cfg.host = host;
+        drop(cfg);
+        Ok(Self::status_locked(&Some(Running {
+            stop: running.stop.clone(),
+            join: None,
+            config: running.config.clone(),
+        })))
     }
 
     pub fn status(&self) -> CompanionStatus {
@@ -169,15 +201,27 @@ fn pairing_payload(cfg: &LiveConfig) -> String {
     )
 }
 
-/// Page HTML servie au scan caméra système (Android) : Intent Expo Go + code.
+fn html_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
+}
+
+/// Page HTML servie au scan caméra Android / URL manuelle.
+///
+/// Parcours principal : **navigateur mobile** (Chrome) sur HTTP clair LAN —
+/// appairage + envoi photo/PDF sans Expo Go ni APK. Expo Go reste optionnel.
 fn launch_page_html(cfg: &LiveConfig, code_hint: Option<&str>) -> String {
-    let code = code_hint
-        .filter(|c| !c.is_empty())
-        .unwrap_or(cfg.pairing_code.as_str());
-    let host = &cfg.host;
+    let code = html_escape(
+        code_hint
+            .filter(|c| !c.is_empty())
+            .unwrap_or(cfg.pairing_code.as_str()),
+    );
+    let org = html_escape(&cfg.org_name);
+    let host = html_escape(&cfg.host);
     let port = cfg.port;
-    // Intent Android → package Expo Go ; repli Play Store si absent.
-    let expo_intent = "intent://#Intent;scheme=exp;package=host.exp.exponent;S.browser_fallback_url=https://play.google.com/store/apps/details?id=host.exp.exponent;end";
     let play = "https://play.google.com/store/apps/details?id=host.exp.exponent";
     format!(
         r#"<!doctype html>
@@ -185,31 +229,131 @@ fn launch_page_html(cfg: &LiveConfig, code_hint: Option<&str>) -> String {
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>SasCompta — ouvrir Expo Go</title>
+<meta name="color-scheme" content="light"/>
+<title>SasCompta — compagnon Wi‑Fi</title>
 <style>
-  body{{font-family:system-ui,sans-serif;margin:0;padding:1.5rem;background:#eef7f1;color:#1a3d2e}}
-  h1{{font-size:1.35rem;margin:0 0 .5rem}}
+  body{{font-family:system-ui,sans-serif;margin:0;padding:1.25rem;background:#eef7f1;color:#1a3d2e}}
+  h1{{font-size:1.35rem;margin:0 0 .35rem}}
   p{{line-height:1.45;color:#355647}}
-  .code{{font-size:2rem;letter-spacing:.35em;font-weight:800;margin:1rem 0;text-align:center}}
-  .btn{{display:block;text-align:center;text-decoration:none;background:#3a7d5c;color:#fff;
-    font-weight:700;padding:.9rem 1rem;border-radius:14px;margin:.6rem 0}}
+  .org{{font-weight:700;color:#0a6e3c}}
+  .code{{font-size:2rem;letter-spacing:.35em;font-weight:800;margin:.85rem 0;text-align:center}}
+  .btn{{display:block;width:100%;box-sizing:border-box;text-align:center;text-decoration:none;
+    background:#0a6e3c;color:#fff;font-weight:700;padding:.9rem 1rem;border-radius:14px;
+    margin:.55rem 0;border:0;font-size:1rem}}
   .btn.secondary{{background:#fff;color:#8a4b1a;border:1px solid #f2b27a}}
-  ol{{padding-left:1.2rem;color:#355647;line-height:1.5}}
+  .btn:disabled{{opacity:.55}}
+  .card{{background:#fff;border:1px solid #c5d9cc;border-radius:16px;padding:1rem;margin:1rem 0}}
   .muted{{font-size:.9rem;color:#4d6b5c}}
+  .ok{{color:#0a6e3c;font-weight:600}}
+  .err{{color:#a33a2c;font-weight:600}}
+  input[type=file]{{width:100%;margin:.5rem 0}}
+  select{{width:100%;padding:.65rem;border-radius:10px;border:1px solid #c5d9cc;font-size:1rem}}
+  .hid{{display:none}}
 </style>
 </head>
 <body>
   <h1>SasCompta compagnon</h1>
-  <p>Pas d’APK native à installer. Sur Android, ouvrez le projet dans <strong>Expo Go</strong>, puis appairage Wi‑Fi local.</p>
-  <p class="code">{code}</p>
-  <a class="btn" href="{expo_intent}">Ouvrir Expo Go</a>
-  <a class="btn secondary" href="{play}">Installer Expo Go (Play Store)</a>
-  <ol>
-    <li>Ouvrez <strong>Expo Go</strong> (bouton ci‑dessus).</li>
-    <li>Chargez le projet compagnon via le QR <code>npx expo start</code> (sur le PC de dev).</li>
-    <li>Dans l’app : <strong>Scanner le QR</strong> du pont SasCompta, ou saisissez l’IP <code>{host}</code>, port <code>{port}</code> et le code.</li>
-  </ol>
-  <p class="muted">Ce lien ouvre le pont local — aucun cloud. Ne scannez pas ce QR en espérant une APK SasCompta.</p>
+  <p class="org">{org}</p>
+  <p>Pont Wi‑Fi local — <strong>aucun cloud</strong>. Si cette page s’affiche, le téléphone joint déjà le PC.</p>
+  <p class="code" id="code">{code}</p>
+  <p class="muted">IP annoncée : <code>{host}:{port}</code> · écoute <code>0.0.0.0:{port}</code></p>
+
+  <div class="card" id="webPair">
+    <p><strong>Envoi depuis Chrome</strong> (recommandé sur Android) — pas besoin d’Expo Go ni d’APK.</p>
+    <p id="status" class="muted">Appairage…</p>
+    <div id="uploadBox" class="hid">
+      <label class="muted" for="docType">Type (indice)</label>
+      <select id="docType">
+        <option value="unknown">Auto / inconnu</option>
+        <option value="supplier_invoice">Facture fournisseur</option>
+        <option value="customer_invoice">Facture client</option>
+        <option value="expense_receipt">Note de frais</option>
+        <option value="ticket">Ticket</option>
+        <option value="bank_statement">Relevé bancaire</option>
+      </select>
+      <input id="file" type="file" accept="image/*,application/pdf" capture="environment"/>
+      <button class="btn" id="sendBtn" type="button">Envoyer au PC</button>
+      <p id="sendMsg" class="muted"></p>
+    </div>
+  </div>
+
+  <details>
+    <summary class="muted">Option : Expo Go (dev)</summary>
+    <p class="muted">Chargez d’abord le projet compagnon (<code>npx expo start</code>), puis scannez le QR <em>dans</em> l’app — pas avec le scanner Expo projet.</p>
+    <a class="btn secondary" href="{play}">Installer Expo Go (Play Store)</a>
+  </details>
+
+  <p class="muted">Pare-feu PC : autoriser SasCompta / TCP {port} en entrée. Même Wi‑Fi (pas « données mobiles » ni Wi‑Fi invité isolé).</p>
+
+<script>
+(function(){{
+  var params = new URLSearchParams(location.search);
+  var code = (params.get('code') || params.get('c') || '').trim();
+  if (!code) {{
+    var el = document.getElementById('code');
+    code = (el && el.textContent || '').trim();
+  }}
+  var statusEl = document.getElementById('status');
+  var uploadBox = document.getElementById('uploadBox');
+  var sendMsg = document.getElementById('sendMsg');
+  var token = null;
+  var base = location.origin;
+
+  function setStatus(msg, cls) {{
+    statusEl.textContent = msg;
+    statusEl.className = cls || 'muted';
+  }}
+
+  function pair() {{
+    if (!/^\d{{6}}$/.test(code)) {{
+      setStatus('Code d’appairage manquant ou invalide.', 'err');
+      return;
+    }}
+    fetch(base + '/v1/pair', {{
+      method: 'POST',
+      headers: {{ 'Content-Type': 'application/json' }},
+      body: JSON.stringify({{ code: code }})
+    }}).then(function(r) {{
+      return r.json().then(function(j) {{ return {{ ok: r.ok, j: j }}; }});
+    }}).then(function(x) {{
+      if (!x.ok) throw new Error(x.j && x.j.error || 'Appairage refusé');
+      token = x.j.token;
+      setStatus('Appairé — choisissez une photo ou un PDF.', 'ok');
+      uploadBox.classList.remove('hid');
+    }}).catch(function(e) {{
+      setStatus(String(e.message || e), 'err');
+    }});
+  }}
+
+  document.getElementById('sendBtn').addEventListener('click', function() {{
+    var f = document.getElementById('file').files[0];
+    if (!f) {{ sendMsg.textContent = 'Choisissez un fichier.'; sendMsg.className = 'err'; return; }}
+    if (!token) {{ sendMsg.textContent = 'Pas encore appairé.'; sendMsg.className = 'err'; return; }}
+    sendMsg.textContent = 'Envoi…'; sendMsg.className = 'muted';
+    fetch(base + '/v1/upload', {{
+      method: 'POST',
+      headers: {{
+        'Authorization': 'Bearer ' + token,
+        'Content-Type': f.type || 'application/octet-stream',
+        'X-Doc-Type': document.getElementById('docType').value,
+        'X-File-Name': f.name || 'document.jpg'
+      }},
+      body: f
+    }}).then(function(r) {{
+      return r.json().then(function(j) {{ return {{ ok: r.ok, j: j }}; }});
+    }}).then(function(x) {{
+      if (!x.ok) throw new Error(x.j && x.j.error || 'Envoi refusé');
+      sendMsg.textContent = x.j.message || ('Reçu #' + x.j.id + ' — à revoir sur le PC.');
+      sendMsg.className = 'ok';
+    }}).catch(function(e) {{
+      sendMsg.textContent = String(e.message || e);
+      sendMsg.className = 'err';
+    }});
+  }});
+
+  pair();
+}})();
+</script>
 </body>
 </html>"#
     )
@@ -270,34 +414,132 @@ fn random_token() -> String {
     buf.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-fn guess_lan_ip() -> String {
+fn is_loopback_host(host: &str) -> bool {
+    matches!(host.trim(), "127.0.0.1" | "::1" | "localhost")
+}
+
+fn is_plausible_ipv4(host: &str) -> bool {
+    let parts: Vec<_> = host.split('.').collect();
+    if parts.len() != 4 {
+        return false;
+    }
+    parts.iter().all(|p| p.parse::<u8>().is_ok())
+}
+
+fn is_virtual_iface(name: &str) -> bool {
+    let n = name.to_ascii_lowercase();
+    if n == "lo" || n.starts_with("lo:") || n.contains("loopback") {
+        return true;
+    }
+    [
+        "docker", "br-", "veth", "vethernet", "wsl", "hyper-v", "virtualbox", "vmware",
+        "vmnet", "virbr", "tun", "tap", "wg", "tailscale", "zt", "hamachi", "vbox",
+        "hyperv",
+    ]
+    .iter()
+    .any(|p| n.contains(p))
+}
+
+fn ipv4_privacy_rank(ip: &std::net::Ipv4Addr) -> u8 {
+    let o = ip.octets();
+    if o[0] == 192 && o[1] == 168 {
+        0 // Wi‑Fi / LAN domestique typique
+    } else if o[0] == 10 {
+        1
+    } else if o[0] == 172 && (16..=31).contains(&o[1]) {
+        2 // souvent Docker / Hyper-V ; parfois LAN d’entreprise
+    } else {
+        9
+    }
+}
+
+/// IPv4 non-loopback / non-link-local, virtuels en dernier.
+fn list_lan_ipv4() -> Vec<String> {
+    let mut scored: Vec<(u8, u8, String)> = Vec::new();
+    if let Ok(ifaces) = if_addrs::get_if_addrs() {
+        for iface in ifaces {
+            if iface.is_loopback() || is_virtual_iface(&iface.name) {
+                continue;
+            }
+            let std::net::IpAddr::V4(v4) = iface.ip() else {
+                continue;
+            };
+            if v4.is_loopback() || v4.is_link_local() || v4.is_unspecified() {
+                continue;
+            }
+            let virt = 0u8; // déjà filtré ci-dessus
+            scored.push((ipv4_privacy_rank(&v4), virt, v4.to_string()));
+        }
+    }
+    // Interfaces virtuelles en secours si aucune « réelle ».
+    if scored.is_empty() {
+        if let Ok(ifaces) = if_addrs::get_if_addrs() {
+            for iface in ifaces {
+                if iface.is_loopback() {
+                    continue;
+                }
+                let std::net::IpAddr::V4(v4) = iface.ip() else {
+                    continue;
+                };
+                if v4.is_loopback() || v4.is_link_local() || v4.is_unspecified() {
+                    continue;
+                }
+                let virt = if is_virtual_iface(&iface.name) { 1 } else { 0 };
+                scored.push((ipv4_privacy_rank(&v4), virt, v4.to_string()));
+            }
+        }
+    }
+    // UDP outbound — complète la liste (souvent la route par défaut).
     if let Ok(socket) = UdpSocket::bind("0.0.0.0:0") {
         if socket.connect("8.8.8.8:80").is_ok() {
             if let Ok(addr) = socket.local_addr() {
-                let ip = addr.ip();
-                if !ip.is_loopback() {
-                    return ip.to_string();
+                if let std::net::IpAddr::V4(v4) = addr.ip() {
+                    if !v4.is_loopback() && !v4.is_link_local() {
+                        let s = v4.to_string();
+                        if !scored.iter().any(|(_, _, ip)| ip == &s) {
+                            scored.push((ipv4_privacy_rank(&v4), 1, s));
+                        }
+                    }
                 }
             }
         }
     }
-    "127.0.0.1".into()
+    scored.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2)));
+    let mut out = Vec::new();
+    for (_, _, ip) in scored {
+        if !out.contains(&ip) {
+            out.push(ip);
+        }
+    }
+    out
+}
+
+fn pick_best_lan_ip() -> String {
+    list_lan_ipv4()
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| "127.0.0.1".into())
 }
 
 fn bind_listener(preferred: u16) -> Result<(TcpListener, u16), String> {
-    for port in preferred..preferred.saturating_add(20) {
+    let start = if preferred == 0 { DEFAULT_PORT } else { preferred };
+    for port in start..start.saturating_add(20) {
         match TcpListener::bind(SocketAddr::from(([0, 0, 0, 0], port))) {
             Ok(listener) => {
                 listener
                     .set_nonblocking(false)
                     .map_err(|e| e.to_string())?;
-                return Ok((listener, port));
+                let actual = listener
+                    .local_addr()
+                    .map_err(|e| e.to_string())?
+                    .port();
+                return Ok((listener, actual));
             }
             Err(_) => continue,
         }
     }
     Err(format!(
-        "Impossible d’ouvrir un port LAN autour de {preferred}."
+        "Impossible d’ouvrir un port LAN autour de {start}."
     ))
 }
 
@@ -756,6 +998,14 @@ pub fn companion_rotate_pairing(hub: State<'_, CompanionHub>) -> Result<Companio
 }
 
 #[tauri::command]
+pub fn companion_set_advertised_host(
+    hub: State<'_, CompanionHub>,
+    host: String,
+) -> Result<CompanionStatus, String> {
+    hub.set_advertised_host(host)
+}
+
+#[tauri::command]
 pub fn companion_start(
     app: AppHandle,
     state: State<'_, AppState>,
@@ -778,7 +1028,7 @@ pub fn companion_start(
     })
     .unwrap_or_else(|_| "Société".into());
 
-    let host = guess_lan_ip();
+    let host = pick_best_lan_ip();
     let (listener, port) = bind_listener(DEFAULT_PORT)?;
     let stop = Arc::new(AtomicBool::new(false));
     let config = Arc::new(Mutex::new(LiveConfig {
@@ -857,9 +1107,100 @@ mod tests {
         assert!(!p.contains("Lumière"));
         assert!(!p.contains("expires"));
         let html = launch_page_html(&cfg, None);
-        assert!(html.contains("host.exp.exponent"));
         assert!(html.contains("482913"));
-        assert!(html.contains("Ouvrir Expo Go"));
+        assert!(html.contains("/v1/pair"));
+        assert!(html.contains("/v1/upload"));
+        assert!(html.contains("Envoi depuis Chrome"));
+        assert!(html.contains("0.0.0.0:17832"));
+        assert!(html.contains("Expo Go"));
+    }
+
+    #[test]
+    fn lan_ip_helpers_reject_garbage_and_loopback() {
+        assert!(is_loopback_host("127.0.0.1"));
+        assert!(!is_loopback_host("192.168.1.42"));
+        assert!(is_plausible_ipv4("10.0.0.5"));
+        assert!(!is_plausible_ipv4("not-an-ip"));
+        assert!(is_virtual_iface("docker0"));
+        assert!(!is_virtual_iface("wlan0"));
+        assert!(!is_virtual_iface("Ethernet"));
+    }
+
+    #[test]
+    fn bind_listener_uses_all_interfaces() {
+        // Port éphémère via OS : on bind 0.0.0.0:0 hors de la boucle helper.
+        let listener = TcpListener::bind(SocketAddr::from(([0, 0, 0, 0], 0))).unwrap();
+        let addr = listener.local_addr().unwrap();
+        assert_eq!(
+            addr.ip(),
+            std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED)
+        );
+        assert!(addr.port() > 0);
+        drop(listener);
+    }
+
+    #[test]
+    fn dump_launch_html_for_manual_check() {
+        let cfg = LiveConfig {
+            host: "192.168.1.42".into(),
+            port: 17832,
+            org_name: "Demo SAS".into(),
+            pairing_code: "482913".into(),
+            pairing_expires_at: Utc::now() + Duration::seconds(300),
+            session_token: "tok".into(),
+            session_paired: false,
+            received_count: 0,
+        };
+        let html = launch_page_html(&cfg, Some("482913"));
+        let path = std::env::temp_dir().join("sascompta-launch-smoke.html");
+        std::fs::write(&path, &html).unwrap();
+        assert!(path.exists());
+        assert!(html.contains("location.origin"));
+        assert!(html.contains("capture=\"environment\""));
+    }
+
+    #[test]
+    fn set_advertised_host_rewrites_qr_payload() {
+        let hub = CompanionHub::new();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let stop = Arc::new(AtomicBool::new(false));
+        let config = Arc::new(Mutex::new(LiveConfig {
+            host: "127.0.0.1".into(),
+            port,
+            org_name: "Demo SAS".into(),
+            pairing_code: "654321".into(),
+            pairing_expires_at: Utc::now() + Duration::seconds(300),
+            session_token: "tok".into(),
+            session_paired: false,
+            received_count: 0,
+        }));
+        let join = spawn_server(
+            None,
+            AppState::new(),
+            listener,
+            stop.clone(),
+            config.clone(),
+        );
+        {
+            let mut guard = hub.inner.lock().unwrap();
+            *guard = Some(Running {
+                stop: stop.clone(),
+                join: Some(join),
+                config: config.clone(),
+            });
+        }
+        let before = hub.status();
+        assert!(before.host_is_loopback);
+        assert!(before.qr_payload.as_deref().unwrap().contains("127.0.0.1"));
+
+        let after = hub.set_advertised_host("192.168.1.42".into()).unwrap();
+        assert_eq!(after.host.as_deref(), Some("192.168.1.42"));
+        assert!(!after.host_is_loopback);
+        let expected = format!("http://192.168.1.42:{port}/launch?v=1&code=654321");
+        assert_eq!(after.qr_payload.as_deref(), Some(expected.as_str()));
+
+        hub.stop();
     }
 
     #[test]
@@ -925,7 +1266,7 @@ mod tests {
         assert!(up_resp.contains("200"), "{up_resp}");
         assert!(up_resp.contains("pending_review") || up_resp.contains("ticket"));
 
-        // Page /launch : Intent Expo Go (pas d’APK sascompta://).
+        // Page /launch : client web Chrome (pair+upload), Expo Go optionnel.
         let launch_req = format!(
             "GET /launch?v=1&code=123456 HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"
         );
@@ -934,9 +1275,14 @@ mod tests {
         let mut launch_resp = String::new();
         stream.read_to_string(&mut launch_resp).unwrap();
         assert!(launch_resp.contains("200"), "{launch_resp}");
-        assert!(launch_resp.contains("host.exp.exponent"), "{launch_resp}");
-        assert!(launch_resp.contains("Ouvrir Expo Go"), "{launch_resp}");
+        assert!(launch_resp.contains("/v1/pair"), "{launch_resp}");
+        assert!(launch_resp.contains("/v1/upload"), "{launch_resp}");
+        assert!(launch_resp.contains("Envoi depuis Chrome"), "{launch_resp}");
         assert!(launch_resp.contains("123456"), "{launch_resp}");
+        assert!(
+            !launch_resp.contains("sascompta://"),
+            "pas de schéma custom APK dans /launch"
+        );
 
         stop.store(true, Ordering::SeqCst);
         let _ = TcpStream::connect(("127.0.0.1", port));

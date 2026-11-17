@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildPairingPayload,
   companionEndpoint,
+  companionHostUnreachableFromPhone,
   pairingExpiresLabel,
   pairingIsExpired,
   parsePairingPayload,
@@ -19,6 +20,15 @@ describe("companion helpers", () => {
       "http://192.168.1.42:17832/launch?v=1&code=482913",
     );
     expect(live.qrPayload).not.toContain("sascompta://");
+    expect(live.bindAddress).toBe("0.0.0.0");
+    expect(live.lanAddresses.length).toBeGreaterThan(0);
+    expect(live.hostIsLoopback).toBe(false);
+  });
+
+  it("detects loopback hosts unusable from phone", () => {
+    expect(companionHostUnreachableFromPhone("127.0.0.1")).toBe(true);
+    expect(companionHostUnreachableFromPhone("192.168.1.42")).toBe(false);
+    expect(companionHostUnreachableFromPhone(null)).toBe(true);
   });
 
   it("formats endpoint", () => {

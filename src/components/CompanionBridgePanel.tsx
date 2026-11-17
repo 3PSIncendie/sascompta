@@ -4,6 +4,7 @@ import { FieldHelp } from "./FieldHelp";
 import { api } from "../lib/api";
 import {
   companionEndpoint,
+  companionHostUnreachableFromPhone,
   pairingExpiresLabel,
   pairingIsExpired,
   previewCompanionStatus,
@@ -65,8 +66,10 @@ export function CompanionBridgePanel({
     if (PREVIEW || !isTauriRuntime()) {
       const s = previewCompanionStatus(true);
       s.pairingCode = "917204";
+      s.qrPayload = `http://${s.host}:${s.port}/launch?v=1&code=917204`;
       setStatus(s);
       setFlash("Code d’appairage renouvelé (aperçu).");
+      rotatingExpired.current = false;
       return;
     }
     void api
@@ -124,7 +127,7 @@ export function CompanionBridgePanel({
       const s = await api.companionStart();
       setStatus(s);
       setFlash(
-        "Pont Wi‑Fi local démarré. Sur Android : Expo Go → projet compagnon → scanner ce QR (pas une APK).",
+        "Pont Wi‑Fi local démarré. Sur Android : scannez ce QR avec la caméra (Chrome) — envoi photo sans Expo. Vérifiez l’IP si la page ne charge pas.",
       );
     } catch (e) {
       setError(String(e));
@@ -171,7 +174,40 @@ export function CompanionBridgePanel({
     }
   }
 
+  async function selectHost(host: string) {
+    if (!host || host === status.host) return;
+    setBusy(true);
+    setError(null);
+    try {
+      if (PREVIEW || !isTauriRuntime()) {
+        const s = previewCompanionStatus(true);
+        s.host = host;
+        s.hostIsLoopback = companionHostUnreachableFromPhone(host);
+        s.qrPayload = `http://${host}:${s.port}/launch?v=1&code=${s.pairingCode}`;
+        setStatus(s);
+        setFlash(`QR mis à jour pour ${host} (aperçu).`);
+        return;
+      }
+      const s = await api.companionSetAdvertisedHost(host);
+      setStatus(s);
+      setFlash(
+        `QR mis à jour pour ${host} — rescanner depuis le téléphone (même Wi‑Fi).`,
+      );
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   const endpoint = companionEndpoint(status.host, status.port);
+  const hostBad = companionHostUnreachableFromPhone(status.host);
+  const lanChoices = (status.lanAddresses?.length
+    ? status.lanAddresses
+    : status.host
+      ? [status.host]
+      : []
+  ).filter(Boolean);
   void tick;
 
   return (
@@ -234,8 +270,14 @@ export function CompanionBridgePanel({
                   </strong>
                 </div>
                 <div className="meta-item">
-                  <span>Adresse LAN</span>
+                  <span>Adresse LAN (QR)</span>
                   <strong className="mono">{endpoint}</strong>
+                </div>
+                <div className="meta-item">
+                  <span>Écoute</span>
+                  <strong className="mono">
+                    {status.bindAddress || "0.0.0.0"}:{status.port}
+                  </strong>
                 </div>
                 <div className="meta-item">
                   <span>Société</span>
@@ -252,12 +294,43 @@ export function CompanionBridgePanel({
                   <strong>{status.receivedCount}</strong>
                 </div>
               </div>
+              {hostBad && (
+                <p className="error">
+                  L’IP du QR est <strong>127.0.0.1</strong> (ce PC seulement) —
+                  le téléphone ne pourra pas ouvrir l’URL. Choisissez l’IP Wi‑Fi
+                  ci‑dessous, ou vérifiez que le PC est bien sur le réseau.
+                </p>
+              )}
+              {lanChoices.length > 1 && (
+                <div className="companion-lan-pick">
+                  <p className="muted tiny">
+                    Si Chrome Android affiche « site inaccessible », l’IP auto
+                    est peut‑être un VPN / Hyper‑V. Choisissez l’IP du{" "}
+                    <strong>Wi‑Fi</strong> (souvent <code>192.168.…</code>) :
+                  </p>
+                  <div className="btn-row companion-lan-btns">
+                    {lanChoices.map((ip) => (
+                      <button
+                        key={ip}
+                        type="button"
+                        className={
+                          ip === status.host ? "primary" : "ghost"
+                        }
+                        disabled={busy || ip === status.host}
+                        onClick={() => void selectHost(ip)}
+                      >
+                        {ip}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
               <p className="muted tiny">
-                Android : installez <strong>Expo Go</strong>, chargez le projet
-                compagnon (<code>npx expo start</code>), puis scannez ce QR{" "}
-                <em>dans</em> l’app (ou ouvrez le QR avec la caméra → page «
-                Ouvrir Expo Go »). Pas d’APK SasCompta requise. Sinon saisissez
-                l’adresse + le code. Chaque envoi arrive dans « En revue ».
+                Android : scannez ce QR avec la <strong>caméra / Chrome</strong>{" "}
+                → page d’envoi photo/PDF (HTTP local, pas de cloud). Pare-feu
+                Windows : autoriser SasCompta (TCP {status.port}) en entrée.
+                Expo Go reste optionnel pour l’app React Native. Chaque envoi
+                arrive dans « En revue ».
               </p>
               <div className="btn-row">
                 <button

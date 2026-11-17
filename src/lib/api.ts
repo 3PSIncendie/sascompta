@@ -286,6 +286,8 @@ export const api = {
   companionStatus: () => invoke<CompanionStatus>("companion_status"),
   companionRotatePairing: () =>
     invoke<CompanionStatus>("companion_rotate_pairing"),
+  companionSetAdvertisedHost: (host: string) =>
+    invoke<CompanionStatus>("companion_set_advertised_host", { host }),
 
   folderWatchDefaultPath: () => invoke<string>("folder_watch_default_path"),
   folderWatchStart: (paths?: string[] | null, path?: string | null) =>

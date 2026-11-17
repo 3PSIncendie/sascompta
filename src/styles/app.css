@@ -2120,6 +2120,20 @@ button.linkish {
   color: #a33a2c;
 }
 
+.companion-lan-pick {
+  margin: 0.35rem 0 0.75rem;
+}
+
+.companion-lan-btns {
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.companion-lan-btns button {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.85rem;
+}
+
 @media (max-width: 720px) {
   .companion-live-grid {
     grid-template-columns: 1fr;
