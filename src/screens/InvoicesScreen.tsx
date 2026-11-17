@@ -431,7 +431,7 @@ export function InvoicesScreen({
         }),
       );
       setStatus(
-        `Encaissement ${formatEuros(amount)} — brouillon BQ + lettrage soft (aperçu).`,
+        `Encaissement ${formatEuros(amount)} — BQ postée + lettrage soft (aperçu).`,
       );
       setPayInvoiceId(null);
       return;
@@ -447,7 +447,7 @@ export function InvoicesScreen({
         bankRef: payRef.trim() || null,
       });
       setStatus(
-        `Encaissement #${p.id} — brouillon BQ #${p.entryId ?? "?"} · lettrage ${p.lettre ?? "—"}. Validez le BQ pour passer en compta.`,
+        `Encaissement #${p.id} — BQ postée #${p.entryId ?? "?"} · lettrage ${p.lettre ?? "—"} (Grand livre / FEC à jour).`,
       );
       setPayInvoiceId(null);
       await refresh();
@@ -822,10 +822,7 @@ export function InvoicesScreen({
           <strong>Valider VTE</strong> — passage en compta ventes
         </li>
         <li>
-          <strong>Encaisser</strong> — brouillon BQ + lettrage 411
-        </li>
-        <li>
-          <strong>Valider BQ</strong> — passage en compta banque
+          <strong>Encaisser</strong> — BQ postée (512/411) + lettrage soft
         </li>
       </ol>
 
@@ -1037,7 +1034,7 @@ export function InvoicesScreen({
                                 type="button"
                                 className="ghost"
                                 onClick={() => onNavigate?.("ecritures")}
-                                title="Ouvre Écritures pour valider le brouillon BQ"
+                                title="Ouvre Écritures pour consulter la BQ postée"
                               >
                                 Voir BQ / compta
                               </button>
