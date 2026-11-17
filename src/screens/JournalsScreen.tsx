@@ -80,8 +80,9 @@ export function JournalsScreen() {
       <h1>Livre journal</h1>
       <p>
         Mouvements des écritures <strong>validées</strong>, classés par journal
-        puis date. Les brouillons (import confirmé, facture émise, saisie)
-        restent dans Écritures jusqu’à validation.
+        puis date. L’import confirmé et l’encaissement postent déjà ; restent
+        surtout en brouillon la VTE à l’émission de facture et la saisie manuelle
+        (à valider dans Écritures).
       </p>
 
       <div className="tabs">

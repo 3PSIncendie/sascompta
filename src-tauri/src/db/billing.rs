@@ -3,7 +3,7 @@
 use super::ledger;
 use super::DbResult;
 use crate::models::*;
-use chrono::Utc;
+use chrono::{Duration, NaiveDate, Utc};
 use printpdf::path::PaintMode;
 use printpdf::*;
 use rusqlite::{params, Connection, OptionalExtension};
@@ -232,13 +232,33 @@ fn open_fy_id(conn: &Connection) -> DbResult<i64> {
     .map_err(|_| "Aucun exercice ouvert".into())
 }
 
-fn fy_label(conn: &Connection, fy_id: i64) -> DbResult<String> {
-    conn.query_row(
-        "SELECT label FROM fiscal_year WHERE id = ?1",
+/// Année civile AAAA pour les compteurs documentaires.
+///
+/// Priorité : `label` si exactement 4 chiffres ; sinon année de `start_date`.
+/// Évite la divergence Ma SAS (compteurs sur label libre) vs allocation
+/// (`issue_date` année calendaire).
+fn calendar_year_for_open_fy(conn: &Connection, fy_id: i64) -> DbResult<String> {
+    let (label, start): (String, String) = conn.query_row(
+        "SELECT label, start_date FROM fiscal_year WHERE id = ?1",
         params![fy_id],
-        |r| r.get(0),
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    if label.len() == 4 && label.chars().all(|c| c.is_ascii_digit()) {
+        return Ok(label);
+    }
+    if start.len() >= 4 && start.as_bytes()[0..4].iter().all(u8::is_ascii_digit) {
+        return Ok(start[0..4].to_string());
+    }
+    Err(format!(
+        "Exercice #{fy_id} : impossible de dériver une année civile (label={label}, start={start})"
     )
-    .map_err(|e| e.into())
+    .into())
+}
+
+fn default_due_date(issue_date: &str) -> Option<String> {
+    NaiveDate::parse_from_str(issue_date, "%Y-%m-%d")
+        .ok()
+        .map(|d| (d + Duration::days(30)).format("%Y-%m-%d").to_string())
 }
 
 fn sequence_label_fr(kind: &str) -> String {
@@ -541,10 +561,10 @@ fn sequence_info_for(
 /// Compteurs de l’année civile de l’exercice ouvert (FACT / DEV).
 pub fn list_document_sequences(conn: &Connection) -> DbResult<Vec<DocumentSequenceInfo>> {
     let fy_id = open_fy_id(conn)?;
-    let label = fy_label(conn, fy_id)?;
+    let year = calendar_year_for_open_fy(conn, fy_id)?;
     let mut out = Vec::with_capacity(DOCUMENT_SEQUENCE_KINDS.len());
     for kind in DOCUMENT_SEQUENCE_KINDS {
-        out.push(sequence_info_for(conn, kind, fy_id, &label)?);
+        out.push(sequence_info_for(conn, kind, fy_id, &year)?);
     }
     Ok(out)
 }
@@ -558,7 +578,7 @@ pub fn set_document_sequences(
         return Err("Aucun compteur à enregistrer".into());
     }
     let fy_id = open_fy_id(conn)?;
-    let year = fy_label(conn, fy_id)?;
+    let year = calendar_year_for_open_fy(conn, fy_id)?;
     let month = preview_month_now();
     for input in inputs {
         let kind = input.kind.trim();
@@ -1257,6 +1277,9 @@ pub fn delete_invoice(conn: &Connection, id: i64) -> DbResult<()> {
 }
 
 /// Émet la facture : réserve le numéro (`FAAAA-MMNN`) + statut issued + brouillon VTE.
+///
+/// Atomique : si le brouillon VTE échoue, numéro + statut `issued` sont annulés
+/// (pas de facture numérotée orpheline sans écriture).
 pub fn issue_invoice(conn: &Connection, id: i64) -> DbResult<Invoice> {
     let existing = get_invoice(conn, id)?;
     if existing.status != "draft" {
@@ -1269,14 +1292,16 @@ pub fn issue_invoice(conn: &Connection, id: i64) -> DbResult<Invoice> {
         return Err("Numéro déjà attribué".into());
     }
     let seq = sequence_kind_for_invoice(&existing.kind);
-    let number = allocate_document_number(conn, seq, &existing.issue_date)?;
+    let tx = conn.unchecked_transaction()?;
+    let number = allocate_document_number(&tx, seq, &existing.issue_date)?;
     let now = now_iso();
-    conn.execute(
+    tx.execute(
         "UPDATE invoice SET number = ?1, status = 'issued', updated_at = ?2 WHERE id = ?3",
         params![number, now, id],
     )?;
     // Max automation : brouillon VTE dès l'émission (post humain ensuite)
-    let _ = build_invoice_entry_draft(conn, id)?;
+    build_invoice_entry_draft(&tx, id)?;
+    tx.commit()?;
     get_invoice(conn, id)
 }
 
@@ -1387,16 +1412,19 @@ pub fn convert_quote_to_invoice(conn: &Connection, quote_id: i64) -> DbResult<In
         return Err("Seuls les devis acceptés peuvent être transformés en facture".into());
     }
     let now = now_iso();
+    // Échéance par défaut : date devis + 30 j (sinon relances silencieusement absentes).
+    let due_date = default_due_date(&quote.issue_date);
     conn.execute(
         "INSERT INTO invoice(
             number, kind, third_party_id, quote_id, status, issue_date, due_date,
             ht_cents, vat_cents, ttc_cents, paid_cents, vat_mode, notes, legal_mentions,
             created_at, updated_at
-         ) VALUES (NULL, 'standard', ?1, ?2, 'draft', ?3, NULL, ?4, ?5, ?6, 0, ?7, ?8, ?9, ?10, ?10)",
+         ) VALUES (NULL, 'standard', ?1, ?2, 'draft', ?3, ?4, ?5, ?6, ?7, 0, ?8, ?9, ?10, ?11, ?11)",
         params![
             quote.third_party_id,
             quote_id,
             quote.issue_date,
+            due_date,
             quote.ht_cents,
             quote.vat_cents,
             quote.ttc_cents,
@@ -2742,6 +2770,10 @@ mod tests {
         assert_eq!(inv.status, "draft");
         assert!(inv.number.is_none()); // numéro à l'émission
         assert_eq!(inv.quote_id, Some(q.id));
+        assert!(
+            inv.due_date.is_some(),
+            "conversion devis→facture doit poser une échéance (relances)"
+        );
         let again = convert_quote_to_invoice(&conn, q.id).unwrap();
         assert_eq!(again.id, inv.id); // idempotent
 
@@ -2936,6 +2968,7 @@ mod tests {
         assert_eq!(get_invoice(&conn, issued.id).unwrap().status, "paid");
 
         // Relances : facture soldée → pas de nouvelle ; créer une autre échue
+        // (dates dans l'exercice ouvert 2026 — la VTE refuse une date hors exercice)
         let other = create_invoice(
             &conn,
             &CreateInvoiceInput {
@@ -2943,8 +2976,8 @@ mod tests {
                 third_party_id: issued.third_party_id,
                 quote_id: None,
                 parent_invoice_id: None,
-                issue_date: "2025-12-01".into(),
-                due_date: Some("2025-12-15".into()),
+                issue_date: "2026-01-05".into(),
+                due_date: Some("2026-01-10".into()),
                 service_date: None,
                 vat_mode: "normale".into(),
                 notes: None,
@@ -3122,26 +3155,10 @@ mod tests {
         // Même année civile → compteur continue, mois = décembre
         assert_eq!(dec_issued.number.as_deref(), Some("F2026-1202"));
 
-        let jan = create_invoice(
-            &conn,
-            &CreateInvoiceInput {
-                kind: "standard".into(),
-                third_party_id: client_id,
-                quote_id: None,
-                parent_invoice_id: None,
-                issue_date: "2027-01-05".into(),
-                due_date: None,
-                service_date: None,
-                vat_mode: "normale".into(),
-                notes: None,
-                legal_mentions: None,
-                lines: vec![line],
-            },
-        )
-        .unwrap();
-        let jan_issued = issue_invoice(&conn, jan.id).unwrap();
-        // Nouvelle année civile → reprise à 01
-        assert_eq!(jan_issued.number.as_deref(), Some("F2027-0101"));
+        // Rollover calendaire 2027 : allocation seule (l'émission complète
+        // exige un exercice ouvert couvrant la date — testé ailleurs).
+        let n27 = allocate_document_number(&conn, "FACT", "2027-01-05").unwrap();
+        assert_eq!(n27, "F2027-0101");
 
         // Devis : série séparée, préfixe D, même format annuel
         let q = create_quote(
