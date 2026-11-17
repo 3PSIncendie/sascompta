@@ -1,8 +1,8 @@
-//! Surveillance d’un dossier PC → file Import docs (même revue que PDF / compagnon).
+//! Surveillance de dossiers PC → file Import docs (même revue que PDF / compagnon).
 //!
-//! Défaut : `Documents/SasCompta-import`. Détecte PDF/images, copie dans les
-//! pièces workspace, enfile `pending_review` (classifieurs multi-types).
-//! Idempotent via empreinte SHA-256 (ne réimporte pas le même contenu).
+//! Défaut : `Documents/SasCompta-import`. Plusieurs chemins possibles (liste
+//! persistée). Détecte PDF/images, copie dans les pièces workspace, enfile
+//! `pending_review`. Idempotent via empreinte SHA-256.
 
 use crate::db::{self, AppState};
 use notify::{Config, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
@@ -16,11 +16,12 @@ use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 const WATCH_DEBOUNCE: Duration = Duration::from_millis(700);
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
 const STABLE_WAIT: Duration = Duration::from_millis(400);
+const PREFS_FILE: &str = "folder-watch.json";
 
 const WATCH_EXTS: &[&str] = &["pdf", "png", "jpg", "jpeg", "webp", "tif", "tiff"];
 
@@ -28,6 +29,9 @@ const WATCH_EXTS: &[&str] = &["pdf", "png", "jpg", "jpeg", "webp", "tif", "tiff"
 #[serde(rename_all = "camelCase")]
 pub struct FolderWatchStatus {
     pub running: bool,
+    /// Chemins surveillés (ou mémorisés si arrêté).
+    pub paths: Vec<String>,
+    /// Premier chemin (compat UI / API 0.6.7).
     pub path: Option<String>,
     pub default_path: String,
     pub received_count: u64,
@@ -36,10 +40,12 @@ pub struct FolderWatchStatus {
 }
 
 impl FolderWatchStatus {
-    fn idle(default_path: String) -> Self {
+    fn idle(default_path: String, paths: Vec<String>) -> Self {
+        let path = paths.first().cloned();
         Self {
             running: false,
-            path: None,
+            paths,
+            path,
             default_path,
             received_count: 0,
             skipped_count: 0,
@@ -48,9 +54,86 @@ impl FolderWatchStatus {
     }
 }
 
+/// Fichier de préférences (migration depuis `"path"` unique).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct FolderWatchPrefs {
+    #[serde(default)]
+    paths: Vec<String>,
+    /// Ancien format mono-dossier.
+    #[serde(default, skip_serializing)]
+    path: Option<String>,
+}
+
+impl FolderWatchPrefs {
+    fn normalized_paths(&self) -> Vec<PathBuf> {
+        let mut out: Vec<PathBuf> = self
+            .paths
+            .iter()
+            .map(|p| p.trim())
+            .filter(|p| !p.is_empty())
+            .map(PathBuf::from)
+            .collect();
+        if out.is_empty() {
+            if let Some(p) = self.path.as_ref().map(|s| s.trim()).filter(|s| !s.is_empty()) {
+                out.push(PathBuf::from(p));
+            }
+        }
+        dedupe_paths(out)
+    }
+}
+
+fn dedupe_paths(paths: Vec<PathBuf>) -> Vec<PathBuf> {
+    let mut seen = HashSet::new();
+    let mut out = Vec::new();
+    for p in paths {
+        let key = p.display().to_string();
+        if seen.insert(key) {
+            out.push(p);
+        }
+    }
+    out
+}
+
+fn prefs_file(app: &AppHandle) -> Result<PathBuf, String> {
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Dossier app data inaccessible: {e}"))?;
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(dir.join(PREFS_FILE))
+}
+
+fn load_prefs(app: &AppHandle) -> FolderWatchPrefs {
+    let Ok(path) = prefs_file(app) else {
+        return FolderWatchPrefs::default();
+    };
+    if !path.exists() {
+        return FolderWatchPrefs::default();
+    }
+    let Ok(raw) = fs::read_to_string(&path) else {
+        return FolderWatchPrefs::default();
+    };
+    if raw.trim().is_empty() {
+        return FolderWatchPrefs::default();
+    }
+    serde_json::from_str(&raw).unwrap_or_default()
+}
+
+fn save_prefs(app: &AppHandle, paths: &[PathBuf]) -> Result<(), String> {
+    let file = prefs_file(app)?;
+    let prefs = FolderWatchPrefs {
+        paths: paths.iter().map(|p| p.display().to_string()).collect(),
+        path: None,
+    };
+    let json = serde_json::to_string_pretty(&prefs).map_err(|e| e.to_string())?;
+    fs::write(file, json).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 #[derive(Clone)]
 struct LiveConfig {
-    path: PathBuf,
+    paths: Vec<PathBuf>,
     received_count: u64,
     skipped_count: u64,
     last_error: Option<String>,
@@ -64,37 +147,68 @@ struct Running {
 
 pub struct FolderWatchHub {
     inner: Mutex<Option<Running>>,
-    /// Dernier chemin choisi (session), même arrêté.
-    preferred_path: Mutex<Option<PathBuf>>,
+    /// Liste mémorisée (session + disque).
+    preferred_paths: Mutex<Vec<PathBuf>>,
 }
 
 impl FolderWatchHub {
     pub fn new() -> Self {
         Self {
             inner: Mutex::new(None),
-            preferred_path: Mutex::new(None),
+            preferred_paths: Mutex::new(Vec::new()),
         }
+    }
+
+    fn ensure_loaded(&self, app: &AppHandle) {
+        let mut pref = self
+            .preferred_paths
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if !pref.is_empty() {
+            return;
+        }
+        let loaded = load_prefs(app).normalized_paths();
+        if !loaded.is_empty() {
+            *pref = loaded;
+        }
+    }
+
+    fn set_preferred(&self, paths: Vec<PathBuf>) {
+        let mut pref = self
+            .preferred_paths
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        *pref = dedupe_paths(paths);
+    }
+
+    fn preferred_clone(&self) -> Vec<PathBuf> {
+        self.preferred_paths
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     fn status_locked(
         running: &Option<Running>,
-        preferred: &Option<PathBuf>,
+        preferred: &[PathBuf],
         default_path: String,
     ) -> FolderWatchStatus {
+        let paths_str = |list: &[PathBuf]| -> Vec<String> {
+            list.iter().map(|p| p.display().to_string()).collect()
+        };
         let Some(r) = running else {
-            let mut s = FolderWatchStatus::idle(default_path);
-            if let Some(p) = preferred {
-                s.path = Some(p.display().to_string());
-            }
-            return s;
+            return FolderWatchStatus::idle(default_path, paths_str(preferred));
         };
         let cfg = match r.config.lock() {
             Ok(c) => c.clone(),
-            Err(_) => return FolderWatchStatus::idle(default_path),
+            Err(_) => return FolderWatchStatus::idle(default_path, paths_str(preferred)),
         };
+        let paths = paths_str(&cfg.paths);
+        let path = paths.first().cloned();
         FolderWatchStatus {
             running: true,
-            path: Some(cfg.path.display().to_string()),
+            paths,
+            path,
             default_path,
             received_count: cfg.received_count,
             skipped_count: cfg.skipped_count,
@@ -102,14 +216,11 @@ impl FolderWatchHub {
         }
     }
 
-    pub fn status(&self) -> FolderWatchStatus {
+    pub fn status(&self, app: &AppHandle) -> FolderWatchStatus {
+        self.ensure_loaded(app);
         let default_path = default_watch_dir().display().to_string();
         let guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        let pref = self
-            .preferred_path
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone();
+        let pref = self.preferred_clone();
         Self::status_locked(&guard, &pref, default_path)
     }
 
@@ -122,12 +233,25 @@ impl FolderWatchHub {
             }
         }
         let default_path = default_watch_dir().display().to_string();
-        let pref = self
-            .preferred_path
+        let pref = self.preferred_clone();
+        Self::status_locked(&None, &pref, default_path)
+    }
+
+    fn stop_inner(&self) {
+        let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(mut running) = guard.take() {
+            running.stop.store(true, Ordering::SeqCst);
+            if let Some(join) = running.join.take() {
+                let _ = join.join();
+            }
+        }
+    }
+
+    fn is_running(&self) -> bool {
+        self.inner
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .clone();
-        Self::status_locked(&None, &pref, default_path)
+            .is_some()
     }
 }
 
@@ -217,6 +341,15 @@ fn scan_dir(dir: &Path) -> Vec<PathBuf> {
     out
 }
 
+fn scan_dirs(dirs: &[PathBuf]) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    for d in dirs {
+        out.extend(scan_dir(d));
+    }
+    out.sort();
+    out
+}
+
 fn process_path(
     app: Option<&AppHandle>,
     state: &AppState,
@@ -263,7 +396,7 @@ fn process_path(
 fn spawn_watcher(
     app: Option<AppHandle>,
     state: AppState,
-    watch_path: PathBuf,
+    watch_paths: Vec<PathBuf>,
     stop: Arc<AtomicBool>,
     config: Arc<Mutex<LiveConfig>>,
 ) -> JoinHandle<()> {
@@ -280,21 +413,25 @@ fn spawn_watcher(
                 if let Ok(mut cfg) = config.lock() {
                     cfg.last_error = Some(format!("Watcher: {e}"));
                 }
-                // Fallback : poll seul.
-                run_poll_loop(app.as_ref(), &state, &watch_path, &stop, &config);
+                run_poll_loop(app.as_ref(), &state, &watch_paths, &stop, &config);
                 return;
             }
         };
-        if let Err(e) = watcher.watch(&watch_path, RecursiveMode::NonRecursive) {
-            if let Ok(mut cfg) = config.lock() {
-                cfg.last_error = Some(format!("Surveillance: {e}"));
+
+        for watch_path in &watch_paths {
+            if let Err(e) = watcher.watch(watch_path, RecursiveMode::NonRecursive) {
+                if let Ok(mut cfg) = config.lock() {
+                    cfg.last_error = Some(format!(
+                        "Surveillance ({}): {e}",
+                        watch_path.display()
+                    ));
+                }
             }
         }
 
         let mut pending: HashMap<PathBuf, Instant> = HashMap::new();
         let mut seen_fps: HashSet<String> = HashSet::new();
-        // Scan initial (fichiers déjà présents).
-        for p in scan_dir(&watch_path) {
+        for p in scan_dirs(&watch_paths) {
             process_path(app.as_ref(), &state, &config, &p, &mut seen_fps);
         }
 
@@ -335,7 +472,7 @@ fn spawn_watcher(
 
             if last_poll.elapsed() >= POLL_INTERVAL {
                 last_poll = Instant::now();
-                for p in scan_dir(&watch_path) {
+                for p in scan_dirs(&watch_paths) {
                     let fp = match db::documents::file_fingerprint(&p) {
                         Ok(f) => f,
                         Err(_) => continue,
@@ -354,13 +491,13 @@ fn spawn_watcher(
 fn run_poll_loop(
     app: Option<&AppHandle>,
     state: &AppState,
-    watch_path: &Path,
+    watch_paths: &[PathBuf],
     stop: &AtomicBool,
     config: &Arc<Mutex<LiveConfig>>,
 ) {
     let mut seen_fps: HashSet<String> = HashSet::new();
     while !stop.load(Ordering::SeqCst) {
-        for p in scan_dir(watch_path) {
+        for p in scan_dirs(watch_paths) {
             let fp = match db::documents::file_fingerprint(&p) {
                 Ok(f) => f,
                 Err(_) => continue,
@@ -374,14 +511,111 @@ fn run_poll_loop(
     }
 }
 
+fn resolve_start_paths(
+    hub: &FolderWatchHub,
+    paths: Option<Vec<String>>,
+    path: Option<String>,
+) -> Vec<PathBuf> {
+    if let Some(list) = paths {
+        let parsed: Vec<PathBuf> = list
+            .into_iter()
+            .map(|p| p.trim().to_string())
+            .filter(|p| !p.is_empty())
+            .map(PathBuf::from)
+            .collect();
+        let parsed = dedupe_paths(parsed);
+        if !parsed.is_empty() {
+            return parsed;
+        }
+    }
+    if let Some(p) = path {
+        let t = p.trim();
+        if !t.is_empty() {
+            return vec![PathBuf::from(t)];
+        }
+    }
+    let pref = hub.preferred_clone();
+    if !pref.is_empty() {
+        return pref;
+    }
+    vec![default_watch_dir()]
+}
+
+fn ensure_dirs(paths: &[PathBuf]) -> Result<(), String> {
+    for watch_path in paths {
+        fs::create_dir_all(watch_path).map_err(|e| {
+            format!(
+                "Impossible de créer le dossier surveillé ({}): {e}",
+                watch_path.display()
+            )
+        })?;
+    }
+    Ok(())
+}
+
+fn start_watching(
+    app: AppHandle,
+    state: &AppState,
+    hub: &FolderWatchHub,
+    watch_paths: Vec<PathBuf>,
+) -> Result<FolderWatchStatus, String> {
+    {
+        let path_guard = state.path.lock().map_err(|e| e.to_string())?;
+        if path_guard.is_none() {
+            return Err(
+                "Ouvrez un workspace avant d’activer la surveillance de dossier.".into(),
+            );
+        }
+    }
+
+    ensure_dirs(&watch_paths)?;
+    hub.set_preferred(watch_paths.clone());
+    let _ = save_prefs(&app, &watch_paths);
+
+    hub.stop_inner();
+
+    let stop = Arc::new(AtomicBool::new(false));
+    let config = Arc::new(Mutex::new(LiveConfig {
+        paths: watch_paths.clone(),
+        received_count: 0,
+        skipped_count: 0,
+        last_error: None,
+    }));
+
+    let app_state = AppState {
+        conn: state.conn.clone(),
+        path: state.path.clone(),
+    };
+    let join = spawn_watcher(
+        Some(app.clone()),
+        app_state,
+        watch_paths,
+        stop.clone(),
+        config.clone(),
+    );
+
+    let mut guard = hub.inner.lock().unwrap_or_else(|e| e.into_inner());
+    *guard = Some(Running {
+        stop,
+        join: Some(join),
+        config,
+    });
+    let default_path = default_watch_dir().display().to_string();
+    let pref = hub.preferred_clone();
+    Ok(FolderWatchHub::status_locked(&guard, &pref, default_path))
+}
+
 #[tauri::command]
 pub fn folder_watch_default_path() -> String {
     default_watch_dir().display().to_string()
 }
 
 #[tauri::command]
-pub fn folder_watch_status(hub: State<'_, FolderWatchHub>) -> FolderWatchStatus {
-    hub.status()
+pub fn folder_watch_status(
+    app: AppHandle,
+    hub: State<'_, FolderWatchHub>,
+) -> FolderWatchStatus {
+    hub.status(&app)
 }
 
 #[tauri::command]
@@ -394,77 +628,98 @@ pub fn folder_watch_start(
     app: AppHandle,
     state: State<'_, AppState>,
     hub: State<'_, FolderWatchHub>,
+    paths: Option<Vec<String>>,
     path: Option<String>,
 ) -> Result<FolderWatchStatus, String> {
-    {
-        let path_guard = state.path.lock().map_err(|e| e.to_string())?;
-        if path_guard.is_none() {
-            return Err("Ouvrez un workspace avant d’activer la surveillance de dossier.".into());
-        }
-    }
+    hub.ensure_loaded(&app);
+    let watch_paths = resolve_start_paths(&hub, paths, path);
+    start_watching(app, &state, &hub, watch_paths)
+}
 
-    let watch_path = match path {
-        Some(p) if !p.trim().is_empty() => PathBuf::from(p.trim()),
-        _ => {
-            let pref = hub
-                .preferred_path
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .clone();
-            pref.unwrap_or_else(default_watch_dir)
-        }
-    };
-
-    fs::create_dir_all(&watch_path).map_err(|e| {
-        format!(
-            "Impossible de créer le dossier surveillé ({}): {e}",
-            watch_path.display()
-        )
-    })?;
-
-    {
-        let mut pref = hub
-            .preferred_path
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        *pref = Some(watch_path.clone());
-    }
-
-    hub.stop();
-
-    let stop = Arc::new(AtomicBool::new(false));
-    let config = Arc::new(Mutex::new(LiveConfig {
-        path: watch_path.clone(),
-        received_count: 0,
-        skipped_count: 0,
-        last_error: None,
-    }));
-
-    let app_state = AppState {
-        conn: state.conn.clone(),
-        path: state.path.clone(),
-    };
-    let join = spawn_watcher(
-        Some(app),
-        app_state,
-        watch_path,
-        stop.clone(),
-        config.clone(),
+#[tauri::command]
+pub fn folder_watch_set_paths(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    hub: State<'_, FolderWatchHub>,
+    paths: Vec<String>,
+) -> Result<FolderWatchStatus, String> {
+    hub.ensure_loaded(&app);
+    let watch_paths = dedupe_paths(
+        paths
+            .into_iter()
+            .map(|p| p.trim().to_string())
+            .filter(|p| !p.is_empty())
+            .map(PathBuf::from)
+            .collect(),
     );
+    if watch_paths.is_empty() {
+        hub.set_preferred(Vec::new());
+        let _ = save_prefs(&app, &[]);
+        if hub.is_running() {
+            return Ok(hub.stop());
+        }
+        return Ok(hub.status(&app));
+    }
+    ensure_dirs(&watch_paths)?;
+    hub.set_preferred(watch_paths.clone());
+    save_prefs(&app, &watch_paths)?;
+    if hub.is_running() {
+        return start_watching(app, &state, &hub, watch_paths);
+    }
+    Ok(hub.status(&app))
+}
 
-    let mut guard = hub.inner.lock().unwrap_or_else(|e| e.into_inner());
-    *guard = Some(Running {
-        stop,
-        join: Some(join),
-        config,
-    });
-    let default_path = default_watch_dir().display().to_string();
-    let pref = hub
-        .preferred_path
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .clone();
-    Ok(FolderWatchHub::status_locked(&guard, &pref, default_path))
+#[tauri::command]
+pub fn folder_watch_add_path(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    hub: State<'_, FolderWatchHub>,
+    path: String,
+) -> Result<FolderWatchStatus, String> {
+    hub.ensure_loaded(&app);
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return Err("Chemin de dossier vide.".into());
+    }
+    let mut list = hub.preferred_clone();
+    if list.is_empty() {
+        // Migration / premier ajout : garder le défaut si déjà présent en session idle.
+        // (liste vide = pas encore choisi)
+    }
+    list.push(PathBuf::from(trimmed));
+    list = dedupe_paths(list);
+    ensure_dirs(&list)?;
+    hub.set_preferred(list.clone());
+    save_prefs(&app, &list)?;
+    if hub.is_running() {
+        return start_watching(app, &state, &hub, list);
+    }
+    Ok(hub.status(&app))
+}
+
+#[tauri::command]
+pub fn folder_watch_remove_path(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    hub: State<'_, FolderWatchHub>,
+    path: String,
+) -> Result<FolderWatchStatus, String> {
+    hub.ensure_loaded(&app);
+    let target = path.trim();
+    let mut list = hub.preferred_clone();
+    list.retain(|p| p.display().to_string() != target);
+    hub.set_preferred(list.clone());
+    save_prefs(&app, &list)?;
+    if list.is_empty() {
+        if hub.is_running() {
+            return Ok(hub.stop());
+        }
+        return Ok(hub.status(&app));
+    }
+    if hub.is_running() {
+        return start_watching(app, &state, &hub, list);
+    }
+    Ok(hub.status(&app))
 }
 
 #[cfg(test)]
@@ -489,6 +744,37 @@ mod tests {
             .and_then(|s| s.to_str())
             .unwrap_or("")
             .eq_ignore_ascii_case("SasCompta-import"));
+    }
+
+    #[test]
+    fn prefs_migrate_single_path() {
+        let raw = r#"{"path":"/tmp/old-watch"}"#;
+        let prefs: FolderWatchPrefs = serde_json::from_str(raw).unwrap();
+        let paths = prefs.normalized_paths();
+        assert_eq!(paths.len(), 1);
+        assert_eq!(paths[0], PathBuf::from("/tmp/old-watch"));
+    }
+
+    #[test]
+    fn prefs_paths_win_over_legacy() {
+        let raw = r#"{"paths":["/a","/b"],"path":"/legacy"}"#;
+        let prefs: FolderWatchPrefs = serde_json::from_str(raw).unwrap();
+        let paths = prefs.normalized_paths();
+        assert_eq!(paths.len(), 2);
+        assert_eq!(paths[0], PathBuf::from("/a"));
+        assert_eq!(paths[1], PathBuf::from("/b"));
+    }
+
+    #[test]
+    fn dedupe_keeps_order() {
+        let out = dedupe_paths(vec![
+            PathBuf::from("/a"),
+            PathBuf::from("/b"),
+            PathBuf::from("/a"),
+        ]);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0], PathBuf::from("/a"));
+        assert_eq!(out[1], PathBuf::from("/b"));
     }
 
     #[test]
@@ -536,5 +822,19 @@ mod tests {
         fs::write(&txt, "hello").unwrap();
         let err = ingest_watched_file(&state, &txt).unwrap_err();
         assert!(err.contains("non pris en charge"));
+    }
+
+    #[test]
+    fn status_exposes_multiple_paths() {
+        let hub = FolderWatchHub::new();
+        hub.set_preferred(vec![
+            PathBuf::from("/tmp/w1"),
+            PathBuf::from("/tmp/w2"),
+        ]);
+        let default_path = default_watch_dir().display().to_string();
+        let s = FolderWatchHub::status_locked(&None, &hub.preferred_clone(), default_path);
+        assert!(!s.running);
+        assert_eq!(s.paths.len(), 2);
+        assert_eq!(s.path.as_deref(), Some("/tmp/w1"));
     }
 }

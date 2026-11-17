@@ -288,12 +288,19 @@ export const api = {
     invoke<CompanionStatus>("companion_rotate_pairing"),
 
   folderWatchDefaultPath: () => invoke<string>("folder_watch_default_path"),
-  folderWatchStart: (path?: string | null) =>
+  folderWatchStart: (paths?: string[] | null, path?: string | null) =>
     invoke<FolderWatchStatus>("folder_watch_start", {
+      paths: paths ?? null,
       path: path ?? null,
     }),
   folderWatchStop: () => invoke<FolderWatchStatus>("folder_watch_stop"),
   folderWatchStatus: () => invoke<FolderWatchStatus>("folder_watch_status"),
+  folderWatchSetPaths: (paths: string[]) =>
+    invoke<FolderWatchStatus>("folder_watch_set_paths", { paths }),
+  folderWatchAddPath: (path: string) =>
+    invoke<FolderWatchStatus>("folder_watch_add_path", { path }),
+  folderWatchRemovePath: (path: string) =>
+    invoke<FolderWatchStatus>("folder_watch_remove_path", { path }),
 
   pdpStubSubmit: (queueId: number) =>
     invoke<EinvoiceQueueItem>("pdp_stub_submit", { queueId }),

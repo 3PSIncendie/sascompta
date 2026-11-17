@@ -4,6 +4,7 @@ import { FieldHelp } from "./FieldHelp";
 import { api } from "../lib/api";
 import {
   folderWatchPathLabel,
+  mergeWatchPath,
   previewFolderWatchStatus,
   type FolderWatchStatus,
 } from "../lib/folderWatch";
@@ -21,6 +22,12 @@ type Props = {
   onDocumentReceived?: () => void;
 };
 
+function pathsFromStatus(s: FolderWatchStatus): string[] {
+  if (s.paths?.length) return [...s.paths];
+  if (s.path) return [s.path];
+  return [];
+}
+
 export function FolderWatchPanel({
   compact = false,
   onDocumentReceived,
@@ -28,18 +35,25 @@ export function FolderWatchPanel({
   const [status, setStatus] = useState<FolderWatchStatus>(() =>
     previewFolderWatchStatus(PREVIEW && PREVIEW_LIVE),
   );
+  const [paths, setPaths] = useState<string[]>(() =>
+    pathsFromStatus(previewFolderWatchStatus(PREVIEW && PREVIEW_LIVE)),
+  );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [flash, setFlash] = useState<string | null>(null);
-  const [pickedPath, setPickedPath] = useState<string | null>(null);
+
+  const applyStatus = useCallback((s: FolderWatchStatus) => {
+    setStatus(s);
+    setPaths(pathsFromStatus(s));
+  }, []);
 
   const refresh = useCallback(async () => {
     if (PREVIEW || !isTauriRuntime()) {
       return;
     }
     const s = await api.folderWatchStatus();
-    setStatus(s);
-  }, []);
+    applyStatus(s);
+  }, [applyStatus]);
 
   useEffect(() => {
     void refresh().catch((e) => setError(String(e)));
@@ -73,26 +87,66 @@ export function FolderWatchPanel({
     };
   }, [onDocumentReceived, refresh]);
 
-  async function pickFolder() {
+  async function addFolder() {
     setError(null);
     try {
       if (PREVIEW || !isTauriRuntime()) {
-        const demo = status.defaultPath || "~/Documents/SasCompta-import";
-        setPickedPath(demo);
-        setFlash(`Aperçu — dossier choisi : ${demo}`);
+        const demo =
+          paths.length === 0
+            ? status.defaultPath || "~/Documents/SasCompta-import"
+            : "~/Documents/Scans-factures";
+        const next = mergeWatchPath(paths, demo);
+        setPaths(next);
+        setFlash(`Aperçu — dossier ajouté : ${demo}`);
         return;
       }
       const selected = await open({
         directory: true,
         multiple: false,
-        title: "Choisir le dossier surveillé",
+        title: "Ajouter un dossier surveillé",
       });
-      if (typeof selected === "string" && selected) {
-        setPickedPath(selected);
-        setFlash(`Dossier choisi : ${selected}`);
-      }
+      if (typeof selected !== "string" || !selected) return;
+      const s = await api.folderWatchAddPath(selected);
+      applyStatus(s);
+      setFlash(`Dossier ajouté : ${selected}`);
     } catch (e) {
       setError(String(e));
+    }
+  }
+
+  async function removeFolder(target: string) {
+    setError(null);
+    setBusy(true);
+    try {
+      if (PREVIEW || !isTauriRuntime()) {
+        const next = paths.filter((p) => p !== target);
+        setPaths(next);
+        if (status.running && next.length === 0) {
+          setStatus(previewFolderWatchStatus(false));
+        } else if (status.running) {
+          setStatus({
+            ...status,
+            paths: next,
+            path: next[0] ?? null,
+          });
+        }
+        setFlash("Dossier retiré de la liste (aperçu).");
+        return;
+      }
+      const s = await api.folderWatchRemovePath(target);
+      applyStatus(s);
+      if (!s.paths.length) {
+        setPaths([]);
+      }
+      setFlash(
+        s.running
+          ? "Dossier retiré — surveillance mise à jour."
+          : "Dossier retiré de la liste.",
+      );
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -102,22 +156,29 @@ export function FolderWatchPanel({
     setFlash(null);
     try {
       if (PREVIEW || !isTauriRuntime()) {
-        setStatus(previewFolderWatchStatus(true));
+        const base =
+          paths.length > 0
+            ? paths
+            : [status.defaultPath || "~/Documents/SasCompta-import"];
+        const live = previewFolderWatchStatus(true);
+        setStatus({ ...live, paths: base, path: base[0] ?? null });
+        setPaths(base);
         setFlash(
           "Aperçu navigateur — la surveillance réelle s’active dans l’app desktop.",
         );
         return;
       }
-      const path =
-        pickedPath ||
-        status.path ||
-        status.defaultPath ||
-        (await api.folderWatchDefaultPath());
-      const s = await api.folderWatchStart(path);
-      setStatus(s);
-      setPickedPath(s.path);
+      let list = paths;
+      if (!list.length) {
+        const def =
+          status.defaultPath || (await api.folderWatchDefaultPath());
+        list = [def];
+        setPaths(list);
+      }
+      const s = await api.folderWatchStart(list);
+      applyStatus(s);
       setFlash(
-        `Surveillance active — déposez PDF ou images dans ${folderWatchPathLabel(s.path)}.`,
+        `Surveillance active — ${s.paths.length} dossier${s.paths.length > 1 ? "s" : ""} (PDF / images → file Import).`,
       );
     } catch (e) {
       setError(String(e));
@@ -131,13 +192,14 @@ export function FolderWatchPanel({
     setError(null);
     try {
       if (PREVIEW || !isTauriRuntime()) {
-        setStatus(previewFolderWatchStatus(false));
+        const idle = previewFolderWatchStatus(false);
+        setStatus({ ...idle, paths, path: paths[0] ?? idle.path });
         setFlash("Surveillance arrêtée (aperçu).");
         return;
       }
       const s = await api.folderWatchStop();
-      setStatus(s);
-      setFlash("Surveillance de dossier arrêtée.");
+      applyStatus(s);
+      setFlash("Surveillance de dossiers arrêtée.");
     } catch (e) {
       setError(String(e));
     } finally {
@@ -145,22 +207,18 @@ export function FolderWatchPanel({
     }
   }
 
-  const displayPath = folderWatchPathLabel(
-    pickedPath || status.path,
-    status.defaultPath,
-  );
-
   return (
     <section className={`folder-watch${compact ? " is-compact" : ""}`}>
       <header className="panel-head">
         <div>
           <h2>
-            Dossier surveillé <FieldHelp topic="dossierSurveille" compact />
+            Dossiers surveillés <FieldHelp topic="dossierSurveille" compact />
           </h2>
           <p className="muted">
-            Déposez des PDF ou photos dans un dossier de ce PC — SasCompta les
-            copie et les enfile ici pour <strong>revue</strong> (mêmes
-            classifieurs multi-types que l’import manuel). Aucun cloud.
+            Déposez des PDF ou photos dans un ou plusieurs dossiers de ce PC —
+            SasCompta les copie et les enfile ici pour <strong>revue</strong>{" "}
+            (mêmes classifieurs multi-types que l’import manuel). Aucun cloud.
+            La liste est mémorisée.
           </p>
         </div>
       </header>
@@ -171,38 +229,68 @@ export function FolderWatchPanel({
         <p className="error muted tiny">Dernier souci : {status.lastError}</p>
       )}
 
-      {!status.running ? (
-        <div className="folder-watch-idle">
-          <p>
-            Dossier par défaut :{" "}
-            <strong className="mono">{displayPath}</strong>. Vous pouvez en
-            choisir un autre avant d’activer.
-          </p>
-          <div className="btn-row">
+      <ul className="folder-watch-list">
+        {paths.map((p) => (
+          <li key={p}>
+            <span className="mono">{folderWatchPathLabel(p)}</span>
             <button
               type="button"
-              className="ghost"
+              className="ghost danger-ghost tiny-btn"
               disabled={busy}
-              onClick={() => void pickFolder()}
+              onClick={() => void removeFolder(p)}
+              aria-label={`Retirer ${p}`}
             >
-              Choisir un dossier…
+              Retirer
             </button>
-            <button
-              type="button"
-              className="primary"
-              disabled={busy}
-              onClick={() => void start()}
-            >
-              Activer la surveillance
-            </button>
-          </div>
-        </div>
-      ) : (
+          </li>
+        ))}
+        {paths.length === 0 && (
+          <li className="folder-watch-empty muted">
+            Aucun dossier encore — à l’activation, le défaut{" "}
+            <strong className="mono">
+              {status.defaultPath || "~/Documents/SasCompta-import"}
+            </strong>{" "}
+            sera créé et surveillé. Vous pouvez en ajouter d’autres avant.
+          </li>
+        )}
+      </ul>
+
+      <div className="btn-row folder-watch-actions">
+        <button
+          type="button"
+          className="ghost"
+          disabled={busy}
+          onClick={() => void addFolder()}
+        >
+          Ajouter un dossier…
+        </button>
+        {!status.running ? (
+          <button
+            type="button"
+            className="primary"
+            disabled={busy}
+            onClick={() => void start()}
+          >
+            Activer la surveillance
+          </button>
+        ) : (
+          <button
+            type="button"
+            className="ghost danger-ghost"
+            disabled={busy}
+            onClick={() => void stop()}
+          >
+            Arrêter la surveillance
+          </button>
+        )}
+      </div>
+
+      {status.running && (
         <div className="folder-watch-live">
           <div className="meta-grid folder-watch-meta">
             <div className="meta-item">
-              <span>Dossier</span>
-              <strong className="mono">{displayPath}</strong>
+              <span>Dossiers</span>
+              <strong>{status.paths.length || paths.length}</strong>
             </div>
             <div className="meta-item">
               <span>Importés cette session</span>
@@ -215,38 +303,10 @@ export function FolderWatchPanel({
           </div>
           <p className="muted tiny">
             Un même fichier (même contenu) n’est pas réimporté. Chaque nouveauté
-            apparaît dans la file « En revue » avant toute écriture.
+            apparaît dans la file « En revue » avant toute écriture. Ajouter ou
+            retirer un dossier met à jour la surveillance sans tout redémarrer
+            manuellement.
           </p>
-          <div className="btn-row">
-            <button
-              type="button"
-              className="ghost"
-              disabled={busy}
-              onClick={() => void pickFolder()}
-            >
-              Changer de dossier…
-            </button>
-            <button
-              type="button"
-              className="ghost danger-ghost"
-              disabled={busy}
-              onClick={() => void stop()}
-            >
-              Arrêter la surveillance
-            </button>
-          </div>
-          {pickedPath && pickedPath !== status.path && (
-            <div className="btn-row" style={{ marginTop: "0.5rem" }}>
-              <button
-                type="button"
-                className="primary"
-                disabled={busy}
-                onClick={() => void start()}
-              >
-                Redémarrer sur ce dossier
-              </button>
-            </div>
-          )}
         </div>
       )}
     </section>
