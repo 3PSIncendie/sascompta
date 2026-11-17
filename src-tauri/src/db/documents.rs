@@ -145,6 +145,217 @@ pub fn migrate_documents(conn: &Connection) -> DbResult<()> {
     Ok(())
 }
 
+/// v16 — crée les fiches Factures manquantes pour les `customer_invoice` déjà confirmés
+/// (imports antérieurs à #52 : VTE présente, `invoice_id` NULL). Idempotent.
+///
+/// Retourne le nombre de fiches nouvellement créées (les simples re-liens ne comptent pas).
+pub fn backfill_imported_customer_invoices(conn: &Connection) -> DbResult<usize> {
+    // Table absente (tests unitaires partiels) → no-op.
+    let exists: bool = conn
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='document_import'",
+            [],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some();
+    if !exists {
+        return Ok(0);
+    }
+    let mut stmt = conn.prepare(
+        "SELECT id FROM document_import
+         WHERE status = 'confirmed'
+           AND doc_type = 'customer_invoice'
+           AND entry_id IS NOT NULL
+           AND (invoice_id IS NULL OR invoice_id = 0)
+         ORDER BY id",
+    )?;
+    let ids: Vec<i64> = stmt
+        .query_map([], |r| r.get(0))?
+        .filter_map(|r| r.ok())
+        .collect();
+    drop(stmt);
+
+    let mut created = 0usize;
+    for id in ids {
+        // Best-effort : une ligne legacy incohérente ne doit pas bloquer l’ouverture.
+        match backfill_one_imported_customer_invoice(conn, id) {
+            Ok(true) => created += 1,
+            Ok(false) => {}
+            Err(_e) => {
+                // Skip — l’import reste sans invoice_id ; re-tentative au prochain open.
+            }
+        }
+    }
+    Ok(created)
+}
+
+fn json_i64(v: &serde_json::Value, key: &str) -> Option<i64> {
+    v.get(key).and_then(|x| {
+        x.as_i64()
+            .or_else(|| x.as_u64().map(|u| u as i64))
+            .or_else(|| x.as_f64().map(|f| f as i64))
+            .or_else(|| x.as_str().and_then(|s| s.parse().ok()))
+    })
+}
+
+fn json_str(v: &serde_json::Value, key: &str) -> Option<String> {
+    v.get(key).and_then(|x| {
+        x.as_str()
+            .map(|s| s.to_string())
+            .or_else(|| x.as_i64().map(|n| n.to_string()))
+    })
+}
+
+/// Relie ou crée une facture pour un import client confirmé. `true` = fiche créée.
+fn backfill_one_imported_customer_invoice(conn: &Connection, import_id: i64) -> DbResult<bool> {
+    let doc = get_document_import(conn, import_id)?;
+    if doc.status != "confirmed" || doc.doc_type != "customer_invoice" {
+        return Ok(false);
+    }
+    if doc.invoice_id.is_some() {
+        return Ok(false);
+    }
+    let entry_id = match doc.entry_id {
+        Some(e) => e,
+        None => return Ok(false),
+    };
+
+    // Déjà une fiche liée par document_import_id ou par entry_id → re-lier seulement.
+    let existing: Option<i64> = conn
+        .query_row(
+            "SELECT id FROM invoice
+             WHERE document_import_id = ?1
+                OR (entry_id = ?2 AND source = 'import')
+             ORDER BY id LIMIT 1",
+            params![import_id, entry_id],
+            |r| r.get(0),
+        )
+        .optional()?;
+    if let Some(inv_id) = existing {
+        link_import_to_invoice(conn, &doc, inv_id)?;
+        return Ok(false);
+    }
+
+    let entry = ledger::get_entry(conn, entry_id)?;
+    let tp_id = entry
+        .lines
+        .iter()
+        .find_map(|l| {
+            if l.account_number.starts_with("411") {
+                l.third_party_id
+            } else {
+                None
+            }
+        })
+        .or_else(|| json_i64(&doc.extraction, "matchedThirdPartyId"))
+        .ok_or_else(|| {
+            format!(
+                "Backfill import #{import_id} : client introuvable sur l’écriture VTE"
+            )
+        })?;
+
+    let ht_from_ext = json_i64(&doc.extraction, "confirmedHtCents")
+        .or_else(|| json_i64(&doc.extraction, "htCents"));
+    let vat_from_ext = json_i64(&doc.extraction, "confirmedVatCents")
+        .or_else(|| json_i64(&doc.extraction, "vatCents"));
+
+    let ht_from_entry: i64 = entry
+        .lines
+        .iter()
+        .filter(|l| {
+            let n = l.account_number.as_str();
+            (n.starts_with("70") || n.starts_with("706") || n.starts_with("707"))
+                && l.credit_cents > 0
+        })
+        .map(|l| l.credit_cents)
+        .sum();
+    let vat_from_entry: i64 = entry
+        .lines
+        .iter()
+        .filter(|l| l.account_number.starts_with("4457") && l.credit_cents > 0)
+        .map(|l| l.credit_cents)
+        .sum();
+
+    let ht = ht_from_ext.filter(|h| *h > 0).unwrap_or(ht_from_entry);
+    if ht <= 0 {
+        return Err(format!("Backfill import #{import_id} : montant HT invalide").into());
+    }
+    let vat_mode = json_str(&doc.extraction, "confirmedVatMode")
+        .or_else(|| json_str(&doc.extraction, "vatMode"))
+        .unwrap_or_else(|| "normale".into());
+    let rate_bp = json_i64(&doc.extraction, "rateBp").unwrap_or(2000) as i32;
+    let vat = if vat_mode == "normale" {
+        vat_from_ext
+            .filter(|v| *v >= 0)
+            .unwrap_or_else(|| {
+                if vat_from_entry > 0 {
+                    vat_from_entry
+                } else {
+                    compute_vat_cents(ht, rate_bp)
+                }
+            })
+    } else {
+        0
+    };
+    let vat_code = json_str(&doc.extraction, "vatCode").unwrap_or_else(|| "T20C".into());
+    let ht_account = entry
+        .lines
+        .iter()
+        .find(|l| l.credit_cents > 0 && l.account_number.starts_with("70"))
+        .map(|l| l.account_number.clone())
+        .or_else(|| json_str(&doc.extraction, "htAccount"))
+        .unwrap_or_else(|| "706".into());
+    let pdf_path = if doc.stored_path.trim().is_empty() {
+        None
+    } else {
+        Some(doc.stored_path.as_str())
+    };
+
+    let tx = conn.unchecked_transaction()?;
+    let inv = billing::create_imported_customer_invoice(
+        &tx,
+        import_id,
+        tp_id,
+        entry_id,
+        &entry.entry_date,
+        &entry.piece_ref,
+        &entry.label,
+        ht,
+        vat,
+        rate_bp,
+        &vat_mode,
+        &vat_code,
+        &ht_account,
+        pdf_path,
+    )?;
+    link_import_to_invoice(&tx, &doc, inv.id)?;
+    tx.commit()?;
+    Ok(true)
+}
+
+fn link_import_to_invoice(
+    conn: &Connection,
+    doc: &DocumentImport,
+    invoice_id: i64,
+) -> DbResult<()> {
+    let mut extraction = doc.extraction.clone();
+    if let Some(obj) = extraction.as_object_mut() {
+        obj.insert("confirmedInvoiceId".into(), json!(invoice_id));
+    }
+    conn.execute(
+        "UPDATE document_import SET invoice_id = ?1, extraction_json = ?2 WHERE id = ?3",
+        params![invoice_id, extraction.to_string(), doc.id],
+    )?;
+    // Garantit le lien inverse si la fiche existait déjà sans document_import_id.
+    let _ = conn.execute(
+        "UPDATE invoice SET document_import_id = ?1, source = 'import'
+         WHERE id = ?2 AND (document_import_id IS NULL OR document_import_id = 0)",
+        params![doc.id, invoice_id],
+    )?;
+    Ok(())
+}
+
 /// Dossier pièces à côté du fichier workspace : `societe.sascompta.files/imports/`.
 pub fn imports_dir(workspace_path: &Path) -> PathBuf {
     let mut base = workspace_path.to_path_buf();
@@ -3009,5 +3220,260 @@ Total TTC                 120,00
             )
             .unwrap();
         assert_eq!(n, 1);
+    }
+
+    /// Simule un import client confirmé avant #52 : VTE présente, pas de fiche Factures.
+    fn strip_invoice_like_pre_pr52(conn: &Connection, import_id: i64, invoice_id: i64) {
+        conn.execute(
+            "DELETE FROM invoice_line WHERE invoice_id = ?1",
+            params![invoice_id],
+        )
+        .unwrap();
+        conn.execute("DELETE FROM invoice WHERE id = ?1", params![invoice_id])
+            .unwrap();
+        let doc = get_document_import(conn, import_id).unwrap();
+        let mut extraction = doc.extraction;
+        if let Some(obj) = extraction.as_object_mut() {
+            obj.remove("confirmedInvoiceId");
+        }
+        conn.execute(
+            "UPDATE document_import SET invoice_id = NULL, extraction_json = ?1 WHERE id = ?2",
+            params![extraction.to_string(), import_id],
+        )
+        .unwrap();
+        let after = get_document_import(conn, import_id).unwrap();
+        assert!(after.entry_id.is_some());
+        assert!(after.invoice_id.is_none());
+    }
+
+    #[test]
+    fn backfill_creates_invoice_for_legacy_confirmed_customer_import() {
+        let dir = tempdir().unwrap();
+        let ws = dir.path().join("demo.sascompta");
+        let info = db::create_demo_workspace(&ws).unwrap();
+        let (conn, _) = db::open_workspace(&info.path, db::DEMO_PASSWORD).unwrap();
+
+        let pdf = dir.path().join("fa-legacy.pdf");
+        write_simple_pdf(
+            &pdf,
+            "FACTURE N° LEG-42\nÀ votre attention\nClient ACME\nTotal HT 100,00\nTVA 20,00\nTotal TTC 120,00",
+        );
+        let doc = analyze_document(&conn, Path::new(&info.path), &pdf).unwrap();
+        let confirmed = confirm_document_import(
+            &conn,
+            doc.id,
+            &ConfirmDocumentImportInput {
+                doc_type: "customer_invoice".into(),
+                entry_date: "2026-03-15".into(),
+                piece_ref: "LEG-42".into(),
+                label: "Import LEG-42".into(),
+                journal_code: "VTE".into(),
+                ht_cents: 10_000,
+                vat_cents: Some(2_000),
+                rate_bp: 2000,
+                vat_mode: "normale".into(),
+                vat_code: "T20C".into(),
+                ht_account: "706".into(),
+                counterpart_account: Some("411".into()),
+                bank_direction: None,
+                third_party_id: None,
+                create_supplier_name: Some("ACME LEGACY".into()),
+                create_supplier_code: Some("C942".into()),
+                create_supplier_siret: None,
+            },
+        )
+        .unwrap();
+        let inv_id = confirmed.invoice_id.expect("créée par #52");
+        let entry_id = confirmed.entry_id.expect("VTE");
+        strip_invoice_like_pre_pr52(&conn, confirmed.id, inv_id);
+
+        let before = billing::list_invoices(&conn).unwrap().len();
+        let created = backfill_imported_customer_invoices(&conn).unwrap();
+        assert_eq!(created, 1);
+        let after = billing::list_invoices(&conn).unwrap();
+        assert_eq!(after.len(), before + 1);
+
+        let linked = get_document_import(&conn, confirmed.id).unwrap();
+        let new_inv_id = linked.invoice_id.expect("backfill invoice_id");
+        let inv = billing::get_invoice(&conn, new_inv_id).unwrap();
+        assert_eq!(inv.source, "import");
+        assert_eq!(inv.status, "issued");
+        assert_eq!(inv.number.as_deref(), Some("LEG-42"));
+        assert_eq!(inv.entry_id, Some(entry_id));
+        assert_eq!(inv.document_import_id, Some(confirmed.id));
+        assert_eq!(inv.ht_cents, 10_000);
+        assert_eq!(inv.vat_cents, 2_000);
+        assert_eq!(inv.ttc_cents, 12_000);
+        assert_eq!(
+            linked
+                .extraction
+                .get("confirmedInvoiceId")
+                .and_then(|v| v.as_i64()),
+            Some(new_inv_id)
+        );
+
+        // Idempotent : 2ᵉ passage ne crée pas de doublon.
+        let created2 = backfill_imported_customer_invoices(&conn).unwrap();
+        assert_eq!(created2, 0);
+        assert_eq!(billing::list_invoices(&conn).unwrap().len(), after.len());
+        let again = get_document_import(&conn, confirmed.id).unwrap();
+        assert_eq!(again.invoice_id, Some(new_inv_id));
+    }
+
+    #[test]
+    fn backfill_via_migrate_on_workspace_open() {
+        let dir = tempdir().unwrap();
+        let ws = dir.path().join("demo.sascompta");
+        let info = db::create_demo_workspace(&ws).unwrap();
+        let (conn, _) = db::open_workspace(&info.path, db::DEMO_PASSWORD).unwrap();
+
+        let pdf = dir.path().join("fa-mig.pdf");
+        write_simple_pdf(
+            &pdf,
+            "FACTURE N° MIG-1\nÀ votre attention\nClient X\nTotal HT 50,00\nTVA 10,00\nTotal TTC 60,00",
+        );
+        let doc = analyze_document(&conn, Path::new(&info.path), &pdf).unwrap();
+        let confirmed = confirm_document_import(
+            &conn,
+            doc.id,
+            &ConfirmDocumentImportInput {
+                doc_type: "customer_invoice".into(),
+                entry_date: "2026-04-01".into(),
+                piece_ref: "MIG-1".into(),
+                label: "Import MIG-1".into(),
+                journal_code: "VTE".into(),
+                ht_cents: 5_000,
+                vat_cents: Some(1_000),
+                rate_bp: 2000,
+                vat_mode: "normale".into(),
+                vat_code: "T20C".into(),
+                ht_account: "706".into(),
+                counterpart_account: Some("411".into()),
+                bank_direction: None,
+                third_party_id: None,
+                create_supplier_name: Some("CLIENT MIG".into()),
+                create_supplier_code: Some("C943".into()),
+                create_supplier_siret: None,
+            },
+        )
+        .unwrap();
+        strip_invoice_like_pre_pr52(&conn, confirmed.id, confirmed.invoice_id.unwrap());
+        conn.execute(
+            "UPDATE meta SET value = '15' WHERE key = 'schema_version'",
+            [],
+        )
+        .unwrap();
+
+        // Réouverture / migrate (comme open_workspace) doit remonter la fiche.
+        db::migrate(&conn).unwrap();
+        let version: String = conn
+            .query_row(
+                "SELECT value FROM meta WHERE key = 'schema_version'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(version, "16");
+        let linked = get_document_import(&conn, confirmed.id).unwrap();
+        let inv_id = linked.invoice_id.expect("migrate backfill");
+        let inv = billing::get_invoice(&conn, inv_id).unwrap();
+        assert_eq!(inv.number.as_deref(), Some("MIG-1"));
+        assert_eq!(inv.source, "import");
+        assert_eq!(inv.entry_id, confirmed.entry_id);
+    }
+
+    #[test]
+    fn backfill_skips_supplier_and_relinks_existing_invoice() {
+        let dir = tempdir().unwrap();
+        let ws = dir.path().join("demo.sascompta");
+        let info = db::create_demo_workspace(&ws).unwrap();
+        let (conn, _) = db::open_workspace(&info.path, db::DEMO_PASSWORD).unwrap();
+
+        // Fournisseur confirmé : backfill ne crée rien.
+        let pdf_s = dir.path().join("fa-fourn-bf.pdf");
+        write_simple_pdf(
+            &pdf_s,
+            "FACTURE FOURNISSEUR\nFA-BF\nTotal HT 80,00\nTVA 16,00\nTotal TTC 96,00",
+        );
+        let doc_s = analyze_document(&conn, Path::new(&info.path), &pdf_s).unwrap();
+        let supplier = confirm_document_import(
+            &conn,
+            doc_s.id,
+            &ConfirmDocumentImportInput {
+                doc_type: "supplier_invoice".into(),
+                entry_date: "2026-03-15".into(),
+                piece_ref: "FA-BF".into(),
+                label: "Import FA-BF".into(),
+                journal_code: "ACH".into(),
+                ht_cents: 8_000,
+                vat_cents: Some(1_600),
+                rate_bp: 2000,
+                vat_mode: "normale".into(),
+                vat_code: "T20D".into(),
+                ht_account: "606".into(),
+                counterpart_account: None,
+                bank_direction: None,
+                third_party_id: None,
+                create_supplier_name: Some("FOURN BF".into()),
+                create_supplier_code: Some("F942".into()),
+                create_supplier_siret: None,
+            },
+        )
+        .unwrap();
+        assert!(supplier.invoice_id.is_none());
+        let before = billing::list_invoices(&conn).unwrap().len();
+        assert_eq!(backfill_imported_customer_invoices(&conn).unwrap(), 0);
+        assert_eq!(billing::list_invoices(&conn).unwrap().len(), before);
+
+        // Client : fiche existe déjà (document_import_id) mais invoice_id null → re-lien.
+        let pdf_c = dir.path().join("fa-relink.pdf");
+        write_simple_pdf(
+            &pdf_c,
+            "FACTURE N° REL-1\nÀ votre attention\nClient Y\nTotal HT 20,00\nTVA 4,00\nTotal TTC 24,00",
+        );
+        let doc_c = analyze_document(&conn, Path::new(&info.path), &pdf_c).unwrap();
+        let customer = confirm_document_import(
+            &conn,
+            doc_c.id,
+            &ConfirmDocumentImportInput {
+                doc_type: "customer_invoice".into(),
+                entry_date: "2026-05-01".into(),
+                piece_ref: "REL-1".into(),
+                label: "Import REL-1".into(),
+                journal_code: "VTE".into(),
+                ht_cents: 2_000,
+                vat_cents: Some(400),
+                rate_bp: 2000,
+                vat_mode: "normale".into(),
+                vat_code: "T20C".into(),
+                ht_account: "706".into(),
+                counterpart_account: Some("411".into()),
+                bank_direction: None,
+                third_party_id: None,
+                create_supplier_name: Some("CLIENT REL".into()),
+                create_supplier_code: Some("C944".into()),
+                create_supplier_siret: None,
+            },
+        )
+        .unwrap();
+        let inv_id = customer.invoice_id.unwrap();
+        // Orpheline côté import seulement (facture conserve document_import_id).
+        conn.execute(
+            "UPDATE document_import SET invoice_id = NULL WHERE id = ?1",
+            params![customer.id],
+        )
+        .unwrap();
+        let created = backfill_imported_customer_invoices(&conn).unwrap();
+        assert_eq!(created, 0, "re-lien, pas de nouvelle fiche");
+        let linked = get_document_import(&conn, customer.id).unwrap();
+        assert_eq!(linked.invoice_id, Some(inv_id));
+        assert_eq!(
+            billing::list_invoices(&conn)
+                .unwrap()
+                .iter()
+                .filter(|i| i.document_import_id == Some(customer.id))
+                .count(),
+            1
+        );
     }
 }
