@@ -2,7 +2,8 @@
 //!
 //! Types pris en charge : facture fournisseur (ACH), facture client (VTE),
 //! note de frais / reçu (ACH ou OD), ticket de caisse (OD/ACH), relevé bancaire (BQ).
-//! Flux commun : analyse locale → revue → confirmation → `create_draft` + pièce jointe.
+//! Flux commun : analyse locale → revue → confirmation → `create_draft` + pièce
+//! jointe → `post_entry` (écriture immédiatement visible au Grand livre / TVA / FEC).
 
 use super::ledger;
 use super::tax;
@@ -1817,7 +1818,10 @@ fn journal_for_expense_counterpart(counterpart: &str, fallback: &str) -> String 
     }
 }
 
-/// Confirmation humaine obligatoire → brouillon d’écriture + pièce jointe liée.
+/// Confirmation humaine obligatoire → écriture **postée** + pièce jointe liée.
+///
+/// Flux : `create_draft` → pièce jointe (exige encore draft) → `post_entry`.
+/// La revue Import reste le seul filet humain ; pas de 2ᵉ validation Écritures.
 pub fn confirm_document_import(
     conn: &Connection,
     id: i64,
@@ -2073,7 +2077,7 @@ pub fn confirm_document_import(
     } else {
         input.label.trim().to_string()
     };
-    let entry = ledger::create_draft(
+    let draft = ledger::create_draft(
         conn,
         &CreateEntryInput {
             journal_code: journal.clone(),
@@ -2084,13 +2088,24 @@ pub fn confirm_document_import(
         },
     )?;
     let mime = doc.mime_type.clone();
-    ledger::add_attachment(
+    if let Err(e) = ledger::add_attachment(
         conn,
-        entry.id,
+        draft.id,
         &doc.source_file_name,
         &doc.stored_path,
         mime,
-    )?;
+    ) {
+        let _ = ledger::delete_draft(conn, draft.id);
+        return Err(e);
+    }
+    // Attach while draft, then post so Grand livre / TVA / FEC see the entry.
+    let entry = match ledger::post_entry(conn, draft.id) {
+        Ok(e) => e,
+        Err(e) => {
+            let _ = ledger::delete_draft(conn, draft.id);
+            return Err(e);
+        }
+    };
 
     let mut extraction = doc.extraction;
     if let Some(obj) = extraction.as_object_mut() {
@@ -2099,6 +2114,9 @@ pub fn confirm_document_import(
         obj.insert("confirmedVatMode".into(), json!(vat_mode));
         obj.insert("confirmedJournal".into(), json!(journal));
         obj.insert("confirmedEntryId".into(), json!(entry.id));
+        if let Some(ref num) = entry.ecriture_num {
+            obj.insert("confirmedEcritureNum".into(), json!(num));
+        }
     }
     let now = now_iso();
     conn.execute(
@@ -2586,7 +2604,7 @@ Total TTC                 120,00
     }
 
     #[test]
-    fn analyze_confirm_creates_draft_with_attachment() {
+    fn analyze_confirm_posts_entry_with_attachment() {
         let dir = tempdir().unwrap();
         let ws = dir.path().join("demo.sascompta");
         let info = db::create_demo_workspace(&ws).unwrap();
@@ -2627,17 +2645,30 @@ Total TTC                 120,00
         assert_eq!(confirmed.status, "confirmed");
         let entry_id = confirmed.entry_id.expect("entry");
         let entry = ledger::get_entry(&conn, entry_id).unwrap();
-        assert_eq!(entry.status, "draft");
+        assert_eq!(entry.status, "posted");
+        assert!(entry.ecriture_num.as_deref().unwrap_or("").starts_with("ACH-"));
         assert_eq!(entry.journal_code, "ACH");
         assert_eq!(entry.attachments.len(), 1);
         let d: i64 = entry.lines.iter().map(|l| l.debit_cents).sum();
         let c: i64 = entry.lines.iter().map(|l| l.credit_cents).sum();
         assert_eq!(d, c);
         assert_eq!(d, 12_000);
+
+        let filter = crate::models::LedgerFilter {
+            from_date: Some("2026-01-01".into()),
+            to_date: Some("2026-12-31".into()),
+            journal_code: Some("ACH".into()),
+            account_number: None,
+        };
+        let moves = crate::db::reporting::ledger_movements(&conn, &filter).unwrap();
+        assert!(
+            moves.iter().any(|m| m.entry_id == entry_id),
+            "posted import must appear in Grand livre movements"
+        );
     }
 
     #[test]
-    fn confirm_customer_invoice_creates_vte_draft() {
+    fn confirm_customer_invoice_creates_vte_posted() {
         let dir = tempdir().unwrap();
         let ws = dir.path().join("demo.sascompta");
         let info = db::create_demo_workspace(&ws).unwrap();
@@ -2674,13 +2705,15 @@ Total TTC                 120,00
         )
         .unwrap();
         let entry = ledger::get_entry(&conn, confirmed.entry_id.unwrap()).unwrap();
+        assert_eq!(entry.status, "posted");
         assert_eq!(entry.journal_code, "VTE");
+        assert!(entry.ecriture_num.as_deref().unwrap_or("").starts_with("VTE-"));
         assert!(entry.lines.iter().any(|l| l.account_number == "411"));
         assert_eq!(entry.attachments.len(), 1);
     }
 
     #[test]
-    fn confirm_ticket_creates_od_draft() {
+    fn confirm_ticket_creates_od_posted() {
         let dir = tempdir().unwrap();
         let ws = dir.path().join("demo.sascompta");
         let info = db::create_demo_workspace(&ws).unwrap();
@@ -2714,7 +2747,9 @@ Total TTC                 120,00
         )
         .unwrap();
         let entry = ledger::get_entry(&conn, confirmed.entry_id.unwrap()).unwrap();
+        assert_eq!(entry.status, "posted");
         assert_eq!(entry.journal_code, "OD");
+        assert!(entry.ecriture_num.as_deref().unwrap_or("").starts_with("OD-"));
         assert!(entry.lines.iter().any(|l| l.account_number == "530"));
     }
 

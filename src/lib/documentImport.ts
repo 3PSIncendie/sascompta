@@ -1,6 +1,6 @@
 /**
  * Import documents — registre extensible (facture fournisseur, client, frais,
- * tickets, relevés → brouillon journal avec revue humaine).
+ * tickets, relevés → écriture journal postée après revue humaine).
  *
  * Pour ajouter un type : 1) classifier Rust, 2) entrée DOC_TYPE_REGISTRY,
  * 3) template de lignes (buildProposedLines + Rust), 4) `postingSupported`.
@@ -58,6 +58,7 @@ export type DocumentExtraction = {
   confirmedHtCents?: number;
   confirmedVatMode?: string;
   confirmedEntryId?: number;
+  confirmedEcritureNum?: string;
 };
 
 export type DocumentImport = {
@@ -181,7 +182,7 @@ export const DOC_TYPE_REGISTRY: DocTypeMeta[] = [
     defaultCounterpart: "401",
     partyKind: "none",
     partyRequired: false,
-    comingSoonHint: "Indiquez le type détecté manuellement pour proposer un brouillon.",
+    comingSoonHint: "Indiquez le type détecté manuellement pour proposer une écriture.",
   },
 ];
 

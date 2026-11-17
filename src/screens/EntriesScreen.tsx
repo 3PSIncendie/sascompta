@@ -388,7 +388,7 @@ export function EntriesScreen({ onNavigate }: Props) {
             >
               importez une facture fournisseur (PDF)
             </button>{" "}
-            : revue guidée puis brouillon ACH — validation journal toujours manuelle.
+            : revue guidée puis écriture postée à la confirmation.
           </p>
         )}
       </aside>

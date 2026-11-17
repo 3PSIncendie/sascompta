@@ -217,13 +217,13 @@ export const HELP: Record<string, HelpTopic> = {
   importDocType: {
     term: "Type de document",
     plain:
-      "Ce que SasCompta croit reconnaître : facture fournisseur (ACH), facture client (VTE), note de frais / reçu (ACH ou OD), ticket de caisse (OD), relevé bancaire (BQ). Vous pouvez corriger le type avant de confirmer le brouillon.",
+      "Ce que SasCompta croit reconnaître : facture fournisseur (ACH), facture client (VTE), note de frais / reçu (ACH ou OD), ticket de caisse (OD), relevé bancaire (BQ). Vous pouvez corriger le type avant de confirmer l’écriture.",
     example: "PDF « FA-2026-0042 » → Facture fournisseur → journal ACH",
   },
   importRevue: {
-    term: "Revue avant brouillon",
+    term: "Revue avant écriture",
     plain:
-      "Étape obligatoire : vous vérifiez type, date, montants, tiers et lignes proposées. Rien n’est écrit en compta tant que vous n’avez pas confirmé. La validation du journal (post) reste une seconde étape dans Écritures. Le fichier reste en pièce jointe du brouillon.",
+      "Étape obligatoire : vous vérifiez type, date, montants, tiers et lignes proposées. Rien n’est comptabilisé tant que vous n’avez pas confirmé. À la confirmation l’écriture est postée (Grand livre / TVA / FEC) ; le fichier reste en pièce jointe.",
   },
   compagnonMobile: {
     term: "Compagnon mobile",
@@ -232,10 +232,10 @@ export const HELP: Record<string, HelpTopic> = {
     example: "Expo Go → QR pont → photo note de frais → file « En revue »",
   },
   dossierSurveille: {
-    term: "Dossier surveillé",
+    term: "Dossiers surveillés",
     plain:
-      "Dossier de votre PC (par défaut Documents/SasCompta-import) que SasCompta surveille. Chaque nouveau PDF ou image y déposé est copié dans les pièces du workspace et mis en file Import docs pour revue humaine — mêmes types (ACH, VTE, OD, BQ) que l’import manuel. Un fichier déjà importé (même contenu) n’est pas réenfilé.",
-    example: "Scan facture → dossier SasCompta-import → file « En revue »",
+      "Un ou plusieurs dossiers de votre PC (par défaut Documents/SasCompta-import) que SasCompta surveille. Chaque nouveau PDF ou image y déposé est copié dans les pièces du workspace et mis en file Import docs pour revue humaine — mêmes types (ACH, VTE, OD, BQ) que l’import manuel. Un fichier déjà importé (même contenu) n’est pas réenfilé. La liste est mémorisée d’une session à l’autre.",
+    example: "Scans + Téléchargements → file « En revue »",
   },
 };
 
