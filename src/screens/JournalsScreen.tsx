@@ -16,7 +16,12 @@ export function JournalsScreen() {
   return (
     <div className="panel">
       <h1>Journaux</h1>
-      <p>Journaux standards : Achats, Ventes, Banque, OD, À-nouveaux.</p>
+      <p>
+        Référentiel des codes journal (ACH, VTE, BQ, OD, AN) — pas le livre des
+        mouvements. Les brouillons (ex. après import confirmé) sont dans{" "}
+        <strong>Écritures</strong> ; les écritures validées se consultent dans{" "}
+        <strong>Grand livre</strong>.
+      </p>
       {error && <div className="error">{error}</div>}
       <div className="table-wrap">
         <table>
