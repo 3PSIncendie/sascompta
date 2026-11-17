@@ -1,21 +1,22 @@
 :root {
-  /* Vert pastel + orange pastel — frais / jeune (pas purple, pas crème+terracotta) */
-  --bg: #e9f5ec;
-  --bg-deep: #d5e9db;
-  --ink: #1c2e24;
-  --ink-muted: #4d6356;
-  --brand: #3a7d5c;
-  --brand-soft: #529b74;
-  --brand-deep: #275740;
-  --accent: #f0a06a;
-  --accent-soft: #ffe4d1;
-  --accent-ink: #a85520;
-  --line: #c2d9cb;
-  --surface: #f7fcf8;
-  --surface-tint: #eef8f1;
-  --ok: #2f7a52;
-  --danger: #9b2c2c;
-  --shadow: 0 14px 42px rgba(28, 46, 36, 0.08);
+  /* Vert + orange vifs — frais / jeune, plus saturés (pas purple, pas crème+terracotta) */
+  --bg: #d7f6e5;
+  --bg-deep: #b6e9cb;
+  --ink: #10261a;
+  --ink-muted: #3a5a48;
+  --brand: #0f9f56;
+  --brand-soft: #1fc970;
+  --brand-deep: #0a6e3c;
+  --accent: #ff7a2e;
+  --accent-soft: #ffc48a;
+  --accent-ink: #c4470a;
+  --accent-line: #ffa35c;
+  --line: #9dceb0;
+  --surface: #f4fcf8;
+  --surface-tint: #dff7ea;
+  --ok: #0e8f4d;
+  --danger: #c23434;
+  --shadow: 0 14px 42px rgba(16, 38, 26, 0.1);
   --font: "Sora", "Trebuchet MS", sans-serif;
   --display: "Syne", "Trebuchet MS", sans-serif;
   --radius: 12px;
@@ -41,8 +42,8 @@ body {
   font-family: var(--font);
   color: var(--ink);
   background:
-    radial-gradient(1100px 640px at 8% -12%, rgba(82, 155, 116, 0.22) 0%, transparent 55%),
-    radial-gradient(900px 520px at 100% 0%, rgba(240, 160, 106, 0.18) 0%, transparent 50%),
+    radial-gradient(1100px 640px at 8% -12%, rgba(31, 201, 112, 0.28) 0%, transparent 55%),
+    radial-gradient(900px 520px at 100% 0%, rgba(255, 122, 46, 0.24) 0%, transparent 50%),
     linear-gradient(165deg, var(--bg) 0%, var(--bg-deep) 100%);
   background-attachment: fixed;
 }
@@ -89,7 +90,7 @@ p {
 
 .sidebar {
   background:
-    radial-gradient(420px 280px at 0% 0%, rgba(240, 160, 106, 0.28), transparent 65%),
+    radial-gradient(420px 280px at 0% 0%, rgba(255, 122, 46, 0.36), transparent 65%),
     linear-gradient(180deg, var(--brand) 0%, var(--brand-deep) 100%);
   color: #eef8f1;
   padding: 1.35rem 0.85rem 1.25rem;
@@ -173,7 +174,7 @@ p {
 }
 
 .nav-group.has-active .nav-group-label {
-  color: rgba(255, 228, 209, 0.92);
+  color: rgba(255, 196, 138, 0.95);
 }
 
 .nav-group-chevron {
@@ -184,7 +185,7 @@ p {
 }
 
 .nav-group.is-open .nav-group-chevron {
-  color: rgba(240, 160, 106, 0.95);
+  color: rgba(255, 122, 46, 0.98);
 }
 
 .nav-group-items {
@@ -345,10 +346,10 @@ p {
   z-index: 0;
   pointer-events: none;
   background:
-    radial-gradient(ellipse 70% 50% at 78% 18%, rgba(240, 160, 106, 0.42), transparent 58%),
-    radial-gradient(ellipse 55% 45% at 12% 82%, rgba(39, 87, 64, 0.5), transparent 55%),
-    radial-gradient(ellipse 40% 35% at 40% 40%, rgba(82, 155, 116, 0.28), transparent 70%),
-    linear-gradient(155deg, #275740 0%, #3a7d5c 36%, #6aaa7f 72%, #f0a06a 100%),
+    radial-gradient(ellipse 70% 50% at 78% 18%, rgba(255, 122, 46, 0.52), transparent 58%),
+    radial-gradient(ellipse 55% 45% at 12% 82%, rgba(10, 110, 60, 0.55), transparent 55%),
+    radial-gradient(ellipse 40% 35% at 40% 40%, rgba(31, 201, 112, 0.34), transparent 70%),
+    linear-gradient(155deg, #0a6e3c 0%, #0f9f56 36%, #3fd48a 72%, #ff7a2e 100%),
     url("data:image/svg+xml,%3Csvg width='72' height='72' viewBox='0 0 72 72' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' stroke='%23ffffff' stroke-opacity='0.08' stroke-width='1'%3E%3Cpath d='M0 36h72M36 0v72'/%3E%3C/g%3E%3C/svg%3E");
   background-size: auto, auto, auto, auto, 72px 72px;
   animation: atmosphere-drift 18s var(--motion-ease) alternate infinite;
@@ -378,7 +379,7 @@ p {
   line-height: 0.95;
   color: #fff;
   margin: 0 0 0.85rem;
-  text-shadow: 0 10px 40px rgba(39, 87, 64, 0.25);
+  text-shadow: 0 10px 40px rgba(10, 110, 60, 0.28);
 }
 
 .welcome-headline {
@@ -407,8 +408,8 @@ p {
 
 .welcome-cta .primary {
   background: #fff;
-  color: var(--brand);
-  box-shadow: 0 8px 24px rgba(39, 87, 64, 0.22);
+  color: var(--brand-deep);
+  box-shadow: 0 8px 24px rgba(10, 110, 60, 0.24);
 }
 
 .welcome-cta .primary:hover {
@@ -417,13 +418,13 @@ p {
 }
 
 .welcome-cta .secondary {
-  background: rgba(240, 160, 106, 0.28);
+  background: rgba(255, 122, 46, 0.34);
   color: #fff;
   border-color: rgba(255, 255, 255, 0.45);
 }
 
 .welcome-cta .secondary:hover {
-  background: rgba(240, 160, 106, 0.42);
+  background: rgba(255, 122, 46, 0.5);
 }
 
 .welcome-demo {
@@ -565,7 +566,7 @@ textarea {
 input:focus,
 select:focus,
 textarea:focus {
-  outline: 2px solid rgba(240, 160, 106, 0.35);
+  outline: 2px solid rgba(255, 122, 46, 0.42);
   border-color: var(--brand-soft);
 }
 
@@ -604,7 +605,7 @@ button.primary:hover {
 button.secondary {
   background: var(--accent-soft);
   color: var(--accent-ink);
-  border-color: #f0c4a0;
+  border-color: var(--accent-line);
 }
 
 button.ghost {
@@ -640,8 +641,8 @@ button:disabled {
 
 .ok-banner {
   color: var(--ok);
-  background: #e7efe9;
-  border: 1px solid #b9d4c4;
+  background: #d8f5e4;
+  border: 1px solid #8fcfad;
   border-radius: 8px;
   padding: 0.6rem 0.8rem;
   font-size: 0.9rem;
@@ -889,7 +890,7 @@ button.linkish {
 }
 
 .pill-status.status-accepted {
-  background: rgba(26, 122, 82, 0.12);
+  background: rgba(14, 143, 77, 0.14);
   color: var(--ok);
   border-color: transparent;
 }
@@ -902,7 +903,7 @@ button.linkish {
 }
 
 .pill-status.status-invoiced {
-  background: rgba(58, 125, 92, 0.14);
+  background: rgba(15, 159, 86, 0.16);
   color: var(--brand);
   border-color: transparent;
 }
@@ -915,13 +916,13 @@ button.linkish {
 }
 
 .pill-status.status-paid {
-  background: rgba(26, 122, 82, 0.12);
+  background: rgba(14, 143, 77, 0.14);
   color: var(--ok);
   border-color: transparent;
 }
 
 .pill-status.status-partially_paid {
-  background: rgba(240, 160, 106, 0.18);
+  background: rgba(255, 122, 46, 0.2);
   color: var(--accent-ink);
   border-color: transparent;
 }
@@ -933,7 +934,7 @@ button.linkish {
 }
 
 .pill-status.status-reminder-7 {
-  background: rgba(240, 160, 106, 0.18);
+  background: rgba(255, 122, 46, 0.2);
   color: var(--accent-ink);
   border-color: transparent;
 }
@@ -989,7 +990,7 @@ button.linkish {
 
 .pill-status.status-ei-queued,
 .pill-status.status-ei-local_ready {
-  background: rgba(240, 160, 106, 0.18);
+  background: rgba(255, 122, 46, 0.2);
   color: var(--accent-ink);
   border-color: transparent;
 }
@@ -1070,7 +1071,7 @@ button.linkish {
   border: 1px dashed var(--line);
   border-radius: var(--radius);
   background:
-    radial-gradient(420px 160px at 0% 0%, rgba(240, 160, 106, 0.14), transparent 65%),
+    radial-gradient(420px 160px at 0% 0%, rgba(255, 122, 46, 0.18), transparent 65%),
     var(--surface);
 }
 
@@ -1207,7 +1208,7 @@ button.linkish {
 
 .field-help-btn:hover {
   background: var(--accent-soft);
-  border-color: #f0c4a0;
+  border-color: var(--accent-line);
 }
 
 .field-help-panel {
@@ -1267,7 +1268,7 @@ label {
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background:
-    radial-gradient(500px 180px at 0% 0%, rgba(82, 155, 116, 0.14), transparent 65%),
+    radial-gradient(500px 180px at 0% 0%, rgba(31, 201, 112, 0.18), transparent 65%),
     var(--surface);
 }
 
@@ -1311,7 +1312,7 @@ label {
   gap: 1.5rem;
   align-items: start;
   background:
-    radial-gradient(600px 240px at 0% 0%, rgba(240, 160, 106, 0.14), transparent 60%),
+    radial-gradient(600px 240px at 0% 0%, rgba(255, 122, 46, 0.18), transparent 60%),
     var(--surface);
 }
 
@@ -1364,7 +1365,7 @@ label {
 .guide-step-btn.active {
   border-color: var(--brand);
   background: #e4f5ea;
-  box-shadow: 0 0 0 1px rgba(58, 125, 92, 0.14);
+  box-shadow: 0 0 0 1px rgba(15, 159, 86, 0.16);
 }
 
 .guide-step-btn.done .guide-step-num {
@@ -1432,7 +1433,7 @@ label {
 
 .guide-validation.wait {
   background: #fff0e6;
-  border-color: #f0c4a0;
+  border-color: var(--accent-line);
   color: var(--accent-ink);
 }
 
@@ -1444,7 +1445,7 @@ label {
   margin-bottom: 1rem;
   padding: 0.75rem 1rem;
   border-radius: 10px;
-  border: 1px solid #f0c4a0;
+  border: 1px solid var(--accent-line);
   background: linear-gradient(90deg, #e4f5ea, var(--surface) 55%);
   animation: rise 0.35s ease both;
 }
@@ -1495,7 +1496,7 @@ label {
 }
 
 .deadline-item.severity-soon {
-  border-color: #f0c4a0;
+  border-color: var(--accent-line);
   background: #fff0e6;
 }
 
@@ -1621,7 +1622,7 @@ label {
   display: grid;
   place-items: center;
   padding: 1rem;
-  background: rgba(39, 87, 64, 0.45);
+  background: rgba(10, 110, 60, 0.5);
   animation: modal-fade 0.18s var(--motion-ease);
 }
 
@@ -1804,7 +1805,7 @@ label {
   border: 1.5px dashed var(--line);
   border-radius: var(--radius);
   background:
-    linear-gradient(135deg, rgba(82, 155, 116, 0.08), transparent 55%),
+    linear-gradient(135deg, rgba(31, 201, 112, 0.12), transparent 55%),
     var(--surface);
   transition: border-color 0.2s var(--motion-ease), background 0.2s var(--motion-ease);
 }
@@ -1860,7 +1861,7 @@ label {
 .document-import-list li button.is-active {
   border-color: var(--brand);
   background: var(--surface-tint);
-  box-shadow: 0 0 0 1px rgba(58, 125, 92, 0.25);
+  box-shadow: 0 0 0 1px rgba(15, 159, 86, 0.28);
 }
 
 .document-import-list .doc-name {
@@ -1977,7 +1978,7 @@ button.linkish {
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background:
-    linear-gradient(155deg, rgba(82, 155, 116, 0.12), transparent 48%),
+    linear-gradient(155deg, rgba(31, 201, 112, 0.16), transparent 48%),
     linear-gradient(210deg, rgba(242, 156, 90, 0.08), transparent 55%),
     var(--surface);
 }
@@ -2047,7 +2048,7 @@ button.linkish {
   border-radius: var(--radius);
   background:
     linear-gradient(160deg, rgba(242, 156, 90, 0.1), transparent 45%),
-    linear-gradient(200deg, rgba(82, 155, 116, 0.1), transparent 50%),
+    linear-gradient(200deg, rgba(31, 201, 112, 0.14), transparent 50%),
     var(--surface);
 }
 
@@ -2165,7 +2166,7 @@ button.linkish {
   text-transform: uppercase;
   color: var(--accent-ink);
   background: var(--accent-soft);
-  border: 1px solid rgba(240, 160, 106, 0.45);
+  border: 1px solid rgba(255, 122, 46, 0.5);
   border-radius: 999px;
   padding: 0.2rem 0.65rem;
 }
@@ -2175,8 +2176,8 @@ button.linkish {
   border-radius: var(--radius);
   border: 1px solid var(--line);
   background:
-    linear-gradient(160deg, rgba(82, 155, 116, 0.1), transparent 40%),
-    linear-gradient(340deg, rgba(240, 160, 106, 0.12), transparent 45%),
+    linear-gradient(160deg, rgba(31, 201, 112, 0.14), transparent 40%),
+    linear-gradient(340deg, rgba(255, 122, 46, 0.16), transparent 45%),
     var(--surface-tint);
   box-shadow: var(--shadow);
   padding: 0.85rem;
