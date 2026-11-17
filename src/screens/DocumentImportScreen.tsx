@@ -679,11 +679,13 @@ export function DocumentImportScreen({ onNavigate }: Props) {
 
               {showParty && (
                 <div className="form-grid">
-                  <label className="span-2">
-                    <LabelWithHelp topic="tiers">
-                      {partyKind === "customer" ? "Client" : "Fournisseur"}
-                      {!partyNeeded ? " (optionnel)" : ""}
-                    </LabelWithHelp>
+                  <div className="field span-2">
+                    <span className="field-caption">
+                      <LabelWithHelp topic="tiers">
+                        {partyKind === "customer" ? "Client" : "Fournisseur"}
+                        {!partyNeeded ? " (optionnel)" : ""}
+                      </LabelWithHelp>
+                    </span>
                     <ThirdPartySelect
                       tiers={filteredTiers}
                       value={form.thirdPartyId}
@@ -707,7 +709,7 @@ export function DocumentImportScreen({ onNavigate }: Props) {
                         });
                       }}
                     />
-                  </label>
+                  </div>
                   {!form.thirdPartyId && (
                     <>
                       <label>

@@ -84,6 +84,7 @@ export function ThirdPartySelect({
           onChange={(e) =>
             onChange(e.target.value ? Number(e.target.value) : null)
           }
+          onClick={(e) => e.stopPropagation()}
         >
           {(allowEmpty || !value) && (
             <option value="" disabled={required && !allowEmpty}>
@@ -100,12 +101,19 @@ export function ThirdPartySelect({
           <button
             type="button"
             className={compact ? "linkish" : "ghost"}
-            onClick={() => setOpen(true)}
+            onClick={(e) => {
+              // Parent screens wrap this control in <label>/<form>; keep the
+              // click from toggling the select or submitting the outer form.
+              e.preventDefault();
+              e.stopPropagation();
+              setOpen(true);
+            }}
           >
             {compact ? "+" : buttonLabel}
           </button>
         )}
       </div>
+      {/* Modal is portaled to document.body — never nested in parent forms. */}
       <NewThirdPartyModal
         open={open}
         onClose={() => setOpen(false)}

@@ -459,11 +459,19 @@ export function QuotesScreen({
         <div className="billing-edit-split">
           <form
             className="stack gap billing-edit-form"
-            onSubmit={(e) => void onSave(e)}
+            onSubmit={(e) => {
+              // Ignore bubbled submit from a nested dialog form (webview reload risk).
+              if (e.target !== e.currentTarget) {
+                e.preventDefault();
+                e.stopPropagation();
+                return;
+              }
+              void onSave(e);
+            }}
           >
             <div className="split-2">
-              <label className="field">
-                Client
+              <div className="field">
+                <span className="field-caption">Client</span>
                 <ThirdPartySelect
                   value={thirdPartyId || null}
                   onChange={(id) => setThirdPartyId(id ?? 0)}
@@ -473,7 +481,7 @@ export function QuotesScreen({
                   required
                   emptyLabel="Choisir…"
                 />
-              </label>
+              </div>
               <label className="field">
                 Régime TVA
                 <select

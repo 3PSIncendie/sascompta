@@ -655,8 +655,10 @@ export function EntriesScreen({ onNavigate }: Props) {
                         }
                       </p>
                     )}
-                    <label>
-                      <LabelWithHelp topic="tiers">Tiers (optionnel)</LabelWithHelp>
+                    <div className="field">
+                      <span className="field-caption">
+                        <LabelWithHelp topic="tiers">Tiers (optionnel)</LabelWithHelp>
+                      </span>
                       <ThirdPartySelect
                         value={guidedThirdPartyId}
                         onChange={setGuidedThirdPartyId}
@@ -680,7 +682,7 @@ export function EntriesScreen({ onNavigate }: Props) {
                         allowEmpty
                         compact
                       />
-                    </label>
+                    </div>
                   </div>
 
                   {preview && preview.htCents > 0 && (

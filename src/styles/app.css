@@ -546,11 +546,16 @@ p {
   grid-template-columns: 1fr 1fr;
 }
 
-label {
+label,
+.field {
   display: grid;
   gap: 0.3rem;
   font-size: 0.86rem;
   color: var(--ink-muted);
+}
+
+.field-caption {
+  display: block;
 }
 
 input,

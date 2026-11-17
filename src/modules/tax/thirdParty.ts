@@ -12,6 +12,13 @@ export function createActionLabel(kind: ThirdPartyKind | "any"): string {
   return "Nouveau tiers";
 }
 
+/** Primary action inside the create modal (not the opener). */
+export function submitActionLabel(kind: ThirdPartyKind | "any"): string {
+  if (kind === "customer") return "Créer le client";
+  if (kind === "supplier") return "Créer le fournisseur";
+  return "Créer le tiers";
+}
+
 export function modalTitle(kind: ThirdPartyKind | "any"): string {
   if (kind === "customer") return "Nouveau client";
   if (kind === "supplier") return "Nouveau fournisseur";
