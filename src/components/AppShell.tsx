@@ -22,7 +22,7 @@ const NAV_GROUPS: NavGroup[] = [
     label: "Comptabilité",
     items: [
       { id: "plan", label: "Plan comptable" },
-      { id: "journaux", label: "Journaux" },
+      { id: "journaux", label: "Livre journal" },
       { id: "ecritures", label: "Écritures" },
       { id: "import-docs", label: "Import docs" },
       { id: "grand-livre", label: "Grand livre" },
