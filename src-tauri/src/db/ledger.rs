@@ -107,15 +107,27 @@ fn insert_lines(conn: &Connection, entry_id: i64, lines: &[EntryLineInput]) -> D
     Ok(())
 }
 
+/// Vérifie que `entry_date` tombe dans l'exercice ouvert et renvoie son id.
+fn open_fy_id_for_entry_date(conn: &Connection, entry_date: &str) -> DbResult<i64> {
+    let (fy_id, start, end): (i64, String, String) = conn.query_row(
+        "SELECT id, start_date, end_date FROM fiscal_year WHERE status = 'open' ORDER BY id DESC LIMIT 1",
+        [],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+    )?;
+    if entry_date < start.as_str() || entry_date > end.as_str() {
+        return Err(format!(
+            "Date d'écriture {entry_date} hors exercice ouvert ({start} → {end})"
+        )
+        .into());
+    }
+    Ok(fy_id)
+}
+
 pub fn create_draft(conn: &Connection, input: &CreateEntryInput) -> DbResult<Entry> {
     super::closing::assert_has_open_fy(conn)?;
     assert_balanced(&input.lines)?;
     let journal_id = journal_id_by_code(conn, &input.journal_code)?;
-    let fy_id: i64 = conn.query_row(
-        "SELECT id FROM fiscal_year WHERE status = 'open' ORDER BY id DESC LIMIT 1",
-        [],
-        |r| r.get(0),
-    )?;
+    let fy_id = open_fy_id_for_entry_date(conn, &input.entry_date)?;
     let now = Utc::now().to_rfc3339();
     conn.execute(
         "INSERT INTO entry(journal_id, entry_date, piece_ref, label, status, fiscal_year_id, created_at)
@@ -145,6 +157,8 @@ pub fn update_draft(conn: &Connection, id: i64, input: &CreateEntryInput) -> DbR
         return Err("Écriture validée non modifiable".into());
     }
     assert_balanced(&input.lines)?;
+    // La date doit rester dans l'exercice ouvert (même contrainte qu'à la création).
+    let _ = open_fy_id_for_entry_date(conn, &input.entry_date)?;
     let journal_id = journal_id_by_code(conn, &input.journal_code)?;
     conn.execute(
         "UPDATE entry SET journal_id = ?1, entry_date = ?2, piece_ref = ?3, label = ?4 WHERE id = ?5",
@@ -657,5 +671,31 @@ mod tests {
             },
         );
         assert!(err.is_err());
+    }
+
+    #[test]
+    fn entry_date_outside_open_fy_rejected() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("fy-date.sascompta");
+        create_demo_workspace(&path).unwrap();
+        let conn = open_connection(&path).unwrap();
+        let err = create_draft(
+            &conn,
+            &CreateEntryInput {
+                journal_code: "OD".into(),
+                entry_date: "2025-12-31".into(),
+                piece_ref: "HORS".into(),
+                label: "Hors exercice".into(),
+                lines: vec![
+                    line("627", 1000, 0, None, None),
+                    line("512", 0, 1000, None, None),
+                ],
+            },
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("hors exercice"),
+            "unexpected: {err}"
+        );
     }
 }
