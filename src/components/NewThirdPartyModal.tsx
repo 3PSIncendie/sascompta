@@ -1,11 +1,12 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent, type MouseEvent } from "react";
+import { createPortal } from "react-dom";
 import { api } from "../lib/api";
 import { isTauriRuntime } from "../lib/updater";
 import type { ThirdParty } from "../lib/types";
 import {
-  createActionLabel,
   kindLabel,
   modalTitle,
+  submitActionLabel,
   suggestThirdPartyCode,
   toCreateThirdPartyInput,
   validateCreateThirdParty,
@@ -50,6 +51,18 @@ function emptyForm(
   };
 }
 
+function formatCreateError(err: unknown): string {
+  const raw = err instanceof Error ? err.message : String(err);
+  const text = raw.replace(/^Error:\s*/i, "").trim() || "Création impossible.";
+  if (/unique|constraint|déjà|already|duplicate/i.test(text)) {
+    return "Ce code tiers existe déjà. Choisissez un autre code.";
+  }
+  if (/workspace|aucun workspace/i.test(text)) {
+    return "Workspace indisponible. Rouvrez la société, puis réessayez.";
+  }
+  return text;
+}
+
 export function NewThirdPartyModal({
   open,
   onClose,
@@ -74,7 +87,21 @@ export function NewThirdPartyModal({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
+  useEffect(() => {
+    if (!open) return;
+    function onKey(ev: KeyboardEvent) {
+      if (ev.key === "Escape" && !busy) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        onClose();
+      }
+    }
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [open, busy, onClose]);
+
   if (!open) return null;
+  if (typeof document === "undefined") return null;
 
   const titleKind: ThirdPartyKind | "any" = allowAnyKind
     ? "any"
@@ -84,7 +111,10 @@ export function NewThirdPartyModal({
   const title = modalTitle(titleKind);
 
   async function onSubmit(e: FormEvent) {
+    // Nested under devis/facture <form> before portal — always kill default
+    // submit (webview reload → welcome) and stop bubbling to parent save.
     e.preventDefault();
+    e.stopPropagation();
     setError(null);
     const validation = validateCreateThirdParty(form);
     if (validation) {
@@ -116,18 +146,26 @@ export function NewThirdPartyModal({
       onCreated(created);
       onClose();
     } catch (err) {
-      setError(String(err));
+      setError(formatCreateError(err));
     } finally {
       setBusy(false);
     }
   }
 
-  return (
+  function stopCardBubble(ev: MouseEvent) {
+    ev.stopPropagation();
+  }
+
+  return createPortal(
     <div
       className="modal-backdrop"
       role="presentation"
       onClick={(ev) => {
         if (ev.target === ev.currentTarget && !busy) onClose();
+      }}
+      onMouseDown={(ev) => {
+        // Avoid activating a parent <label> (select) under the overlay.
+        ev.stopPropagation();
       }}
     >
       <div
@@ -135,6 +173,8 @@ export function NewThirdPartyModal({
         role="dialog"
         aria-modal="true"
         aria-labelledby="new-third-party-title"
+        onClick={stopCardBubble}
+        onMouseDown={stopCardBubble}
       >
         <header className="modal-head">
           <h2 id="new-third-party-title">{title}</h2>
@@ -152,8 +192,16 @@ export function NewThirdPartyModal({
           Fiche minimale pour la facturation SAS : raison sociale, SIREN/SIRET,
           adresse et contact.
         </p>
-        {error ? <p className="error">{error}</p> : null}
-        <form className="stack stack-tight" onSubmit={(e) => void onSubmit(e)}>
+        {error ? (
+          <p className="error" role="alert">
+            {error}
+          </p>
+        ) : null}
+        <form
+          className="stack stack-tight"
+          noValidate
+          onSubmit={(e) => void onSubmit(e)}
+        >
           <div className="split-2">
             <label className="field">
               Code
@@ -162,6 +210,7 @@ export function NewThirdPartyModal({
                 onChange={(e) => setForm({ ...form, code: e.target.value })}
                 required
                 autoFocus
+                autoComplete="off"
               />
             </label>
             {(allowAnyKind || !lockKind) && (
@@ -191,6 +240,7 @@ export function NewThirdPartyModal({
               onChange={(e) => setForm({ ...form, name: e.target.value })}
               required
               placeholder="ex. Gamma SAS"
+              autoComplete="organization"
             />
           </label>
           <label className="field">
@@ -200,6 +250,7 @@ export function NewThirdPartyModal({
               onChange={(e) => setForm({ ...form, siret: e.target.value })}
               inputMode="numeric"
               placeholder="9 ou 14 chiffres"
+              autoComplete="off"
             />
           </label>
           <label className="field">
@@ -219,6 +270,7 @@ export function NewThirdPartyModal({
                 value={form.email}
                 onChange={(e) => setForm({ ...form, email: e.target.value })}
                 placeholder="contact@exemple.fr"
+                autoComplete="email"
               />
             </label>
             <label className="field">
@@ -229,12 +281,13 @@ export function NewThirdPartyModal({
                   setForm({ ...form, routingId: e.target.value })
                 }
                 placeholder="Souvent le SIRET"
+                autoComplete="off"
               />
             </label>
           </div>
           <div className="btn-row">
             <button type="submit" className="primary" disabled={busy}>
-              {busy ? "Création…" : createActionLabel(form.kind)}
+              {busy ? "Création…" : submitActionLabel(form.kind)}
             </button>
             <button
               type="button"
@@ -247,6 +300,7 @@ export function NewThirdPartyModal({
           </div>
         </form>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  createActionLabel,
+  submitActionLabel,
   suggestThirdPartyCode,
   toCreateThirdPartyInput,
   validateCreateThirdParty,
@@ -87,6 +89,13 @@ describe("thirdParty helpers", () => {
         email: "pas-un-mail",
       }),
     ).toMatch(/e-mail/i);
+  });
+
+  it("sépare libellé d’ouverture et d’action Créer", () => {
+    expect(createActionLabel("customer")).toBe("Nouveau client");
+    expect(submitActionLabel("customer")).toBe("Créer le client");
+    expect(submitActionLabel("supplier")).toBe("Créer le fournisseur");
+    expect(submitActionLabel("any")).toBe("Créer le tiers");
   });
 
   it("normalise l’entrée API", () => {
