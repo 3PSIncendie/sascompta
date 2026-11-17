@@ -1831,6 +1831,14 @@ pub fn confirm_document_import(
     if doc.status != "pending_review" {
         return Err("Seuls les imports en revue peuvent être confirmés".into());
     }
+    // Défense anti double-post : un entry_id orphelin (crash avant UPDATE) ne doit
+    // jamais permettre une 2ᵉ confirmation → 2ᵉ écriture postée.
+    if doc.entry_id.is_some() {
+        return Err(
+            "Import déjà lié à une écriture — confirmation impossible (évite un double post)"
+                .into(),
+        );
+    }
     let doc_type = if input.doc_type.trim().is_empty() {
         doc.doc_type.clone()
     } else {
@@ -2077,8 +2085,12 @@ pub fn confirm_document_import(
     } else {
         input.label.trim().to_string()
     };
+
+    // Transaction atomique : post + passage confirmed. Sinon un crash après
+    // `post_entry` laisse l'import en `pending_review` → double confirmation = double post.
+    let tx = conn.unchecked_transaction()?;
     let draft = ledger::create_draft(
-        conn,
+        &tx,
         &CreateEntryInput {
             journal_code: journal.clone(),
             entry_date: input.entry_date.clone(),
@@ -2089,20 +2101,20 @@ pub fn confirm_document_import(
     )?;
     let mime = doc.mime_type.clone();
     if let Err(e) = ledger::add_attachment(
-        conn,
+        &tx,
         draft.id,
         &doc.source_file_name,
         &doc.stored_path,
         mime,
     ) {
-        let _ = ledger::delete_draft(conn, draft.id);
+        let _ = ledger::delete_draft(&tx, draft.id);
         return Err(e);
     }
     // Attach while draft, then post so Grand livre / TVA / FEC see the entry.
-    let entry = match ledger::post_entry(conn, draft.id) {
+    let entry = match ledger::post_entry(&tx, draft.id) {
         Ok(e) => e,
         Err(e) => {
-            let _ = ledger::delete_draft(conn, draft.id);
+            let _ = ledger::delete_draft(&tx, draft.id);
             return Err(e);
         }
     };
@@ -2119,16 +2131,23 @@ pub fn confirm_document_import(
         }
     }
     let now = now_iso();
-    conn.execute(
+    let updated = tx.execute(
         "UPDATE document_import SET
             doc_type = ?1,
             extraction_json = ?2,
             status = 'confirmed',
             entry_id = ?3,
             confirmed_at = ?4
-         WHERE id = ?5",
+         WHERE id = ?5 AND status = 'pending_review' AND entry_id IS NULL",
         params![doc_type, extraction.to_string(), entry.id, now, id],
     )?;
+    if updated != 1 {
+        return Err(
+            "Confirmation concurrente ou état incohérent — aucun double post n'a été créé"
+                .into(),
+        );
+    }
+    tx.commit()?;
     get_document_import(conn, id)
 }
 
@@ -2751,6 +2770,79 @@ Total TTC                 120,00
         assert_eq!(entry.journal_code, "OD");
         assert!(entry.ecriture_num.as_deref().unwrap_or("").starts_with("OD-"));
         assert!(entry.lines.iter().any(|l| l.account_number == "530"));
+    }
+
+    #[test]
+    fn confirm_rejects_orphan_entry_id_to_prevent_double_post() {
+        let dir = tempdir().unwrap();
+        let ws = dir.path().join("demo.sascompta");
+        let info = db::create_demo_workspace(&ws).unwrap();
+        let (conn, _) = db::open_workspace(&info.path, db::DEMO_PASSWORD).unwrap();
+
+        let pdf = dir.path().join("fa-orphan.pdf");
+        write_simple_pdf(&pdf, sample_invoice_text());
+        let doc = analyze_document(&conn, Path::new(&info.path), &pdf).unwrap();
+        let input = ConfirmDocumentImportInput {
+            doc_type: "supplier_invoice".into(),
+            entry_date: "2026-03-15".into(),
+            piece_ref: "FA-ORPHAN".into(),
+            label: "Import orphan guard".into(),
+            journal_code: "ACH".into(),
+            ht_cents: 10_000,
+            vat_cents: Some(2_000),
+            rate_bp: 2000,
+            vat_mode: "normale".into(),
+            vat_code: "T20D".into(),
+            ht_account: "606".into(),
+            third_party_id: None,
+            counterpart_account: None,
+            bank_direction: None,
+            create_supplier_name: Some("FOURNITURES DELTA SAS".into()),
+            create_supplier_code: Some("F901".into()),
+            create_supplier_siret: Some("12345678900012".into()),
+        };
+        let confirmed = confirm_document_import(&conn, doc.id, &input).unwrap();
+        let first_entry = confirmed.entry_id.expect("entry");
+
+        // Simule un crash historique : écriture postée mais statut encore en revue.
+        conn.execute(
+            "UPDATE document_import SET status = 'pending_review', confirmed_at = NULL WHERE id = ?1",
+            params![doc.id],
+        )
+        .unwrap();
+        let posted_before: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM entry WHERE status = 'posted' AND journal_id = (SELECT id FROM journal WHERE code = 'ACH')",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+
+        let err = confirm_document_import(&conn, doc.id, &input).unwrap_err();
+        assert!(
+            err.to_string().contains("déjà lié") || err.to_string().contains("double post"),
+            "unexpected err: {err}"
+        );
+        let posted_after: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM entry WHERE status = 'posted' AND journal_id = (SELECT id FROM journal WHERE code = 'ACH')",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(posted_before, posted_after, "aucun second post ACH");
+        assert_eq!(
+            ledger::get_entry(&conn, first_entry).unwrap().status,
+            "posted"
+        );
+
+        // Double confirm normal (déjà confirmed) refusé aussi.
+        conn.execute(
+            "UPDATE document_import SET status = 'confirmed', confirmed_at = ?1 WHERE id = ?2",
+            params![now_iso(), doc.id],
+        )
+        .unwrap();
+        assert!(confirm_document_import(&conn, doc.id, &input).is_err());
     }
 
     #[test]
