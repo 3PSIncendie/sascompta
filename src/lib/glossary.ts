@@ -234,8 +234,8 @@ export const HELP: Record<string, HelpTopic> = {
   dossierSurveille: {
     term: "Dossiers surveillés",
     plain:
-      "Un ou plusieurs dossiers de votre PC (par défaut Documents/SasCompta-import) que SasCompta surveille. Chaque nouveau PDF ou image y déposé est copié dans les pièces du workspace et mis en file Import docs pour revue humaine — mêmes types (ACH, VTE, OD, BQ) que l’import manuel. Un fichier déjà importé (même contenu) n’est pas réenfilé. La liste est mémorisée d’une session à l’autre.",
-    example: "Scans + Téléchargements → file « En revue »",
+      "Un ou plusieurs dossiers de votre PC (par défaut Documents/SasCompta-import) que SasCompta surveille en profondeur : PDF et images dans le dossier et ses sous-dossiers sont copiés dans les pièces du workspace et mis en file Import docs pour revue humaine — mêmes types (ACH, VTE, OD, BQ) que l’import manuel. Un fichier déjà importé (même contenu) n’est pas réenfilé. La liste est mémorisée d’une session à l’autre.",
+    example: "Scans/2024/mars + Téléchargements → file « En revue »",
   },
 };
 
