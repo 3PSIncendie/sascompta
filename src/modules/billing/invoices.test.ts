@@ -3,7 +3,10 @@ import {
   buildInvoiceCreateInput,
   defaultAccountForKind,
   emptyDraftLine,
+  invoiceSourceHint,
+  isImportedInvoice,
   kindLabel,
+  previewInvoices,
   statusLabel,
 } from "./invoices";
 
@@ -12,6 +15,14 @@ describe("billing invoices helpers", () => {
     expect(kindLabel("deposit")).toBe("Acompte");
     expect(kindLabel("credit_note")).toBe("Avoir");
     expect(statusLabel("issued")).toBe("Émise");
+  });
+
+  it("repère les factures importées", () => {
+    expect(invoiceSourceHint("import")).toBe("Import");
+    expect(invoiceSourceHint("native")).toBeNull();
+    expect(isImportedInvoice({ source: "import" })).toBe(true);
+    expect(isImportedInvoice({ source: "native" })).toBe(false);
+    expect(previewInvoices().some((i) => i.source === "import")).toBe(true);
   });
 
   it("compte 4191 pour acompte", () => {

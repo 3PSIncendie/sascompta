@@ -633,7 +633,17 @@ pub struct Invoice {
     pub legal_mentions: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+    /// `native` (saisie SasCompta) ou `import` (PDF client confirmé).
+    #[serde(default = "default_invoice_source")]
+    pub source: String,
+    /// Import document d’origine (si `source = import`).
+    #[serde(default)]
+    pub document_import_id: Option<i64>,
     pub lines: Vec<InvoiceLine>,
+}
+
+fn default_invoice_source() -> String {
+    "native".into()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -994,6 +1004,9 @@ pub struct DocumentImport {
     pub confidence: f64,
     pub status: String,
     pub entry_id: Option<i64>,
+    /// Facture client créée à la confirmation (customer_invoice uniquement).
+    #[serde(default)]
+    pub invoice_id: Option<i64>,
     pub created_at: String,
     pub confirmed_at: Option<String>,
     /// SHA-256 hex du contenu source (idempotence dossier / re-dépôt).

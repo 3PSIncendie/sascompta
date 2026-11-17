@@ -4,7 +4,9 @@
 //! note de frais / reçu (ACH ou OD), ticket de caisse (OD/ACH), relevé bancaire (BQ).
 //! Flux commun : analyse locale → revue → confirmation → `create_draft` + pièce
 //! jointe → `post_entry` (écriture immédiatement visible au Grand livre / TVA / FEC).
+//! Facture client : crée aussi une fiche Factures émise (numéro externe) pour Encaisser.
 
+use super::billing;
 use super::ledger;
 use super::tax;
 use super::DbResult;
@@ -97,6 +99,7 @@ pub fn migrate_documents(conn: &Connection) -> DbResult<()> {
             status TEXT NOT NULL DEFAULT 'pending_review'
                 CHECK (status IN ('pending_review','confirmed','discarded')),
             entry_id INTEGER REFERENCES entry(id),
+            invoice_id INTEGER,
             created_at TEXT NOT NULL,
             confirmed_at TEXT,
             source_fingerprint TEXT,
@@ -106,7 +109,7 @@ pub fn migrate_documents(conn: &Connection) -> DbResult<()> {
             ON document_import(status);
         "#,
     )?;
-    // Workspaces créés avant v14 : colonnes idempotence.
+    // Workspaces créés avant v14 / v15 : colonnes idempotence + lien facture.
     let mut stmt = conn.prepare("PRAGMA table_info(document_import)")?;
     let cols: Vec<String> = stmt
         .query_map([], |r| r.get::<_, String>(1))?
@@ -122,6 +125,12 @@ pub fn migrate_documents(conn: &Connection) -> DbResult<()> {
     if !cols.iter().any(|c| c == "source_origin_path") {
         conn.execute(
             "ALTER TABLE document_import ADD COLUMN source_origin_path TEXT",
+            [],
+        )?;
+    }
+    if !cols.iter().any(|c| c == "invoice_id") {
+        conn.execute(
+            "ALTER TABLE document_import ADD COLUMN invoice_id INTEGER",
             [],
         )?;
     }
@@ -1185,16 +1194,17 @@ fn row_to_import(r: &rusqlite::Row<'_>) -> rusqlite::Result<DocumentImport> {
         confidence: r.get(7)?,
         status: r.get(8)?,
         entry_id: r.get(9)?,
-        created_at: r.get(10)?,
-        confirmed_at: r.get(11)?,
-        source_fingerprint: r.get(12)?,
-        source_origin_path: r.get(13)?,
+        invoice_id: r.get(10)?,
+        created_at: r.get(11)?,
+        confirmed_at: r.get(12)?,
+        source_fingerprint: r.get(13)?,
+        source_origin_path: r.get(14)?,
     })
 }
 
 const SELECT_COLS: &str = "id, doc_type, source_file_name, stored_path, mime_type,
-    extraction_method, extraction_json, confidence, status, entry_id, created_at, confirmed_at,
-    source_fingerprint, source_origin_path";
+    extraction_method, extraction_json, confidence, status, entry_id, invoice_id,
+    created_at, confirmed_at, source_fingerprint, source_origin_path";
 
 /// Empreinte SHA-256 hex du contenu (idempotence import).
 pub fn file_fingerprint(path: &Path) -> DbResult<String> {
@@ -1888,6 +1898,7 @@ pub fn confirm_document_import(
         input.ht_account.trim().to_string()
     };
 
+    let mut customer_party_id: Option<i64> = None;
     let (lines, journal) = match doc_type.as_str() {
         "supplier_invoice" => {
             if !matches!(
@@ -1944,6 +1955,7 @@ pub fn confirm_document_import(
             }
             let (tp_id, tp_code) = ensure_party_for_confirm(conn, input, "customer", true)?
                 .ok_or_else(|| "Client requis".to_string())?;
+            customer_party_id = Some(tp_id);
             let lines = if let Some(v) = input.vat_cents.filter(|v| *v >= 0) {
                 if vat_mode == "normale" {
                     let ttc = ht + v;
@@ -2119,6 +2131,42 @@ pub fn confirm_document_import(
         }
     };
 
+    // Facture client importée → fiche Factures émise (Encaisser) liée à la VTE.
+    let mut invoice_id: Option<i64> = None;
+    if doc_type == "customer_invoice" {
+        let tp_id = customer_party_id.ok_or_else(|| "Client requis".to_string())?;
+        let invoice_vat = if vat_mode == "normale" {
+            input
+                .vat_cents
+                .filter(|v| *v >= 0)
+                .unwrap_or_else(|| compute_vat_cents(ht, rate))
+        } else {
+            0
+        };
+        match billing::create_imported_customer_invoice(
+            &tx,
+            id,
+            tp_id,
+            entry.id,
+            &input.entry_date,
+            &input.piece_ref,
+            &input.label,
+            ht,
+            invoice_vat,
+            rate,
+            vat_mode,
+            &vat_code,
+            &ht_account,
+            Some(doc.stored_path.as_str()),
+        ) {
+            Ok(inv) => invoice_id = Some(inv.id),
+            Err(e) => {
+                // Rollback TX (pas de commit) — pas d’écriture orpheline ni de fiche Factures.
+                return Err(e);
+            }
+        }
+    }
+
     let mut extraction = doc.extraction;
     if let Some(obj) = extraction.as_object_mut() {
         obj.insert("confirmedDocType".into(), json!(doc_type));
@@ -2129,6 +2177,9 @@ pub fn confirm_document_import(
         if let Some(ref num) = entry.ecriture_num {
             obj.insert("confirmedEcritureNum".into(), json!(num));
         }
+        if let Some(inv_id) = invoice_id {
+            obj.insert("confirmedInvoiceId".into(), json!(inv_id));
+        }
     }
     let now = now_iso();
     let updated = tx.execute(
@@ -2137,9 +2188,17 @@ pub fn confirm_document_import(
             extraction_json = ?2,
             status = 'confirmed',
             entry_id = ?3,
-            confirmed_at = ?4
-         WHERE id = ?5 AND status = 'pending_review' AND entry_id IS NULL",
-        params![doc_type, extraction.to_string(), entry.id, now, id],
+            invoice_id = ?4,
+            confirmed_at = ?5
+         WHERE id = ?6 AND status = 'pending_review' AND entry_id IS NULL",
+        params![
+            doc_type,
+            extraction.to_string(),
+            entry.id,
+            invoice_id,
+            now,
+            id
+        ],
     )?;
     if updated != 1 {
         return Err(
@@ -2729,6 +2788,89 @@ Total TTC                 120,00
         assert!(entry.ecriture_num.as_deref().unwrap_or("").starts_with("VTE-"));
         assert!(entry.lines.iter().any(|l| l.account_number == "411"));
         assert_eq!(entry.attachments.len(), 1);
+
+        let inv_id = confirmed.invoice_id.expect("invoice Factures liée");
+        let inv = billing::get_invoice(&conn, inv_id).unwrap();
+        assert_eq!(inv.source, "import");
+        assert_eq!(inv.status, "issued");
+        assert_eq!(inv.number.as_deref(), Some("FAC-1"));
+        assert_eq!(inv.entry_id, confirmed.entry_id);
+        assert_eq!(inv.document_import_id, Some(confirmed.id));
+        assert_eq!(inv.ht_cents, 10_000);
+        assert_eq!(inv.vat_cents, 2_000);
+        assert_eq!(inv.ttc_cents, 12_000);
+        assert_eq!(inv.paid_cents, 0);
+
+        let pay = billing::record_payment(
+            &conn,
+            &crate::models::CreatePaymentInput {
+                invoice_id: inv.id,
+                paid_on: "2026-03-20".into(),
+                amount_cents: 5_000,
+                method: "virement".into(),
+                bank_ref: Some("VIR-IMP".into()),
+            },
+        )
+        .unwrap();
+        let bq_id = pay.entry_id.expect("BQ");
+        let bq = ledger::get_entry(&conn, bq_id).unwrap();
+        assert_eq!(bq.status, "posted");
+        assert_eq!(bq.journal_code, "BQ");
+        let partial = billing::get_invoice(&conn, inv.id).unwrap();
+        assert_eq!(partial.status, "partially_paid");
+        assert_eq!(partial.paid_cents, 5_000);
+        let expected_lettre = "FAC1";
+        assert_eq!(pay.lettre.as_deref(), Some(expected_lettre));
+        let vte_lettre: String = conn
+            .query_row(
+                "SELECT ecriture_lettre FROM entry WHERE id = ?1",
+                params![entry.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(vte_lettre, expected_lettre);
+    }
+
+    #[test]
+    fn confirm_supplier_invoice_does_not_create_billing_invoice() {
+        let dir = tempdir().unwrap();
+        let ws = dir.path().join("demo.sascompta");
+        let info = db::create_demo_workspace(&ws).unwrap();
+        let (conn, _) = db::open_workspace(&info.path, db::DEMO_PASSWORD).unwrap();
+
+        let pdf = dir.path().join("fa-fourn.pdf");
+        write_simple_pdf(
+            &pdf,
+            "FACTURE FOURNISSEUR\nFA-99\nTotal HT 50,00\nTVA 10,00\nTotal TTC 60,00",
+        );
+        let doc = analyze_document(&conn, Path::new(&info.path), &pdf).unwrap();
+        let before = billing::list_invoices(&conn).unwrap().len();
+        let confirmed = confirm_document_import(
+            &conn,
+            doc.id,
+            &ConfirmDocumentImportInput {
+                doc_type: "supplier_invoice".into(),
+                entry_date: "2026-03-15".into(),
+                piece_ref: "FA-99".into(),
+                label: "Import FA-99".into(),
+                journal_code: "ACH".into(),
+                ht_cents: 5_000,
+                vat_cents: Some(1_000),
+                rate_bp: 2000,
+                vat_mode: "normale".into(),
+                vat_code: "T20D".into(),
+                ht_account: "606".into(),
+                counterpart_account: None,
+                bank_direction: None,
+                third_party_id: None,
+                create_supplier_name: Some("FOURN X".into()),
+                create_supplier_code: Some("F901".into()),
+                create_supplier_siret: None,
+            },
+        )
+        .unwrap();
+        assert!(confirmed.invoice_id.is_none());
+        assert_eq!(billing::list_invoices(&conn).unwrap().len(), before);
     }
 
     #[test]

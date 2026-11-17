@@ -276,8 +276,12 @@ export function DocumentImportScreen({ onNavigate }: Props) {
         selected.id,
         toConfirmInput({ ...form, journalCode: journal }, htCents, vatCents),
       );
+      const invoiceBit =
+        confirmed.docType === "customer_invoice" && confirmed.invoiceId
+          ? ` Facture #${confirmed.invoiceId} créée dans Factures (Encaisser).`
+          : "";
       setStatus(
-        `Écriture #${confirmed.entryId} postée (${journal}) — visible au Grand livre, TVA et FEC. La revue Import était le filet de validation.`,
+        `Écriture #${confirmed.entryId} postée (${journal}) — visible au Grand livre, TVA et FEC.${invoiceBit} La revue Import était le filet de validation.`,
       );
       await reload();
       setSelectedId(confirmed.id);
