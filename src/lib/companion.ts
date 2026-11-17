@@ -4,6 +4,11 @@ export type CompanionStatus = {
   running: boolean;
   host: string | null;
   port: number | null;
+  /** IPv4 LAN détectées — pour corriger le QR si l’IP auto est injoignable depuis le téléphone. */
+  lanAddresses: string[];
+  /** Toujours `0.0.0.0` quand le pont tourne (écoute toutes interfaces). */
+  bindAddress: string | null;
+  hostIsLoopback: boolean;
   orgName: string | null;
   pairingCode: string | null;
   pairingExpiresAt: string | null;
@@ -154,6 +159,9 @@ export function previewCompanionStatus(running = false): CompanionStatus {
       running: false,
       host: null,
       port: null,
+      lanAddresses: [],
+      bindAddress: null,
+      hostIsLoopback: false,
       orgName: null,
       pairingCode: null,
       pairingExpiresAt: null,
@@ -173,6 +181,9 @@ export function previewCompanionStatus(running = false): CompanionStatus {
     running: true,
     host: "192.168.1.42",
     port: 17832,
+    lanAddresses: ["192.168.1.42", "10.0.0.5"],
+    bindAddress: "0.0.0.0",
+    hostIsLoopback: false,
     orgName: "Demo SAS",
     pairingCode: "482913",
     pairingExpiresAt: expires,
@@ -181,6 +192,14 @@ export function previewCompanionStatus(running = false): CompanionStatus {
     qrSvg: null,
     receivedCount: 0,
   };
+}
+
+/** True si l’hôte annoncé ne peut pas être joint depuis un téléphone (loopback). */
+export function companionHostUnreachableFromPhone(
+  host: string | null | undefined,
+): boolean {
+  if (!host) return true;
+  return host === "127.0.0.1" || host === "::1" || host === "localhost";
 }
 
 export function pairingExpiresLabel(iso: string | null | undefined): string {

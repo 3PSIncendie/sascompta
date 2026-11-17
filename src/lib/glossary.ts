@@ -228,8 +228,8 @@ export const HELP: Record<string, HelpTopic> = {
   compagnonMobile: {
     term: "Compagnon mobile",
     plain:
-      "Petite app Expo (Expo Go sur Android) pour photographier un ticket ou envoyer un PDF vers SasCompta sur le PC. Le transfert passe par le Wi‑Fi local (même réseau) : pas de cloud ni d’APK native obligatoires. Le QR du pont ouvre une page « Ouvrir Expo Go » ; ensuite vous scannez / saisissez le code dans l’app. Chaque document arrive dans Import docs pour revue avant écriture.",
-    example: "Expo Go → QR pont → photo note de frais → file « En revue »",
+      "Envoi photo/PDF depuis le téléphone vers SasCompta sur le PC, via Wi‑Fi local (pas de cloud). Sur Android, scannez le QR du pont avec la caméra : Chrome ouvre une page d’envoi sur http://IP:17832/launch. Si la page est inaccessible, changez l’IP affichée (VPN/Hyper‑V) et autorisez le pare-feu TCP 17832. Expo Go reste optionnel pour l’app React Native.",
+    example: "Caméra Android → QR pont → photo note de frais → file « En revue »",
   },
   dossierSurveille: {
     term: "Dossiers surveillés",

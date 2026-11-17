@@ -126,6 +126,7 @@ pub fn run() {
             companion::companion_stop,
             companion::companion_status,
             companion::companion_rotate_pairing,
+            companion::companion_set_advertised_host,
             folder_watch::folder_watch_default_path,
             folder_watch::folder_watch_start,
             folder_watch::folder_watch_stop,
