@@ -215,10 +215,10 @@ export function FolderWatchPanel({
             Dossiers surveillés <FieldHelp topic="dossierSurveille" compact />
           </h2>
           <p className="muted">
-            Déposez des PDF ou photos dans un ou plusieurs dossiers de ce PC —
-            SasCompta les copie et les enfile ici pour <strong>revue</strong>{" "}
-            (mêmes classifieurs multi-types que l’import manuel). Aucun cloud.
-            La liste est mémorisée.
+            Déposez des PDF ou photos dans un ou plusieurs dossiers de ce PC
+            (sous-dossiers inclus) — SasCompta les copie et les enfile ici pour{" "}
+            <strong>revue</strong> (mêmes classifieurs multi-types que l’import
+            manuel). Aucun cloud. La liste est mémorisée.
           </p>
         </div>
       </header>
@@ -302,9 +302,10 @@ export function FolderWatchPanel({
             </div>
           </div>
           <p className="muted tiny">
-            Un même fichier (même contenu) n’est pas réimporté. Chaque nouveauté
-            apparaît dans la file « En revue » avant toute écriture. Ajouter ou
-            retirer un dossier met à jour la surveillance sans tout redémarrer
+            La surveillance parcourt aussi les sous-dossiers. Un même fichier
+            (même contenu) n’est pas réimporté. Chaque nouveauté apparaît dans
+            la file « En revue » avant toute écriture. Ajouter ou retirer un
+            dossier met à jour la surveillance sans tout redémarrer
             manuellement.
           </p>
         </div>
