@@ -162,13 +162,22 @@ pub fn backfill_imported_customer_invoices(conn: &Connection) -> DbResult<usize>
     if !exists {
         return Ok(0);
     }
+    // Cible principale : customer_invoice confirmés sans fiche Factures.
+    // Élargi (best-effort) : confirmedDocType client, ou écriture journal VTE
+    // (couvre un doc_type stocké incohérent après une revue mal classée).
     let mut stmt = conn.prepare(
-        "SELECT id FROM document_import
-         WHERE status = 'confirmed'
-           AND doc_type = 'customer_invoice'
-           AND entry_id IS NOT NULL
-           AND (invoice_id IS NULL OR invoice_id = 0)
-         ORDER BY id",
+        "SELECT di.id FROM document_import di
+         LEFT JOIN entry e ON e.id = di.entry_id
+         LEFT JOIN journal j ON j.id = e.journal_id
+         WHERE di.status = 'confirmed'
+           AND di.entry_id IS NOT NULL
+           AND (di.invoice_id IS NULL OR di.invoice_id = 0)
+           AND (
+             di.doc_type = 'customer_invoice'
+             OR json_extract(di.extraction_json, '$.confirmedDocType') = 'customer_invoice'
+             OR j.code = 'VTE'
+           )
+         ORDER BY di.id",
     )?;
     let ids: Vec<i64> = stmt
         .query_map([], |r| r.get(0))?
@@ -182,7 +191,8 @@ pub fn backfill_imported_customer_invoices(conn: &Connection) -> DbResult<usize>
         match backfill_one_imported_customer_invoice(conn, id) {
             Ok(true) => created += 1,
             Ok(false) => {}
-            Err(_e) => {
+            Err(e) => {
+                eprintln!("backfill Factures import #{id} skippé : {e}");
                 // Skip — l’import reste sans invoice_id ; re-tentative au prochain open.
             }
         }
@@ -210,7 +220,7 @@ fn json_str(v: &serde_json::Value, key: &str) -> Option<String> {
 /// Relie ou crée une facture pour un import client confirmé. `true` = fiche créée.
 fn backfill_one_imported_customer_invoice(conn: &Connection, import_id: i64) -> DbResult<bool> {
     let doc = get_document_import(conn, import_id)?;
-    if doc.status != "confirmed" || doc.doc_type != "customer_invoice" {
+    if doc.status != "confirmed" {
         return Ok(false);
     }
     if doc.invoice_id.is_some() {
@@ -220,6 +230,11 @@ fn backfill_one_imported_customer_invoice(conn: &Connection, import_id: i64) -> 
         Some(e) => e,
         None => return Ok(false),
     };
+
+    let confirmed_as_customer = doc.doc_type == "customer_invoice"
+        || json_str(&doc.extraction, "confirmedDocType")
+            .as_deref()
+            == Some("customer_invoice");
 
     // Déjà une fiche liée par document_import_id ou par entry_id → re-lier seulement.
     let existing: Option<i64> = conn
@@ -238,6 +253,16 @@ fn backfill_one_imported_customer_invoice(conn: &Connection, import_id: i64) -> 
     }
 
     let entry = ledger::get_entry(conn, entry_id)?;
+    let is_vte = entry.journal_code == "VTE";
+    let has_411 = entry
+        .lines
+        .iter()
+        .any(|l| l.account_number.starts_with("411") && l.debit_cents > 0);
+    // ACH / frais : pas de fiche Factures. VTE + 411 (même si doc_type stocké faux) → oui.
+    if !confirmed_as_customer && !(is_vte && has_411) {
+        return Ok(false);
+    }
+
     let tp_id = entry
         .lines
         .iter()
@@ -247,6 +272,18 @@ fn backfill_one_imported_customer_invoice(conn: &Connection, import_id: i64) -> 
             } else {
                 None
             }
+        })
+        .or_else(|| {
+            entry
+                .lines
+                .iter()
+                .find_map(|l| if l.debit_cents > 0 { l.third_party_id } else { None })
+        })
+        .or_else(|| {
+            entry
+                .lines
+                .iter()
+                .find_map(|l| l.third_party_id)
         })
         .or_else(|| json_i64(&doc.extraction, "matchedThirdPartyId"))
         .ok_or_else(|| {
@@ -263,11 +300,7 @@ fn backfill_one_imported_customer_invoice(conn: &Connection, import_id: i64) -> 
     let ht_from_entry: i64 = entry
         .lines
         .iter()
-        .filter(|l| {
-            let n = l.account_number.as_str();
-            (n.starts_with("70") || n.starts_with("706") || n.starts_with("707"))
-                && l.credit_cents > 0
-        })
+        .filter(|l| l.account_number.starts_with('7') && l.credit_cents > 0)
         .map(|l| l.credit_cents)
         .sum();
     let vat_from_entry: i64 = entry
@@ -276,14 +309,32 @@ fn backfill_one_imported_customer_invoice(conn: &Connection, import_id: i64) -> 
         .filter(|l| l.account_number.starts_with("4457") && l.credit_cents > 0)
         .map(|l| l.credit_cents)
         .sum();
+    let ar_debit: i64 = entry
+        .lines
+        .iter()
+        .filter(|l| l.account_number.starts_with("411") && l.debit_cents > 0)
+        .map(|l| l.debit_cents)
+        .sum();
+    let ht_from_ar = if ar_debit > 0 {
+        (ar_debit - vat_from_entry.max(0)).max(0)
+    } else {
+        0
+    };
 
-    let ht = ht_from_ext.filter(|h| *h > 0).unwrap_or(ht_from_entry);
+    let ht = ht_from_ext
+        .filter(|h| *h > 0)
+        .unwrap_or_else(|| if ht_from_entry > 0 { ht_from_entry } else { ht_from_ar });
     if ht <= 0 {
         return Err(format!("Backfill import #{import_id} : montant HT invalide").into());
     }
-    let vat_mode = json_str(&doc.extraction, "confirmedVatMode")
+    let vat_mode_raw = json_str(&doc.extraction, "confirmedVatMode")
         .or_else(|| json_str(&doc.extraction, "vatMode"))
         .unwrap_or_else(|| "normale".into());
+    // Factures n’accepte que les régimes vente ; un régime ACH legacy → normale.
+    let vat_mode = match vat_mode_raw.as_str() {
+        "normale" | "sans" | "autoliquidation_chantier" => vat_mode_raw,
+        _ => "normale".into(),
+    };
     let rate_bp = json_i64(&doc.extraction, "rateBp").unwrap_or(2000) as i32;
     let vat = if vat_mode == "normale" {
         vat_from_ext
@@ -302,7 +353,7 @@ fn backfill_one_imported_customer_invoice(conn: &Connection, import_id: i64) -> 
     let ht_account = entry
         .lines
         .iter()
-        .find(|l| l.credit_cents > 0 && l.account_number.starts_with("70"))
+        .find(|l| l.credit_cents > 0 && l.account_number.starts_with('7'))
         .map(|l| l.account_number.clone())
         .or_else(|| json_str(&doc.extraction, "htAccount"))
         .unwrap_or_else(|| "706".into());
@@ -3475,5 +3526,60 @@ Total TTC                 120,00
                 .count(),
             1
         );
+    }
+
+    #[test]
+    fn backfill_recovers_vte_when_stored_doc_type_wrong() {
+        let dir = tempdir().unwrap();
+        let ws = dir.path().join("demo.sascompta");
+        let info = db::create_demo_workspace(&ws).unwrap();
+        let (conn, _) = db::open_workspace(&info.path, db::DEMO_PASSWORD).unwrap();
+
+        let pdf = dir.path().join("fa-vte-wrong-type.pdf");
+        write_simple_pdf(
+            &pdf,
+            "FACTURE N° WRONG-1\nÀ votre attention\nClient Z\nTotal HT 30,00\nTVA 6,00\nTotal TTC 36,00",
+        );
+        let doc = analyze_document(&conn, Path::new(&info.path), &pdf).unwrap();
+        let confirmed = confirm_document_import(
+            &conn,
+            doc.id,
+            &ConfirmDocumentImportInput {
+                doc_type: "customer_invoice".into(),
+                entry_date: "2026-06-01".into(),
+                piece_ref: "WRONG-1".into(),
+                label: "Import WRONG-1".into(),
+                journal_code: "VTE".into(),
+                ht_cents: 3_000,
+                vat_cents: Some(600),
+                rate_bp: 2000,
+                vat_mode: "normale".into(),
+                vat_code: "T20C".into(),
+                ht_account: "706".into(),
+                counterpart_account: Some("411".into()),
+                bank_direction: None,
+                third_party_id: None,
+                create_supplier_name: Some("CLIENT WRONG".into()),
+                create_supplier_code: Some("C945".into()),
+                create_supplier_siret: None,
+            },
+        )
+        .unwrap();
+        let inv_id = confirmed.invoice_id.expect("créée par #52");
+        strip_invoice_like_pre_pr52(&conn, confirmed.id, inv_id);
+        // Simule un doc_type stocké incohérent (revue / legacy) tout en gardant VTE + 411.
+        conn.execute(
+            "UPDATE document_import SET doc_type = 'supplier_invoice' WHERE id = ?1",
+            params![confirmed.id],
+        )
+        .unwrap();
+
+        let created = backfill_imported_customer_invoices(&conn).unwrap();
+        assert_eq!(created, 1);
+        let linked = get_document_import(&conn, confirmed.id).unwrap();
+        let new_inv = billing::get_invoice(&conn, linked.invoice_id.unwrap()).unwrap();
+        assert_eq!(new_inv.source, "import");
+        assert_eq!(new_inv.number.as_deref(), Some("WRONG-1"));
+        assert_eq!(new_inv.entry_id, confirmed.entry_id);
     }
 }
