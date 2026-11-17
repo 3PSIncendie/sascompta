@@ -37,6 +37,15 @@ export function statusLabel(status: string): string {
   return INVOICE_STATUS_LABELS[status as InvoiceStatus] ?? status;
 }
 
+/** Libellé léger pour les factures issues d’un import PDF client. */
+export function invoiceSourceHint(source?: string | null): string | null {
+  return source === "import" ? "Import" : null;
+}
+
+export function isImportedInvoice(inv: Pick<Invoice, "source">): boolean {
+  return inv.source === "import";
+}
+
 export function defaultAccountForKind(kind: InvoiceKind | string): string {
   return kind === "deposit" ? "4191" : "706";
 }
@@ -131,6 +140,8 @@ export function previewInvoices(): Invoice[] {
       legalMentions: null,
       createdAt: now,
       updatedAt: now,
+      source: "native",
+      documentImportId: null,
       lines: [
         {
           id: 1,
@@ -177,6 +188,8 @@ export function previewInvoices(): Invoice[] {
       legalMentions: null,
       createdAt: now,
       updatedAt: now,
+      source: "native",
+      documentImportId: null,
       lines: [
         {
           id: 2,
@@ -204,6 +217,54 @@ export function previewInvoices(): Invoice[] {
           unit: "h",
           unitPriceCents: 6_500,
           htCents: 52_000,
+          vatRateBp: 2000,
+          vatCode: "T20C",
+          accountNumber: "706",
+          analyticCode: null,
+        },
+      ],
+    },
+    {
+      id: 3,
+      number: "FAC-EXT-88",
+      kind: "standard",
+      thirdPartyId: 3,
+      thirdPartyCode: "C001",
+      thirdPartyName: "Client Gamma",
+      quoteId: null,
+      parentInvoiceId: null,
+      status: "issued",
+      issueDate: "2026-03-10",
+      dueDate: null,
+      serviceDate: null,
+      htCents: 10_000,
+      vatCents: 2_000,
+      ttcCents: 12_000,
+      paidCents: 0,
+      vatMode: "normale",
+      vatCode: "T20C",
+      einvoiceProfile: "none",
+      einvoiceStatus: "local_only",
+      entryId: 77,
+      pdfPath: null,
+      facturxPath: null,
+      notes: "Import document #12",
+      legalMentions: null,
+      createdAt: now,
+      updatedAt: now,
+      source: "import",
+      documentImportId: 12,
+      lines: [
+        {
+          id: 4,
+          invoiceId: 3,
+          lineNo: 1,
+          label: "Import FAC-EXT-88",
+          description: "Facture client importée (autre logiciel)",
+          quantityMilli: 1000,
+          unit: "u",
+          unitPriceCents: 10_000,
+          htCents: 10_000,
           vatRateBp: 2000,
           vatCode: "T20C",
           accountNumber: "706",

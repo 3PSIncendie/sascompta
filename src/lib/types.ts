@@ -283,6 +283,8 @@ export interface InvoiceLineInput {
   analyticCode?: string | null;
 }
 
+export type InvoiceSource = "native" | "import";
+
 export interface Invoice {
   id: number;
   number: string | null;
@@ -311,6 +313,9 @@ export interface Invoice {
   legalMentions: string | null;
   createdAt: string;
   updatedAt: string;
+  /** `native` (saisie) ou `import` (PDF client confirmé). */
+  source?: InvoiceSource | string;
+  documentImportId?: number | null;
   lines: InvoiceLine[];
 }
 

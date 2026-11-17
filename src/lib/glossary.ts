@@ -223,7 +223,7 @@ export const HELP: Record<string, HelpTopic> = {
   importRevue: {
     term: "Revue avant écriture",
     plain:
-      "Étape obligatoire : vous vérifiez type, date, montants, tiers et lignes proposées. Rien n’est comptabilisé tant que vous n’avez pas confirmé. À la confirmation l’écriture est postée (Grand livre / TVA / FEC) ; le fichier reste en pièce jointe.",
+      "Étape obligatoire : vous vérifiez type, date, montants, tiers et lignes proposées. Rien n’est comptabilisé tant que vous n’avez pas confirmé. À la confirmation l’écriture est postée (Grand livre / TVA / FEC) ; le fichier reste en pièce jointe. Une facture client crée aussi une fiche dans Factures (numéro externe conservé) pour Encaisser.",
   },
   compagnonMobile: {
     term: "Compagnon mobile",

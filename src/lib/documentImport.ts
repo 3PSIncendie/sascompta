@@ -59,6 +59,7 @@ export type DocumentExtraction = {
   confirmedVatMode?: string;
   confirmedEntryId?: number;
   confirmedEcritureNum?: string;
+  confirmedInvoiceId?: number;
 };
 
 export type DocumentImport = {
@@ -72,6 +73,8 @@ export type DocumentImport = {
   confidence: number;
   status: DocumentImportStatus | string;
   entryId: number | null;
+  /** Facture client créée à la confirmation (Encaisser). */
+  invoiceId?: number | null;
   createdAt: string;
   confirmedAt: string | null;
   sourceFingerprint?: string | null;

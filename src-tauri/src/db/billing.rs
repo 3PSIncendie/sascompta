@@ -16,7 +16,7 @@ const COMMERCIAL_LOGO_PNG: &[u8] = include_bytes!("../../../src/assets/brand/3ps
 /// Largeur/hauteur logo sur A4 (~24 mm) — ne compacte pas le bloc client/émetteur.
 const COMMERCIAL_LOGO_MM: f32 = 24.0;
 
-pub const SCHEMA_BILLING_VERSION: i32 = 10;
+pub const SCHEMA_BILLING_VERSION: i32 = 11;
 
 /// Séries documentaires configurables (compteur annuel calendaire).
 /// Les factures (standard / acompte / solde / avoir) partagent la série FACT
@@ -123,7 +123,10 @@ pub fn migrate_billing(conn: &Connection) -> DbResult<()> {
             notes TEXT,
             legal_mentions TEXT,
             created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL
+            updated_at TEXT NOT NULL,
+            source TEXT NOT NULL DEFAULT 'native'
+                CHECK (source IN ('native','import')),
+            document_import_id INTEGER
         );
 
         CREATE TABLE IF NOT EXISTS invoice_line (
@@ -166,6 +169,25 @@ pub fn migrate_billing(conn: &Connection) -> DbResult<()> {
         "#,
     )?;
     enrich_billing_line_description(conn)?;
+    enrich_invoice_import_link(conn)?;
+    Ok(())
+}
+
+/// v15 — origine import + lien document_import (workspaces antérieurs).
+fn enrich_invoice_import_link(conn: &Connection) -> DbResult<()> {
+    let cols = table_columns(conn, "invoice")?;
+    if !cols.iter().any(|c| c == "source") {
+        conn.execute(
+            "ALTER TABLE invoice ADD COLUMN source TEXT NOT NULL DEFAULT 'native'",
+            [],
+        )?;
+    }
+    if !cols.iter().any(|c| c == "document_import_id") {
+        conn.execute(
+            "ALTER TABLE invoice ADD COLUMN document_import_id INTEGER",
+            [],
+        )?;
+    }
     Ok(())
 }
 
@@ -966,6 +988,8 @@ fn map_invoice_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Invoice> {
         legal_mentions: r.get(24)?,
         created_at: r.get(25)?,
         updated_at: r.get(26)?,
+        source: r.get::<_, Option<String>>(27)?.unwrap_or_else(|| "native".into()),
+        document_import_id: r.get(28)?,
         lines: Vec::new(),
     })
 }
@@ -996,18 +1020,19 @@ fn load_invoice_lines(conn: &Connection, invoice_id: i64) -> DbResult<Vec<Invoic
     Ok(rows.filter_map(|r| r.ok()).collect())
 }
 
+const INVOICE_SELECT: &str = "SELECT i.id, i.number, i.kind, i.third_party_id, tp.code, tp.name,
+                i.quote_id, i.parent_invoice_id, i.status, i.issue_date, i.due_date,
+                i.service_date, i.ht_cents, i.vat_cents, i.ttc_cents, i.paid_cents,
+                i.vat_mode, i.vat_code, i.einvoice_profile, i.einvoice_status,
+                i.entry_id, i.pdf_path, i.facturx_path, i.notes, i.legal_mentions,
+                i.created_at, i.updated_at, i.source, i.document_import_id
+         FROM invoice i
+         JOIN third_party tp ON tp.id = i.third_party_id";
+
 pub fn get_invoice(conn: &Connection, id: i64) -> DbResult<Invoice> {
     let mut inv = conn
         .query_row(
-            "SELECT i.id, i.number, i.kind, i.third_party_id, tp.code, tp.name,
-                    i.quote_id, i.parent_invoice_id, i.status, i.issue_date, i.due_date,
-                    i.service_date, i.ht_cents, i.vat_cents, i.ttc_cents, i.paid_cents,
-                    i.vat_mode, i.vat_code, i.einvoice_profile, i.einvoice_status,
-                    i.entry_id, i.pdf_path, i.facturx_path, i.notes, i.legal_mentions,
-                    i.created_at, i.updated_at
-             FROM invoice i
-             JOIN third_party tp ON tp.id = i.third_party_id
-             WHERE i.id = ?1",
+            &format!("{INVOICE_SELECT} WHERE i.id = ?1"),
             params![id],
             map_invoice_row,
         )
@@ -1017,17 +1042,9 @@ pub fn get_invoice(conn: &Connection, id: i64) -> DbResult<Invoice> {
 }
 
 pub fn list_invoices(conn: &Connection) -> DbResult<Vec<Invoice>> {
-    let mut stmt = conn.prepare(
-        "SELECT i.id, i.number, i.kind, i.third_party_id, tp.code, tp.name,
-                i.quote_id, i.parent_invoice_id, i.status, i.issue_date, i.due_date,
-                i.service_date, i.ht_cents, i.vat_cents, i.ttc_cents, i.paid_cents,
-                i.vat_mode, i.vat_code, i.einvoice_profile, i.einvoice_status,
-                i.entry_id, i.pdf_path, i.facturx_path, i.notes, i.legal_mentions,
-                i.created_at, i.updated_at
-         FROM invoice i
-         JOIN third_party tp ON tp.id = i.third_party_id
-         ORDER BY i.issue_date DESC, i.id DESC",
-    )?;
+    let mut stmt = conn.prepare(&format!(
+        "{INVOICE_SELECT} ORDER BY i.issue_date DESC, i.id DESC"
+    ))?;
     let rows = stmt.query_map([], map_invoice_row)?;
     let mut out = Vec::new();
     for row in rows {
@@ -1277,6 +1294,137 @@ pub fn issue_invoice(conn: &Connection, id: i64) -> DbResult<Invoice> {
     )?;
     // Max automation : brouillon VTE dès l'émission (post humain ensuite)
     let _ = build_invoice_entry_draft(conn, id)?;
+    get_invoice(conn, id)
+}
+
+/// Numéro externe (logiciel tiers) pour une facture importée — ne consomme pas la série FACT.
+fn resolve_external_invoice_number(
+    conn: &Connection,
+    piece_ref: &str,
+    document_import_id: i64,
+) -> DbResult<String> {
+    let base = piece_ref.trim();
+    let candidate = if base.is_empty() {
+        format!("IMP-{document_import_id}")
+    } else {
+        base.to_string()
+    };
+    let taken: bool = conn
+        .query_row(
+            "SELECT 1 FROM invoice WHERE number = ?1 LIMIT 1",
+            params![candidate],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some();
+    if !taken {
+        return Ok(candidate);
+    }
+    let alt = format!("{candidate}·imp{document_import_id}");
+    let alt_taken: bool = conn
+        .query_row(
+            "SELECT 1 FROM invoice WHERE number = ?1 LIMIT 1",
+            params![alt],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some();
+    if alt_taken {
+        return Err(format!(
+            "Numéro de facture « {candidate} » déjà utilisé — renommez la pièce"
+        )
+        .into());
+    }
+    Ok(alt)
+}
+
+/// Crée une facture **émise** liée à une écriture VTE déjà produite par l’import client.
+/// Conserve le numéro externe (`piece_ref`) — pas d’allocation série FACT, pas de 2ᵉ VTE.
+pub fn create_imported_customer_invoice(
+    conn: &Connection,
+    document_import_id: i64,
+    third_party_id: i64,
+    entry_id: i64,
+    issue_date: &str,
+    piece_ref: &str,
+    label: &str,
+    ht_cents: i64,
+    vat_cents: i64,
+    rate_bp: i32,
+    vat_mode: &str,
+    vat_code: &str,
+    ht_account: &str,
+    pdf_path: Option<&str>,
+) -> DbResult<Invoice> {
+    ensure_customer(conn, third_party_id)?;
+    validate_vat_mode(vat_mode)?;
+    if ht_cents <= 0 {
+        return Err("Montant HT invalide pour la facture importée".into());
+    }
+    let vat = vat_cents.max(0);
+    let ttc = ht_cents + vat;
+    let number = resolve_external_invoice_number(conn, piece_ref, document_import_id)?;
+    let account = if ht_account.trim().is_empty() {
+        "706".to_string()
+    } else {
+        ht_account.trim().to_string()
+    };
+    let line_label = {
+        let t = label.trim();
+        if t.is_empty() {
+            format!("Import {number}")
+        } else {
+            t.to_string()
+        }
+    };
+    let notes = format!("Import document #{document_import_id}");
+    let legal = legal_mentions_for(vat_mode);
+    let now = now_iso();
+    let vat_code_opt = if vat_code.trim().is_empty() {
+        None
+    } else {
+        Some(vat_code.trim().to_string())
+    };
+    let line_vat_code = vat_code_opt.clone();
+    conn.execute(
+        "INSERT INTO invoice(
+            number, kind, third_party_id, quote_id, parent_invoice_id, status,
+            issue_date, due_date, service_date, ht_cents, vat_cents, ttc_cents, paid_cents,
+            vat_mode, vat_code, notes, legal_mentions, entry_id, pdf_path,
+            created_at, updated_at, source, document_import_id
+         ) VALUES (?1, 'standard', ?2, NULL, NULL, 'issued', ?3, NULL, NULL, ?4, ?5, ?6, 0,
+            ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?13, 'import', ?14)",
+        params![
+            number,
+            third_party_id,
+            issue_date,
+            ht_cents,
+            vat,
+            ttc,
+            vat_mode,
+            vat_code_opt,
+            notes,
+            if legal.is_empty() { None } else { Some(legal) },
+            entry_id,
+            pdf_path,
+            now,
+            document_import_id,
+        ],
+    )?;
+    let id = conn.last_insert_rowid();
+    let line = InvoiceLineInput {
+        label: line_label,
+        description: Some("Facture client importée (autre logiciel)".into()),
+        quantity_milli: 1000,
+        unit: "u".into(),
+        unit_price_cents: ht_cents,
+        ht_cents,
+        vat_rate_bp: rate_bp.max(0),
+        vat_code: line_vat_code,
+        account_number: account,
+        analytic_code: None,
+    };
+    insert_invoice_lines(conn, id, &[line])?;
     get_invoice(conn, id)
 }
 

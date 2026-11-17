@@ -19,7 +19,9 @@ import {
   buildInvoiceCreateInput,
   defaultAccountForKind,
   emptyDraftLine,
+  invoiceSourceHint,
   invoiceToDraftLines,
+  isImportedInvoice,
   kindLabel,
   previewInvoices,
   statusLabel,
@@ -946,6 +948,12 @@ export function InvoicesScreen({
                     {inv.number ?? (
                       <span className="muted">brouillon #{inv.id}</span>
                     )}
+                    {invoiceSourceHint(inv.source) ? (
+                      <span className="muted" title="Facture client importée">
+                        {" "}
+                        · {invoiceSourceHint(inv.source)}
+                      </span>
+                    ) : null}
                   </td>
                   <td>{kindLabel(inv.kind)}</td>
                   <td>{inv.issueDate}</td>
@@ -998,28 +1006,37 @@ export function InvoicesScreen({
                       {inv.status !== "draft" &&
                         inv.status !== "cancelled" && (
                           <>
-                            {inv.entryId ? (
-                              <button
-                                type="button"
-                                className="secondary"
-                                disabled={busy}
-                                onClick={() =>
-                                  void onPostEntry(inv.entryId!, "VTE")
-                                }
-                                title="Valide le brouillon VTE en écriture postée"
+                            {!isImportedInvoice(inv) ? (
+                              inv.entryId ? (
+                                <button
+                                  type="button"
+                                  className="secondary"
+                                  disabled={busy}
+                                  onClick={() =>
+                                    void onPostEntry(inv.entryId!, "VTE")
+                                  }
+                                  title="Valide le brouillon VTE en écriture postée"
+                                >
+                                  Valider VTE
+                                </button>
+                              ) : (
+                                <button
+                                  type="button"
+                                  className="ghost"
+                                  disabled={busy}
+                                  onClick={() => void onRebuildVte(inv)}
+                                >
+                                  Créer VTE
+                                </button>
+                              )
+                            ) : inv.entryId ? (
+                              <span
+                                className="hint"
+                                title="VTE déjà postée à la confirmation Import"
                               >
-                                Valider VTE
-                              </button>
-                            ) : (
-                              <button
-                                type="button"
-                                className="ghost"
-                                disabled={busy}
-                                onClick={() => void onRebuildVte(inv)}
-                              >
-                                Créer VTE
-                              </button>
-                            )}
+                                VTE postée
+                              </span>
+                            ) : null}
                             {inv.kind !== "credit_note" &&
                               inv.paidCents < inv.ttcCents && (
                                 <button
