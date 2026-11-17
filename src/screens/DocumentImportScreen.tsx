@@ -238,7 +238,7 @@ export function DocumentImportScreen({ onNavigate }: Props) {
     if (!canPost) {
       setError(
         meta?.comingSoonHint ||
-          "Précisez le type de document pour proposer un brouillon d’écriture.",
+          "Précisez le type de document pour proposer une écriture.",
       );
       return;
     }
@@ -268,7 +268,7 @@ export function DocumentImportScreen({ onNavigate }: Props) {
       const journal = form.journalCode || suggestedJournal(form);
       if (PREVIEW || !isTauriRuntime()) {
         setStatus(
-          `Aperçu : brouillon ${journal} aurait été créé après confirmation. Passez par le desktop pour persister.`,
+          `Aperçu : écriture ${journal} aurait été postée après confirmation. Passez par le desktop pour persister.`,
         );
         return;
       }
@@ -277,7 +277,7 @@ export function DocumentImportScreen({ onNavigate }: Props) {
         toConfirmInput({ ...form, journalCode: journal }, htCents, vatCents),
       );
       setStatus(
-        `Brouillon d’écriture #${confirmed.entryId} créé (${journal}). Ouvrez Écritures pour relire puis Valider — tant qu’il est brouillon, il n’apparaît pas au Grand livre / TVA / FEC.`,
+        `Écriture #${confirmed.entryId} postée (${journal}) — visible au Grand livre, TVA et FEC. La revue Import était le filet de validation.`,
       );
       await reload();
       setSelectedId(confirmed.id);
@@ -324,10 +324,11 @@ export function DocumentImportScreen({ onNavigate }: Props) {
           <h1>Import documents</h1>
           <p>
             Déposez une facture, un ticket, une note de frais ou un relevé (PDF /
-            image). SasCompta lit le texte en local, propose le type et un brouillon
-            d’écriture (ACH, VTE, OD ou BQ) —{" "}
-            <strong>vous confirmez avant toute écriture</strong>. La pièce jointe
-            reste liée au brouillon.
+            image). SasCompta lit le texte en local et propose une écriture (ACH,
+            VTE, OD ou BQ) —{" "}
+            <strong>vous confirmez avant comptabilisation</strong>. À la
+            confirmation l’écriture est postée (Grand livre / TVA / FEC) ; la pièce
+            jointe reste liée.
           </p>
         </div>
         {onNavigate && (
@@ -436,7 +437,7 @@ export function DocumentImportScreen({ onNavigate }: Props) {
             </p>
           ) : (
             <>
-              <h2>Revue avant brouillon</h2>
+              <h2>Revue avant écriture</h2>
               <p className="muted">
                 Méthode : <strong>{selected.extractionMethod}</strong> · confiance{" "}
                 <strong>{confidenceLabel(selected.confidence)}</strong> (
@@ -756,8 +757,8 @@ export function DocumentImportScreen({ onNavigate }: Props) {
                 <div className="proposed-lines">
                   <h3>Lignes proposées ({journalLabel})</h3>
                   <p className="muted tiny">
-                    Aperçu — le brouillon ne sera créé qu’après confirmation. La
-                    validation (post) reste dans Écritures.
+                    Aperçu — à la confirmation l’écriture est créée et postée
+                    (plus d’étape Valider dans Écritures pour cet import).
                   </p>
                   <table>
                     <thead>
@@ -794,7 +795,7 @@ export function DocumentImportScreen({ onNavigate }: Props) {
                     disabled={busy || !canPost}
                     onClick={() => void onConfirm()}
                   >
-                    Confirmer → brouillon {journalLabel}
+                    Confirmer → poster {journalLabel}
                   </button>
                   <button
                     type="button"
@@ -809,7 +810,7 @@ export function DocumentImportScreen({ onNavigate }: Props) {
 
               {selected.status === "confirmed" && selected.entryId && (
                 <p className="ok">
-                  Lié à l’écriture brouillon #{selected.entryId}
+                  Lié à l’écriture postée #{selected.entryId}
                   {onNavigate && (
                     <>
                       {" "}
@@ -820,6 +821,14 @@ export function DocumentImportScreen({ onNavigate }: Props) {
                         onClick={() => onNavigate("ecritures")}
                       >
                         Ouvrir Écritures
+                      </button>
+                      {" · "}
+                      <button
+                        type="button"
+                        className="linkish"
+                        onClick={() => onNavigate("grand-livre")}
+                      >
+                        Grand livre
                       </button>
                     </>
                   )}
