@@ -80,8 +80,8 @@ export const HELP: Record<string, HelpTopic> = {
   journal: {
     term: "Journal",
     plain:
-      "Le « cahier » dans lequel on range l’écriture : banque (BQ), ventes (VE), achats (HA), opérations diverses (OD)…",
-    example: "Une facture client → journal VE ; un virement bancaire → journal BQ",
+      "Le « cahier » dans lequel on range l’écriture : banque (BQ), ventes (VTE), achats (ACH), opérations diverses (OD)… Le livre journal liste les mouvements validés par journal et par date.",
+    example: "Une facture client → journal VTE ; un virement bancaire → journal BQ",
   },
   piece: {
     term: "Référence pièce",
