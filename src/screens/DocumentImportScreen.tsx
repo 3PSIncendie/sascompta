@@ -277,7 +277,7 @@ export function DocumentImportScreen({ onNavigate }: Props) {
         toConfirmInput({ ...form, journalCode: journal }, htCents, vatCents),
       );
       setStatus(
-        `Brouillon d’écriture #${confirmed.entryId} créé (${journal}). Ouvrez Écritures pour relire puis valider — la validation journal reste manuelle.`,
+        `Brouillon d’écriture #${confirmed.entryId} créé (${journal}). Ouvrez Écritures pour relire puis Valider — tant qu’il est brouillon, il n’apparaît pas au Grand livre / TVA / FEC.`,
       );
       await reload();
       setSelectedId(confirmed.id);

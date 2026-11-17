@@ -20,6 +20,7 @@ export function LedgerScreen() {
   const [accountNumber, setAccountNumber] = useState("");
   const [balance, setBalance] = useState<BalanceReport | null>(null);
   const [movements, setMovements] = useState<LedgerMovement[]>([]);
+  const [draftCount, setDraftCount] = useState(0);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -44,12 +45,14 @@ export function LedgerScreen() {
     setError(null);
     try {
       const f = filter();
-      const [b, m] = await Promise.all([
+      const [b, m, entries] = await Promise.all([
         api.balanceReport(f),
         api.ledgerMovements(f),
+        api.listEntries(),
       ]);
       setBalance(b);
       setMovements(m);
+      setDraftCount(entries.filter((e) => e.status === "draft").length);
     } catch (e) {
       setError(String(e));
     }
@@ -97,7 +100,21 @@ export function LedgerScreen() {
   return (
     <div className="panel">
       <h1>Grand livre</h1>
-      <p>Consultation filtrée et exports CSV / PDF.</p>
+      <p>
+        Consultation des écritures <strong>validées</strong> (balance / mouvements)
+        et exports CSV / PDF. Les brouillons (import confirmé, facture émise, saisie)
+        n’apparaissent qu’après validation dans Écritures.
+      </p>
+
+      {draftCount > 0 && (
+        <aside className="help-callout" style={{ marginBottom: "1rem" }}>
+          <strong>{draftCount} brouillon(s) en attente</strong>
+          <p>
+            Présents dans Écritures mais exclus du grand livre, de la TVA et du
+            FEC tant qu’ils ne sont pas validés (bouton « Valider »).
+          </p>
+        </aside>
+      )}
 
       <div className="tabs">
         <button
@@ -241,19 +258,32 @@ export function LedgerScreen() {
               </tr>
             </thead>
             <tbody>
-              {movements.map((m, i) => (
-                <tr key={`${m.entryId}-${i}`}>
-                  <td>{m.entryDate}</td>
-                  <td>{m.journalCode}</td>
-                  <td>{m.pieceRef}</td>
-                  <td>{m.accountNumber}</td>
-                  <td>{m.lineLabel ?? m.entryLabel}</td>
-                  <td>{m.thirdPartyCode ?? ""}</td>
-                  <td>{m.vatCode ?? ""}</td>
-                  <td className="num">{formatEuros(m.debitCents)}</td>
-                  <td className="num">{formatEuros(m.creditCents)}</td>
+              {movements.length === 0 ? (
+                <tr>
+                  <td colSpan={9} className="muted">
+                    Aucun mouvement validé sur la période
+                    {journalCode ? ` / journal ${journalCode}` : ""}
+                    {accountNumber ? ` / compte ${accountNumber}` : ""}.
+                    {draftCount > 0
+                      ? ` ${draftCount} brouillon(s) existent déjà — validez-les dans Écritures.`
+                      : ""}
+                  </td>
                 </tr>
-              ))}
+              ) : (
+                movements.map((m, i) => (
+                  <tr key={`${m.entryId}-${i}`}>
+                    <td>{m.entryDate}</td>
+                    <td>{m.journalCode}</td>
+                    <td>{m.pieceRef}</td>
+                    <td>{m.accountNumber}</td>
+                    <td>{m.lineLabel ?? m.entryLabel}</td>
+                    <td>{m.thirdPartyCode ?? ""}</td>
+                    <td>{m.vatCode ?? ""}</td>
+                    <td className="num">{formatEuros(m.debitCents)}</td>
+                    <td className="num">{formatEuros(m.creditCents)}</td>
+                  </tr>
+                ))
+              )}
             </tbody>
           </table>
         </div>
