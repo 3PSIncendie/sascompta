@@ -2534,6 +2534,9 @@ fn soft_lettre_for_invoice(inv: &Invoice) -> String {
 }
 
 fn apply_soft_lettre(conn: &Connection, entry_id: i64, lettre: &str, date: &str) -> DbResult<()> {
+    // Lettrage soft mute des champs FEC (EcritureLettrage / DateLettrage) :
+    // interdit sur exercice clôturé, comme toute autre mutation d'écriture.
+    super::closing::assert_entry_fy_writable(conn, entry_id)?;
     conn.execute(
         "UPDATE entry SET ecriture_lettre = ?1, ecriture_date_lettre = ?2 WHERE id = ?3",
         params![lettre, date, entry_id],
@@ -2604,7 +2607,10 @@ pub fn list_payments(conn: &Connection, invoice_id: Option<i64>) -> DbResult<Vec
     Ok(rows.filter_map(|r| r.ok()).collect())
 }
 
-/// Enregistre un encaissement : paiement + brouillon BQ (512/411) + lettrage soft.
+/// Enregistre un encaissement : paiement + écriture BQ **postée** (512/411) + lettrage soft.
+///
+/// La BQ est validée immédiatement pour aligner le statut commercial `paid` /
+/// `partially_paid` avec le Grand livre / FEC (pas d'écart « payé mais brouillon banque »).
 pub fn record_payment(conn: &Connection, input: &CreatePaymentInput) -> DbResult<Payment> {
     let inv = get_invoice(conn, input.invoice_id)?;
     if matches!(inv.status.as_str(), "draft" | "cancelled") {
@@ -2663,14 +2669,23 @@ pub fn record_payment(conn: &Connection, input: &CreatePaymentInput) -> DbResult
         label,
         lines,
     };
-    let entry = ledger::create_draft(conn, &entry_input)?;
+
+    let tx = conn.unchecked_transaction()?;
+    let draft = ledger::create_draft(&tx, &entry_input)?;
+    let entry = match ledger::post_entry(&tx, draft.id) {
+        Ok(e) => e,
+        Err(e) => {
+            let _ = ledger::delete_draft(&tx, draft.id);
+            return Err(e);
+        }
+    };
     let lettre = soft_lettre_for_invoice(&inv);
-    apply_soft_lettre(conn, entry.id, &lettre, &input.paid_on)?;
-    // Lettrage soft sur l'écriture VTE liée si présente (même code)
+    apply_soft_lettre(&tx, entry.id, &lettre, &input.paid_on)?;
+    // Lettrage soft sur l'écriture VTE liée si présente (même code) — erreur propagée.
     if let Some(vte_id) = inv.entry_id {
-        let _ = apply_soft_lettre(conn, vte_id, &lettre, &input.paid_on);
+        apply_soft_lettre(&tx, vte_id, &lettre, &input.paid_on)?;
     }
-    conn.execute(
+    tx.execute(
         "INSERT INTO payment(invoice_id, paid_on, amount_cents, method, bank_ref, entry_id)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
         params![
@@ -2682,8 +2697,9 @@ pub fn record_payment(conn: &Connection, input: &CreatePaymentInput) -> DbResult
             entry.id,
         ],
     )?;
-    let payment_id = conn.last_insert_rowid();
-    refresh_invoice_payment_status(conn, input.invoice_id)?;
+    let payment_id = tx.last_insert_rowid();
+    refresh_invoice_payment_status(&tx, input.invoice_id)?;
+    tx.commit()?;
     list_payments(conn, Some(input.invoice_id))?
         .into_iter()
         .find(|p| p.id == payment_id)
@@ -3045,14 +3061,13 @@ mod tests {
         assert_eq!(vte_lettre, pay.lettre.unwrap());
 
         let bq_id = pay.entry_id.unwrap();
-        let journal: String = conn
-            .query_row(
-                "SELECT j.code FROM entry e JOIN journal j ON j.id = e.journal_id WHERE e.id = ?1",
-                params![bq_id],
-                |r| r.get(0),
-            )
-            .unwrap();
-        assert_eq!(journal, "BQ");
+        let bq = ledger::get_entry(&conn, bq_id).unwrap();
+        assert_eq!(bq.journal_code, "BQ");
+        assert_eq!(
+            bq.status, "posted",
+            "encaissement doit poster la BQ pour aligner paid et Grand livre"
+        );
+        assert!(bq.ecriture_num.as_deref().unwrap_or("").starts_with("BQ-"));
 
         let rest = get_invoice(&conn, issued.id).unwrap();
         let _ = record_payment(

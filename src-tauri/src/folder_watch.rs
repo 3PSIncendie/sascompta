@@ -1,8 +1,10 @@
 //! Surveillance de dossiers PC → file Import docs (même revue que PDF / compagnon).
 //!
 //! Défaut : `Documents/SasCompta-import`. Plusieurs chemins possibles (liste
-//! persistée). Détecte PDF/images, copie dans les pièces workspace, enfile
-//! `pending_review`. Idempotent via empreinte SHA-256.
+//! persistée). Détecte PDF/images **récursivement** (sous-dossiers inclus),
+//! copie dans les pièces workspace, enfile `pending_review`. Idempotent via
+//! empreinte SHA-256. Ignore les dossiers parasites courants (`.git`,
+//! `node_modules`, `__MACOSX`, `.DS_Store`).
 
 use crate::db::{self, AppState};
 use notify::{Config, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
@@ -24,6 +26,9 @@ const STABLE_WAIT: Duration = Duration::from_millis(400);
 const PREFS_FILE: &str = "folder-watch.json";
 
 const WATCH_EXTS: &[&str] = &["pdf", "png", "jpg", "jpeg", "webp", "tif", "tiff"];
+
+/// Dossiers à ne pas parcourir (scan + poll récursifs).
+const SKIP_DIR_NAMES: &[&str] = &[".git", "node_modules", "__MACOSX", ".DS_Store"];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -326,19 +331,41 @@ pub fn ingest_watched_file(
     Ok((doc, true))
 }
 
+fn should_skip_dir_name(name: &str) -> bool {
+    SKIP_DIR_NAMES
+        .iter()
+        .any(|skip| skip.eq_ignore_ascii_case(name))
+}
+
+/// Liste récursive des PDF/images sous `dir` (sous-dossiers inclus).
+/// Ignore les dossiers parasites (`SKIP_DIR_NAMES`).
 fn scan_dir(dir: &Path) -> Vec<PathBuf> {
-    let Ok(rd) = fs::read_dir(dir) else {
-        return Vec::new();
-    };
     let mut out = Vec::new();
+    scan_dir_into(dir, &mut out);
+    out.sort();
+    out
+}
+
+fn scan_dir_into(dir: &Path, out: &mut Vec<PathBuf>) {
+    let Ok(rd) = fs::read_dir(dir) else {
+        return;
+    };
     for entry in rd.flatten() {
         let p = entry.path();
+        let is_dir = entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false);
+        if is_dir {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if should_skip_dir_name(&name) {
+                continue;
+            }
+            scan_dir_into(&p, out);
+            continue;
+        }
         if is_watchable(&p) {
             out.push(p);
         }
     }
-    out.sort();
-    out
 }
 
 fn scan_dirs(dirs: &[PathBuf]) -> Vec<PathBuf> {
@@ -347,6 +374,7 @@ fn scan_dirs(dirs: &[PathBuf]) -> Vec<PathBuf> {
         out.extend(scan_dir(d));
     }
     out.sort();
+    out.dedup();
     out
 }
 
@@ -419,7 +447,7 @@ fn spawn_watcher(
         };
 
         for watch_path in &watch_paths {
-            if let Err(e) = watcher.watch(watch_path, RecursiveMode::NonRecursive) {
+            if let Err(e) = watcher.watch(watch_path, RecursiveMode::Recursive) {
                 if let Ok(mut cfg) = config.lock() {
                     cfg.last_error = Some(format!(
                         "Surveillance ({}): {e}",
@@ -836,5 +864,66 @@ mod tests {
         assert!(!s.running);
         assert_eq!(s.paths.len(), 2);
         assert_eq!(s.path.as_deref(), Some("/tmp/w1"));
+    }
+
+    #[test]
+    fn scan_dir_finds_nested_pdfs() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        let nested = root.join("2024").join("mars");
+        fs::create_dir_all(&nested).unwrap();
+        write_tiny_pdf(&root.join("root.pdf"), "root");
+        write_tiny_pdf(&nested.join("nested.pdf"), "nested");
+        fs::write(root.join("ignore.txt"), "nope").unwrap();
+
+        let found = scan_dir(root);
+        assert_eq!(found.len(), 2);
+        assert!(found.iter().any(|p| p.ends_with("root.pdf")));
+        assert!(found.iter().any(|p| p.ends_with("nested.pdf")));
+    }
+
+    #[test]
+    fn scan_dir_skips_junk_directories() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        for junk in [".git", "node_modules", "__MACOSX", ".DS_Store"] {
+            let junk_dir = root.join(junk);
+            fs::create_dir_all(&junk_dir).unwrap();
+            write_tiny_pdf(&junk_dir.join("hidden.pdf"), junk);
+        }
+        let keep = root.join("factures").join("fournisseurs");
+        fs::create_dir_all(&keep).unwrap();
+        write_tiny_pdf(&keep.join("ok.pdf"), "keep");
+
+        let found = scan_dir(root);
+        assert_eq!(found.len(), 1);
+        assert!(found[0].ends_with("ok.pdf"));
+    }
+
+    #[test]
+    fn scan_dirs_covers_each_root_recursively() {
+        let dir = tempdir().unwrap();
+        let a = dir.path().join("a");
+        let b = dir.path().join("b").join("deep");
+        fs::create_dir_all(&a).unwrap();
+        fs::create_dir_all(&b).unwrap();
+        write_tiny_pdf(&a.join("a.pdf"), "a");
+        write_tiny_pdf(&b.join("b.pdf"), "b");
+
+        let found = scan_dirs(&[a.clone(), dir.path().join("b")]);
+        assert_eq!(found.len(), 2);
+        assert!(found.iter().any(|p| p.ends_with("a.pdf")));
+        assert!(found.iter().any(|p| p.ends_with("b.pdf")));
+    }
+
+    #[test]
+    fn should_skip_known_junk_names() {
+        assert!(should_skip_dir_name(".git"));
+        assert!(should_skip_dir_name("node_modules"));
+        assert!(should_skip_dir_name("__MACOSX"));
+        assert!(should_skip_dir_name(".DS_Store"));
+        assert!(should_skip_dir_name("Node_Modules"));
+        assert!(!should_skip_dir_name("factures"));
+        assert!(!should_skip_dir_name("2024"));
     }
 }

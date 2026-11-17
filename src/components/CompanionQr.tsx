@@ -28,7 +28,7 @@ export function CompanionQr({ payload, backendSvg = null }: Props) {
       errorCorrectionLevel: "M",
       margin: 2,
       width: 220,
-      color: { dark: "#1a3d2e", light: "#ffffff" },
+      color: { dark: "#0a6e3c", light: "#ffffff" },
     })
       .then((url) => {
         if (!cancelled) setDataUrl(url);
