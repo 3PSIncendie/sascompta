@@ -2166,13 +2166,32 @@ button.linkish {
   flex-direction: column;
 }
 
+.billing-doc-head-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.85rem 1.1rem;
+  margin: 0 0 0.85rem;
+}
+
 .billing-doc-title {
   font-family: Helvetica, Arial, sans-serif;
   font-size: 1.65rem;
   font-weight: 700;
   letter-spacing: -0.02em;
-  margin: 0 0 0.85rem;
+  margin: 0;
   color: var(--doc-ink);
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* ~24–28 mm on A4-ish preview width — keeps parties/header balanced */
+.billing-doc-logo {
+  width: 3.55rem;
+  height: auto;
+  max-height: 3.55rem;
+  object-fit: contain;
+  flex: 0 0 auto;
 }
 
 .billing-doc-meta {

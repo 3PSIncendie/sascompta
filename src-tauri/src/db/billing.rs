@@ -8,8 +8,13 @@ use printpdf::path::PaintMode;
 use printpdf::*;
 use rusqlite::{params, Connection, OptionalExtension};
 use std::fs::File;
-use std::io::BufWriter;
+use std::io::{BufWriter, Cursor};
 use std::path::Path;
+
+/// Logo 3PSI embarqué (PNG) — rendu PDF offline (Tauri desktop).
+const COMMERCIAL_LOGO_PNG: &[u8] = include_bytes!("../../../src/assets/brand/3psi-logo.png");
+/// Largeur/hauteur logo sur A4 (~24 mm) — ne compacte pas le bloc client/émetteur.
+const COMMERCIAL_LOGO_MM: f32 = 24.0;
 
 pub const SCHEMA_BILLING_VERSION: i32 = 10;
 
@@ -1800,6 +1805,33 @@ fn render_commercial_pdf(doc_title: &str, spec: &CommercialPdf<'_>, path: &Path)
     // Marge haute type référence (~24 mm sous le bord)
     let mut y = 273.0_f32;
 
+    let draw_logo = |layer: &PdfLayerReference| {
+        let Ok(decoder) =
+            image_crate::codecs::png::PngDecoder::new(Cursor::new(COMMERCIAL_LOGO_PNG))
+        else {
+            return;
+        };
+        let Ok(image) = Image::try_from(decoder) else {
+            return;
+        };
+        let px_w = image.image.width.0.max(1) as f32;
+        // dpi tel que largeur image = COMMERCIAL_LOGO_MM.
+        let dpi = px_w * 25.4 / COMMERCIAL_LOGO_MM;
+        // Coin haut-droit : translate = coin bas-gauche de l'image (origine PDF).
+        let logo_top = 285.0_f32;
+        let translate_x = content_r - COMMERCIAL_LOGO_MM;
+        let translate_y = logo_top - COMMERCIAL_LOGO_MM;
+        image.add_to_layer(
+            layer.clone(),
+            ImageTransform {
+                translate_x: Some(Mm(translate_x)),
+                translate_y: Some(Mm(translate_y)),
+                dpi: Some(dpi),
+                ..Default::default()
+            },
+        );
+    };
+
     let draw_table_header = |layer: &PdfLayerReference, y_top: f32, header_h: f32| {
         let header_bot = y_top - header_h;
         // Cellules distinctes comme le modèle Qonto/3PSI
@@ -1869,7 +1901,8 @@ fn render_commercial_pdf(doc_title: &str, spec: &CommercialPdf<'_>, path: &Path)
         Ok(())
     };
 
-    // ——— En-tête titre + méta ———
+    // ——— En-tête titre + logo haut-droite + méta ———
+    draw_logo(&layer);
     layer.set_fill_color(ink_color());
     layer.use_text(ascii_safe(spec.title), 24.0, Mm(margin_l), Mm(y), &font_bold);
     y -= 16.2;

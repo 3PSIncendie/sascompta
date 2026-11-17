@@ -1,4 +1,5 @@
 import type { BillingDocumentPreviewModel } from "../modules/billing/documentPreview";
+import logo3psi from "../assets/brand/3psi-logo.png";
 
 export type BillingDocumentPreviewProps = {
   model: BillingDocumentPreviewModel;
@@ -22,7 +23,16 @@ export function BillingDocumentPreview({
       <div className="billing-doc-sheet-scroll">
         <article className="billing-doc-sheet" aria-live="polite">
           <header className="billing-doc-head">
-            <h2 className="billing-doc-title">{model.title}</h2>
+            <div className="billing-doc-head-row">
+              <h2 className="billing-doc-title">{model.title}</h2>
+              <img
+                className="billing-doc-logo"
+                src={logo3psi}
+                alt="3PSI"
+                width={280}
+                height={280}
+              />
+            </div>
             <dl className="billing-doc-meta">
               {model.meta.map((row) => (
                 <div key={row.label} className="billing-doc-meta-row">
