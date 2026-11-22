@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use thiserror::Error;
 
-pub const SCHEMA_VERSION: i32 = 17;
+pub const SCHEMA_VERSION: i32 = 18;
 pub const DEMO_PASSWORD: &str = "SecretPass1";
 
 #[derive(Debug, Error)]
@@ -187,6 +187,7 @@ pub fn migrate(conn: &Connection) -> DbResult<()> {
     closing::migrate_closing(conn)?;
     migrate_organization_siret(conn)?;
     migrate_organization_contact_bank(conn)?;
+    migrate_organization_invoice_billing_notes(conn)?;
     billing::migrate_billing(conn)?;
     hr::migrate_hr(conn)?;
     einvoice::migrate_einvoice(conn)?;
@@ -215,6 +216,7 @@ pub fn migrate(conn: &Connection) -> DbResult<()> {
     // v15 = facture client importée → fiche Factures (Encaisser) + liens import↔invoice
     // v16 = backfill Factures pour customer_invoice confirmés avant #52 (sans invoice_id)
     // v17 = organization.email / iban / bic (PDF devis/facture calque 3PSI)
+    // v18 = note permanente conditions de facturation (organization.invoice_billing_notes)
 
     // Idempotent : à chaque ouverture, recrée les fiches manquantes (no-op si déjà liées).
     documents::backfill_imported_customer_invoices(conn)?;
@@ -256,6 +258,21 @@ fn migrate_organization_contact_bank(conn: &Connection) -> DbResult<()> {
         if !cols.iter().any(|c| c == col) {
             conn.execute(ddl, [])?;
         }
+    }
+    Ok(())
+}
+
+fn migrate_organization_invoice_billing_notes(conn: &Connection) -> DbResult<()> {
+    let mut stmt = conn.prepare("PRAGMA table_info(organization)")?;
+    let cols: Vec<String> = stmt
+        .query_map([], |r| r.get::<_, String>(1))?
+        .filter_map(|r| r.ok())
+        .collect();
+    if !cols.iter().any(|c| c == "invoice_billing_notes") {
+        conn.execute(
+            "ALTER TABLE organization ADD COLUMN invoice_billing_notes TEXT",
+            [],
+        )?;
     }
     Ok(())
 }
@@ -433,18 +450,35 @@ fn map_organization(r: &rusqlite::Row<'_>) -> rusqlite::Result<Organization> {
         email: r.get(8)?,
         iban: r.get(9)?,
         bic: r.get(10)?,
+        invoice_billing_notes: r.get(11)?,
     })
 }
 
 pub fn load_organization(conn: &Connection) -> DbResult<Organization> {
     conn.query_row(
         "SELECT id, name, siren, siret, legal_form, vat_regime, address, capital_cents,
-                email, iban, bic
+                email, iban, bic, invoice_billing_notes
          FROM organization WHERE id = 1",
         [],
         map_organization,
     )
     .map_err(|e| e.into())
+}
+
+/// Met à jour uniquement la note permanente « conditions de facturation ».
+pub fn set_invoice_billing_notes(
+    conn: &Connection,
+    notes: Option<String>,
+) -> DbResult<Organization> {
+    let cleaned = notes
+        .as_ref()
+        .map(|n| n.trim().to_string())
+        .filter(|n| !n.is_empty());
+    conn.execute(
+        "UPDATE organization SET invoice_billing_notes = ?1 WHERE id = 1",
+        params![cleaned],
+    )?;
+    load_organization(conn)
 }
 
 pub fn load_workspace_info(conn: &Connection, path: &Path) -> DbResult<WorkspaceInfo> {
@@ -761,7 +795,7 @@ mod tests {
         assert_eq!(updated.organization.capital_cents, 10_000_00);
         assert_eq!(updated.profile.display_name, "Marie");
         assert!(updated.organization.address.as_ref().unwrap().contains("Lilas"));
-        assert_eq!(
+assert_eq!(
             updated.organization.email.as_deref(),
             Some("contact@atelier-lumiere.fr")
         );
@@ -770,6 +804,19 @@ mod tests {
             Some("FR7616958000014398156414622")
         );
         assert_eq!(updated.organization.bic.as_deref(), Some("QNTOFRP1XXX"));
+        assert!(updated.organization.invoice_billing_notes.is_none());
+
+        let with_notes = set_invoice_billing_notes(
+            &conn,
+            Some("  Paiement à 30 jours.  ".into()),
+        )
+        .unwrap();
+        assert_eq!(
+            with_notes.invoice_billing_notes.as_deref(),
+            Some("Paiement à 30 jours.")
+        );
+        let cleared = set_invoice_billing_notes(&conn, Some("   ".into())).unwrap();
+        assert!(cleared.invoice_billing_notes.is_none());
 
         let bad = update_organization(
             &conn,

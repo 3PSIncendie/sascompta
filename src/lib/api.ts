@@ -35,6 +35,7 @@ import type {
   FixedAsset,
   GenerateDepreciationResult,
   Invoice,
+  Organization,
   Journal,
   LeaveBalance,
   LeaveRequest,
@@ -73,6 +74,8 @@ export const api = {
   getWorkspaceInfo: () => invoke<WorkspaceInfo>("get_workspace_info"),
   updateOrganization: (input: UpdateOrganizationInput) =>
     invoke<WorkspaceInfo>("update_organization", { input }),
+  setInvoiceBillingNotes: (notes: string | null) =>
+    invoke<Organization>("set_invoice_billing_notes", { notes }),
   closeWorkspace: () => invoke<void>("close_workspace"),
 
   listAccounts: () => invoke<Account[]>("list_accounts"),

@@ -25,6 +25,7 @@ const org: Organization = {
   email: "contact@demo-sas.fr",
   iban: "FR7616958000014398156414622",
   bic: "QNTOFRP1XXX",
+  invoiceBillingNotes: null,
 };
 
 const client: ThirdParty = {

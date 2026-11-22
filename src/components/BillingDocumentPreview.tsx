@@ -118,12 +118,18 @@ export function BillingDocumentPreview({
             </div>
           </div>
 
-          {model.notes || model.legalMentions ? (
+          {model.notes ? (
+            <div className="billing-doc-note-box">
+              <div className="billing-doc-note-box-title">
+                Conditions de facturation
+              </div>
+              <p>{model.notes}</p>
+            </div>
+          ) : null}
+
+          {model.legalMentions ? (
             <div className="billing-doc-notes">
-              {model.notes ? <p>{model.notes}</p> : null}
-              {model.legalMentions ? (
-                <p className="billing-doc-legal">{model.legalMentions}</p>
-              ) : null}
+              <p className="billing-doc-legal">{model.legalMentions}</p>
             </div>
           ) : null}
 

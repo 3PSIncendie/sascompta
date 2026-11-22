@@ -27,6 +27,12 @@ import {
   statusLabel,
   summarizeInvoiceDraft,
 } from "../modules/billing/invoices";
+import {
+  INVOICE_NOTES_MODE_OPTIONS,
+  initialInvoiceNotesMode,
+  permanentInvoiceNotes,
+  type InvoiceNotesMode,
+} from "../modules/billing/invoiceNotes";
 import { previewNumber } from "../modules/billing/sequences";
 import { PAYMENT_METHODS } from "../modules/billing/payments";
 import type {
@@ -51,9 +57,11 @@ const PREVIEW_EDIT =
 
 export function InvoicesScreen({
   organization,
+  onOrganizationChange,
   onNavigate,
 }: {
   organization: Organization;
+  onOrganizationChange?: (organization: Organization) => void;
   onNavigate?: (id: NavId) => void;
 }) {
   const [invoices, setInvoices] = useState<Invoice[]>([]);
@@ -73,6 +81,7 @@ export function InvoicesScreen({
   const [serviceDate, setServiceDate] = useState("");
   const [vatMode, setVatMode] = useState<BillingVatMode>("normale");
   const [notes, setNotes] = useState("");
+  const [notesMode, setNotesMode] = useState<InvoiceNotesMode>("permanent");
   const [purchaseOrderNumber, setPurchaseOrderNumber] = useState("");
   const [lines, setLines] = useState<DraftLine[]>([
     emptyDraftLine(2000, "T20C"),
@@ -182,7 +191,10 @@ export function InvoicesScreen({
     setThirdPartyId(customers[0]!.id);
     setIssueDate("2026-04-01");
     setDueDate("2026-04-30");
-    setNotes("Prestation démonstration");
+    setNotes(
+      permanentInvoiceNotes(organization) || "Prestation démonstration",
+    );
+    setNotesMode("permanent");
     const line = emptyDraftLine(2000, "T20C");
     line.label = "Prestation";
     line.description = "Intervention sur site";
@@ -191,9 +203,10 @@ export function InvoicesScreen({
     line.unitPriceEuros = "1500,00";
     line.accountNumber = defaultAccountForKind(kind);
     setLines([line]);
-  }, [customers, thirdPartyId, kind]);
+  }, [customers, thirdPartyId, kind, organization]);
 
   function startCreate(k: InvoiceKind = "standard") {
+    const permanent = permanentInvoiceNotes(organization);
     setEditingId(null);
     setKind(k);
     setThirdPartyId(customers[0]?.id ?? 0);
@@ -202,7 +215,8 @@ export function InvoicesScreen({
     setDueDate("");
     setServiceDate("");
     setVatMode("normale");
-    setNotes("");
+    setNotes(permanent);
+    setNotesMode("permanent");
     setPurchaseOrderNumber("");
     setLines([
       {
@@ -220,6 +234,7 @@ export function InvoicesScreen({
       setError("Seuls les brouillons sont éditables.");
       return;
     }
+    const permanent = permanentInvoiceNotes(organization);
     setEditingId(inv.id);
     setKind((inv.kind as InvoiceKind) || "standard");
     setThirdPartyId(inv.thirdPartyId);
@@ -229,6 +244,7 @@ export function InvoicesScreen({
     setServiceDate(inv.serviceDate ?? "");
     setVatMode((inv.vatMode as BillingVatMode) || "normale");
     setNotes(inv.notes ?? "");
+    setNotesMode(initialInvoiceNotesMode(inv.notes, permanent));
     setPurchaseOrderNumber(inv.purchaseOrderNumber ?? "");
     setLines(
       invoiceToDraftLines(inv).length
@@ -238,6 +254,22 @@ export function InvoicesScreen({
     setMode("edit");
     setStatus(null);
     setError(null);
+  }
+
+  async function persistPermanentNotesIfNeeded() {
+    if (notesMode !== "permanent") return;
+    const next = notes.trim() || null;
+    const current = permanentInvoiceNotes(organization) || null;
+    if (next === current) return;
+    if (PREVIEW || !isTauriRuntime()) {
+      onOrganizationChange?.({
+        ...organization,
+        invoiceBillingNotes: next,
+      });
+      return;
+    }
+    const updated = await api.setInvoiceBillingNotes(next);
+    onOrganizationChange?.(updated);
   }
 
   async function onSave(e: React.FormEvent) {
@@ -264,6 +296,12 @@ export function InvoicesScreen({
       return;
     }
     if (PREVIEW || !isTauriRuntime()) {
+      try {
+        await persistPermanentNotesIfNeeded();
+      } catch (err) {
+        setError(String(err));
+        return;
+      }
       const fake: Invoice = {
         id: editingId ?? Date.now(),
         number: null,
@@ -290,7 +328,7 @@ export function InvoicesScreen({
         entryId: null,
         pdfPath: null,
         facturxPath: null,
-        notes: notes || null,
+        notes: notes.trim() || null,
         legalMentions: input.legalMentions ?? null,
         purchaseOrderNumber: purchaseOrderNumber.trim() || null,
         createdAt: new Date().toISOString(),
@@ -321,6 +359,7 @@ export function InvoicesScreen({
     setBusy(true);
     setError(null);
     try {
+      await persistPermanentNotesIfNeeded();
       const saved = editingId
         ? await api.updateInvoice(editingId, input)
         : await api.createInvoice(input);
@@ -781,15 +820,6 @@ export function InvoicesScreen({
               defaultAccount={defaultAccountForKind(kind)}
             />
 
-            <label className="field">
-              Notes
-              <textarea
-                rows={2}
-                value={notes}
-                onChange={(e) => setNotes(e.target.value)}
-              />
-            </label>
-
             <div className="summary-strip">
               <span>
                 HT <strong>{formatEuros(totals.htCents)}</strong>
@@ -800,6 +830,46 @@ export function InvoicesScreen({
               <span>
                 TTC <strong>{formatEuros(totals.ttcCents)}</strong>
               </span>
+            </div>
+
+            <div className="invoice-notes-panel">
+              <div className="invoice-notes-panel-head">
+                <strong>Conditions de facturation</strong>
+                <span className="muted small">
+                  Cadre sous le total sur l’aperçu / PDF
+                </span>
+              </div>
+              <div
+                className="invoice-notes-mode"
+                role="radiogroup"
+                aria-label="Portée de la note"
+              >
+                {INVOICE_NOTES_MODE_OPTIONS.map((opt) => (
+                  <label key={opt.id}>
+                    <input
+                      type="radio"
+                      name="invoice-notes-mode"
+                      value={opt.id}
+                      checked={notesMode === opt.id}
+                      onChange={() => setNotesMode(opt.id)}
+                    />
+                    {opt.label}
+                  </label>
+                ))}
+              </div>
+              <p className="muted invoice-notes-hint">
+                {
+                  INVOICE_NOTES_MODE_OPTIONS.find((o) => o.id === notesMode)
+                    ?.hint
+                }
+              </p>
+              <textarea
+                rows={4}
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
+                placeholder="Ex. Paiement à 30 jours nets…"
+                aria-label="Texte des conditions de facturation"
+              />
             </div>
 
             <div className="btn-row">

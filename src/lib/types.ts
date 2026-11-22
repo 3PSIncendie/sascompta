@@ -13,6 +13,8 @@ export interface Organization {
   iban?: string | null;
   /** BIC société (bandeau paiement facture). */
   bic?: string | null;
+  /** Note permanente « conditions de facturation » (préremplit les nouvelles factures). */
+  invoiceBillingNotes?: string | null;
 }
 
 export interface UpdateOrganizationInput {
