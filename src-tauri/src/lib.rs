@@ -115,6 +115,7 @@ pub fn run() {
             commands::build_invoice_entry_draft,
             commands::list_payments,
             commands::record_payment,
+            commands::record_factoring,
             commands::list_reminders,
             commands::generate_due_reminders,
             commands::mark_reminder_sent,

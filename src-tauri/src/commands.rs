@@ -977,6 +977,14 @@ pub fn record_payment(
 }
 
 #[tauri::command]
+pub fn record_factoring(
+    state: State<'_, AppState>,
+    input: CreateFactoringInput,
+) -> Result<Payment, String> {
+    db::with_conn(&state, |c| db::billing::record_factoring(c, &input)).map_err(map_err)
+}
+
+#[tauri::command]
 pub fn list_reminders(state: State<'_, AppState>) -> Result<Vec<Reminder>, String> {
     db::with_conn(&state, db::billing::list_reminders).map_err(map_err)
 }

@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use thiserror::Error;
 
-pub const SCHEMA_VERSION: i32 = 21;
+pub const SCHEMA_VERSION: i32 = 22;
 pub const DEMO_PASSWORD: &str = "SecretPass1";
 
 #[derive(Debug, Error)]
@@ -220,6 +220,7 @@ pub fn migrate(conn: &Connection) -> DbResult<()> {
     // v19 = devis client importé → fiche Commercial / Devis + liens import↔quote
     // v20 = commandes clients (Commercial → Commandes) + import customer_order
     // v21 = réouverture de tous les exercices (import 2026 / stance « tous ouverts »)
+    // v22 = affacturage factures (payment.fee_cents / fee_account / cession_entry_id)
 
     // Idempotent : à chaque ouverture, recrée les fiches manquantes (no-op si déjà liées).
     documents::backfill_imported_customer_invoices(conn)?;

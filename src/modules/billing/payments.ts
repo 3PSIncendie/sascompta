@@ -8,8 +8,29 @@ export const PAYMENT_METHODS = [
   { id: "autre", label: "Autre" },
 ] as const;
 
+const METHOD_LABELS: Record<string, string> = {
+  virement: "Virement",
+  cheque: "Chèque",
+  cb: "Carte bancaire",
+  especes: "Espèces",
+  autre: "Autre",
+  affacturage: "Affacturage",
+};
+
+/** Compte de charge par défaut pour la commission factor (PCG). */
+export const DEFAULT_FACTORING_FEE_ACCOUNT = "622";
+
 export function methodLabel(method: string): string {
-  return PAYMENT_METHODS.find((m) => m.id === method)?.label ?? method;
+  return METHOD_LABELS[method] ?? method;
+}
+
+/** Net reçu banque = montant cédé − commission (centimes). */
+export function factoringNetCents(amountCents: number, feeCents: number): number {
+  return Math.max(0, amountCents - feeCents);
+}
+
+export function isFactoringMethod(method: string): boolean {
+  return method === "affacturage";
 }
 
 /** Réf. banque / n° de virement — toujours optionnelle (vide → null). */
@@ -39,6 +60,9 @@ export function previewPayments(): Payment[] {
       bankRef: "VIR-GAMMA-10",
       entryId: 55,
       lettre: "FACT20260001",
+      feeCents: 0,
+      feeAccount: null,
+      cessionEntryId: null,
     },
   ];
 }

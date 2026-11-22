@@ -43,7 +43,7 @@ fn commercial_logo_image() -> Option<Image> {
     Some(image)
 }
 
-pub const SCHEMA_BILLING_VERSION: i32 = 12;
+pub const SCHEMA_BILLING_VERSION: i32 = 13;
 
 /// Séries documentaires configurables (compteur annuel calendaire).
 /// Les factures (standard / acompte / solde / avoir) partagent la série FACT
@@ -186,7 +186,10 @@ pub fn migrate_billing(conn: &Connection) -> DbResult<()> {
             amount_cents INTEGER NOT NULL CHECK (amount_cents > 0),
             method TEXT NOT NULL DEFAULT 'virement',
             bank_ref TEXT,
-            entry_id INTEGER REFERENCES entry(id)
+            entry_id INTEGER REFERENCES entry(id),
+            fee_cents INTEGER NOT NULL DEFAULT 0,
+            fee_account TEXT,
+            cession_entry_id INTEGER REFERENCES entry(id)
         );
 
         CREATE TABLE IF NOT EXISTS reminder (
@@ -208,6 +211,29 @@ pub fn migrate_billing(conn: &Connection) -> DbResult<()> {
     enrich_quote_import_link(conn)?;
     // v20 — commandes clients (Commercial → Commandes).
     migrate_customer_orders(conn)?;
+    // v22 — affacturage : commission + écriture de cession sur payment.
+    enrich_payment_factoring(conn)?;
+    Ok(())
+}
+
+/// v22 — colonnes affacturage sur `payment` (workspaces antérieurs inclus).
+fn enrich_payment_factoring(conn: &Connection) -> DbResult<()> {
+    let cols = table_columns(conn, "payment")?;
+    if !cols.iter().any(|c| c == "fee_cents") {
+        conn.execute(
+            "ALTER TABLE payment ADD COLUMN fee_cents INTEGER NOT NULL DEFAULT 0",
+            [],
+        )?;
+    }
+    if !cols.iter().any(|c| c == "fee_account") {
+        conn.execute("ALTER TABLE payment ADD COLUMN fee_account TEXT", [])?;
+    }
+    if !cols.iter().any(|c| c == "cession_entry_id") {
+        conn.execute(
+            "ALTER TABLE payment ADD COLUMN cession_entry_id INTEGER REFERENCES entry(id)",
+            [],
+        )?;
+    }
     Ok(())
 }
 
@@ -3535,7 +3561,8 @@ pub fn list_payments(conn: &Connection, invoice_id: Option<i64>) -> DbResult<Vec
     let mut sql = String::from(
         "SELECT p.id, p.invoice_id, i.number, tp.code, tp.name, p.paid_on, p.amount_cents,
                 p.method, p.bank_ref, p.entry_id,
-                (SELECT e.ecriture_lettre FROM entry e WHERE e.id = p.entry_id)
+                (SELECT e.ecriture_lettre FROM entry e WHERE e.id = p.entry_id),
+                COALESCE(p.fee_cents, 0), p.fee_account, p.cession_entry_id
          FROM payment p
          JOIN invoice i ON i.id = p.invoice_id
          JOIN third_party tp ON tp.id = i.third_party_id",
@@ -3558,6 +3585,9 @@ pub fn list_payments(conn: &Connection, invoice_id: Option<i64>) -> DbResult<Vec
             bank_ref: r.get(8)?,
             entry_id: r.get(9)?,
             lettre: r.get(10)?,
+            fee_cents: r.get(11)?,
+            fee_account: r.get(12)?,
+            cession_entry_id: r.get(13)?,
         })
     };
     let rows = if let Some(id) = invoice_id {
@@ -3660,8 +3690,9 @@ pub fn record_payment(conn: &Connection, input: &CreatePaymentInput) -> DbResult
         apply_soft_lettre(&tx, vte_id, &lettre, &input.paid_on)?;
     }
     tx.execute(
-        "INSERT INTO payment(invoice_id, paid_on, amount_cents, method, bank_ref, entry_id)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        "INSERT INTO payment(invoice_id, paid_on, amount_cents, method, bank_ref, entry_id,
+                             fee_cents, fee_account, cession_entry_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, NULL, NULL)",
         params![
             input.invoice_id,
             input.paid_on,
@@ -3678,6 +3709,174 @@ pub fn record_payment(conn: &Connection, input: &CreatePaymentInput) -> DbResult
         .into_iter()
         .find(|p| p.id == payment_id)
         .ok_or_else(|| "Paiement introuvable après création".into())
+}
+
+fn default_factoring_fee_account(raw: &Option<String>) -> String {
+    raw.as_ref()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "622".into())
+}
+
+fn post_balanced_entry(
+    conn: &Connection,
+    input: &CreateEntryInput,
+) -> DbResult<crate::models::Entry> {
+    let draft = ledger::create_draft(conn, input)?;
+    match ledger::post_entry(conn, draft.id) {
+        Ok(e) => Ok(e),
+        Err(e) => {
+            let _ = ledger::delete_draft(conn, draft.id);
+            Err(e)
+        }
+    }
+}
+
+/// Affacturage : OD cession 467/411 + BQ règlement 512/frais/467 (postées) + lettrage soft.
+///
+/// `amount_cents` = part cédée (solde client) ; `fee_cents` = commission factor
+/// (compte de charge, défaut 622). Net banque = amount − fee.
+pub fn record_factoring(conn: &Connection, input: &CreateFactoringInput) -> DbResult<Payment> {
+    let inv = get_invoice(conn, input.invoice_id)?;
+    if matches!(inv.status.as_str(), "draft" | "cancelled") {
+        return Err("Affacturage réservé aux factures émises".into());
+    }
+    if inv.kind == "credit_note" {
+        return Err("Affacturage non applicable aux avoirs".into());
+    }
+    if input.amount_cents <= 0 {
+        return Err("Montant cédé invalide".into());
+    }
+    if input.fee_cents < 0 {
+        return Err("Commission invalide".into());
+    }
+    if input.fee_cents >= input.amount_cents {
+        return Err("La commission doit être strictement inférieure au montant cédé".into());
+    }
+    let remaining = inv.ttc_cents - inv.paid_cents;
+    if input.amount_cents > remaining {
+        return Err(format!(
+            "Montant cédé trop élevé (reste dû {} centimes)",
+            remaining
+        )
+        .into());
+    }
+    let fee_account = default_factoring_fee_account(&input.fee_account);
+    if !fee_account.chars().next().is_some_and(|c| c == '6') {
+        return Err("Le compte de commission doit être un compte de charge (classe 6)".into());
+    }
+    let net_cents = input.amount_cents - input.fee_cents;
+    let piece = inv
+        .number
+        .clone()
+        .unwrap_or_else(|| format!("FAC-{}", inv.id));
+
+    let cession_lines = vec![
+        EntryLineInput {
+            account_number: "467".into(),
+            label: Some("Factor — créance cédée".into()),
+            debit_cents: input.amount_cents,
+            credit_cents: 0,
+            vat_code: None,
+            third_party_id: None,
+            comp_aux_type: None,
+            comp_aux_num: None,
+        },
+        EntryLineInput {
+            account_number: "411".into(),
+            label: Some(format!("Client {} — cession affacturage", inv.third_party_code)),
+            debit_cents: 0,
+            credit_cents: input.amount_cents,
+            vat_code: None,
+            third_party_id: Some(inv.third_party_id),
+            comp_aux_type: Some("client".into()),
+            comp_aux_num: Some(inv.third_party_code.clone()),
+        },
+    ];
+    let cession_input = CreateEntryInput {
+        journal_code: "OD".into(),
+        entry_date: input.paid_on.clone(),
+        piece_ref: piece.clone(),
+        label: format!("Cession affacturage {piece}"),
+        lines: cession_lines,
+    };
+
+    let mut settlement_lines = vec![
+        EntryLineInput {
+            account_number: "512".into(),
+            label: Some("Banque — net factor".into()),
+            debit_cents: net_cents,
+            credit_cents: 0,
+            vat_code: None,
+            third_party_id: None,
+            comp_aux_type: None,
+            comp_aux_num: None,
+        },
+        EntryLineInput {
+            account_number: fee_account.clone(),
+            label: Some("Commission affacturage".into()),
+            debit_cents: input.fee_cents,
+            credit_cents: 0,
+            vat_code: None,
+            third_party_id: None,
+            comp_aux_type: None,
+            comp_aux_num: None,
+        },
+        EntryLineInput {
+            account_number: "467".into(),
+            label: Some("Factor — règlement".into()),
+            debit_cents: 0,
+            credit_cents: input.amount_cents,
+            vat_code: None,
+            third_party_id: None,
+            comp_aux_type: None,
+            comp_aux_num: None,
+        },
+    ];
+    // Si commission nulle : ne pas poster une ligne 622 à 0 (équilibre via 512/467 seuls).
+    if input.fee_cents == 0 {
+        settlement_lines.retain(|l| l.account_number != fee_account);
+    }
+
+    let settlement_input = CreateEntryInput {
+        journal_code: "BQ".into(),
+        entry_date: input.paid_on.clone(),
+        piece_ref: piece.clone(),
+        label: format!("Règlement factor {piece}"),
+        lines: settlement_lines,
+    };
+
+    let tx = conn.unchecked_transaction()?;
+    let cession = post_balanced_entry(&tx, &cession_input)?;
+    let settlement = post_balanced_entry(&tx, &settlement_input)?;
+    let lettre = soft_lettre_for_invoice(&inv);
+    apply_soft_lettre(&tx, cession.id, &lettre, &input.paid_on)?;
+    apply_soft_lettre(&tx, settlement.id, &lettre, &input.paid_on)?;
+    if let Some(vte_id) = inv.entry_id {
+        apply_soft_lettre(&tx, vte_id, &lettre, &input.paid_on)?;
+    }
+    tx.execute(
+        "INSERT INTO payment(invoice_id, paid_on, amount_cents, method, bank_ref, entry_id,
+                             fee_cents, fee_account, cession_entry_id)
+         VALUES (?1, ?2, ?3, 'affacturage', ?4, ?5, ?6, ?7, ?8)",
+        params![
+            input.invoice_id,
+            input.paid_on,
+            input.amount_cents,
+            input.bank_ref,
+            settlement.id,
+            input.fee_cents,
+            fee_account,
+            cession.id,
+        ],
+    )?;
+    let payment_id = tx.last_insert_rowid();
+    refresh_invoice_payment_status(&tx, input.invoice_id)?;
+    tx.commit()?;
+    list_payments(conn, Some(input.invoice_id))?
+        .into_iter()
+        .find(|p| p.id == payment_id)
+        .ok_or_else(|| "Affacturage introuvable après création".into())
 }
 
 fn days_between(from: &str, to: &str) -> i32 {
@@ -4144,6 +4343,138 @@ mod tests {
             .unwrap();
         let marked = mark_reminder_sent(&conn, first.id).unwrap();
         assert!(marked.sent_at.is_some());
+    }
+
+    #[test]
+    fn factoring_cession_467_411_and_settlement_fees() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("factor.sascompta");
+        create_demo_workspace(&path).unwrap();
+        let conn = open_connection(&path).unwrap();
+
+        let draft = list_invoices(&conn)
+            .unwrap()
+            .into_iter()
+            .find(|i| i.status == "draft")
+            .unwrap();
+        let issued = issue_invoice(&conn, draft.id).unwrap();
+        let vte = issued.entry_id.unwrap();
+        ledger::post_entry(&conn, vte).unwrap();
+
+        let share = issued.ttc_cents;
+        let fee = (share / 50).max(1); // ~2 %
+        let net = share - fee;
+        let pay = record_factoring(
+            &conn,
+            &CreateFactoringInput {
+                invoice_id: issued.id,
+                paid_on: "2026-04-12".into(),
+                amount_cents: share,
+                fee_cents: fee,
+                fee_account: Some("622".into()),
+                bank_ref: Some("FACTOR-1".into()),
+            },
+        )
+        .unwrap();
+        assert_eq!(pay.method, "affacturage");
+        assert_eq!(pay.amount_cents, share);
+        assert_eq!(pay.fee_cents, fee);
+        assert_eq!(pay.fee_account.as_deref(), Some("622"));
+        let expected_lettre = issued.number.as_ref().unwrap().replace('-', "");
+        assert_eq!(pay.lettre.as_deref(), Some(expected_lettre.as_str()));
+
+        let paid = get_invoice(&conn, issued.id).unwrap();
+        assert_eq!(paid.status, "paid");
+        assert_eq!(paid.paid_cents, share);
+
+        let cession_id = pay.cession_entry_id.expect("OD cession");
+        let cession = ledger::get_entry(&conn, cession_id).unwrap();
+        assert_eq!(cession.journal_code, "OD");
+        assert_eq!(cession.status, "posted");
+        let d467: i64 = cession
+            .lines
+            .iter()
+            .filter(|l| l.account_number == "467")
+            .map(|l| l.debit_cents)
+            .sum();
+        let c411: i64 = cession
+            .lines
+            .iter()
+            .filter(|l| l.account_number == "411")
+            .map(|l| l.credit_cents)
+            .sum();
+        assert_eq!(d467, share);
+        assert_eq!(c411, share);
+
+        let bq_id = pay.entry_id.expect("BQ règlement");
+        let bq = ledger::get_entry(&conn, bq_id).unwrap();
+        assert_eq!(bq.journal_code, "BQ");
+        assert_eq!(bq.status, "posted");
+        let d512: i64 = bq
+            .lines
+            .iter()
+            .filter(|l| l.account_number == "512")
+            .map(|l| l.debit_cents)
+            .sum();
+        let d622: i64 = bq
+            .lines
+            .iter()
+            .filter(|l| l.account_number == "622")
+            .map(|l| l.debit_cents)
+            .sum();
+        let c467: i64 = bq
+            .lines
+            .iter()
+            .filter(|l| l.account_number == "467")
+            .map(|l| l.credit_cents)
+            .sum();
+        assert_eq!(d512, net);
+        assert_eq!(d622, fee);
+        assert_eq!(c467, share);
+
+        // rejet si commission ≥ montant cédé
+        let other = create_invoice(
+            &conn,
+            &CreateInvoiceInput {
+                kind: "standard".into(),
+                third_party_id: issued.third_party_id,
+                quote_id: None,
+                parent_invoice_id: None,
+                issue_date: "2026-04-01".into(),
+                due_date: None,
+                service_date: None,
+                vat_mode: "normale".into(),
+                notes: None,
+                legal_mentions: None,
+                purchase_order_number: None,
+                lines: vec![InvoiceLineInput {
+                    label: "Prestation".into(),
+                    description: None,
+                    quantity_milli: 1000,
+                    unit: "u".into(),
+                    unit_price_cents: 5_000,
+                    ht_cents: 5_000,
+                    vat_rate_bp: 2000,
+                    vat_code: Some("T20C".into()),
+                    account_number: "706".into(),
+                    analytic_code: None,
+                }],
+            },
+        )
+        .unwrap();
+        let other = issue_invoice(&conn, other.id).unwrap();
+        assert!(record_factoring(
+            &conn,
+            &CreateFactoringInput {
+                invoice_id: other.id,
+                paid_on: "2026-04-12".into(),
+                amount_cents: other.ttc_cents,
+                fee_cents: other.ttc_cents,
+                fee_account: None,
+                bank_ref: None,
+            },
+        )
+        .is_err());
     }
 
     #[test]

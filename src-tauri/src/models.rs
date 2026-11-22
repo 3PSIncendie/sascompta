@@ -809,6 +809,15 @@ pub struct Payment {
     pub bank_ref: Option<String>,
     pub entry_id: Option<i64>,
     pub lettre: Option<String>,
+    /// Commission affacturage (0 si encaissement banque classique).
+    #[serde(default)]
+    pub fee_cents: i64,
+    /// Compte de frais (ex. 622) — renseigné pour l’affacturage.
+    #[serde(default)]
+    pub fee_account: Option<String>,
+    /// Écriture OD de cession 467/411 (affacturage).
+    #[serde(default)]
+    pub cession_entry_id: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -820,6 +829,22 @@ pub struct CreatePaymentInput {
     pub method: String,
     /// Numéro / réf. de virement bancaire — **optionnel** (import historique sans VIR).
     #[serde(default)]
+    pub bank_ref: Option<String>,
+}
+
+/// Affacturage : cession 467/411 + règlement factor 512/frais/467.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateFactoringInput {
+    pub invoice_id: i64,
+    pub paid_on: String,
+    /// Montant cédé (part factor) — solde 411 pour ce montant.
+    pub amount_cents: i64,
+    /// Commission / frais factor.
+    pub fee_cents: i64,
+    /// Compte de charge pour la commission (défaut 622).
+    #[serde(default)]
+    pub fee_account: Option<String>,
     pub bank_ref: Option<String>,
 }
 
