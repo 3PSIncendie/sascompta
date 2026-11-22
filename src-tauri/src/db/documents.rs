@@ -1,12 +1,12 @@
 //! Import de documents → brouillon d’écriture (revue humaine obligatoire).
 //!
 //! Types pris en charge : facture fournisseur (ACH), facture client (VTE),
-//! devis client (Commercial, sans écriture), note de frais / reçu (ACH ou OD),
-//! ticket de caisse (OD/ACH), relevé bancaire (BQ).
+//! devis client (Commercial, sans écriture), commande client (Commercial, sans écriture),
+//! note de frais / reçu (ACH ou OD), ticket de caisse (OD/ACH), relevé bancaire (BQ).
 //! Flux commun : analyse locale → revue → confirmation → `create_draft` + pièce
 //! jointe → `post_entry` (écriture immédiatement visible au Grand livre / TVA / FEC).
 //! Facture client : crée aussi une fiche Factures émise (numéro externe) pour Encaisser.
-//! Devis client : crée une fiche Commercial → Devis (numéro externe) — pas de VTE.
+//! Devis / commande client : fiche Commercial (numéro externe) — pas de VTE.
 
 use super::billing;
 use super::ledger;
@@ -30,6 +30,7 @@ pub const DOC_TYPES: &[&str] = &[
     "supplier_invoice",
     "customer_invoice",
     "customer_quote",
+    "customer_order",
     "expense_receipt",
     "bank_statement",
     "ticket",
@@ -48,9 +49,11 @@ pub fn posting_supported(doc_type: &str) -> bool {
     )
 }
 
-/// Types confirmables : écriture journal **ou** fiche commerciale (devis).
+/// Types confirmables : écriture journal **ou** fiche commerciale (devis / commande).
 pub fn confirm_supported(doc_type: &str) -> bool {
-    posting_supported(doc_type) || doc_type == "customer_quote"
+    posting_supported(doc_type)
+        || doc_type == "customer_quote"
+        || doc_type == "customer_order"
 }
 
 pub fn default_journal_for(doc_type: &str) -> &'static str {
@@ -58,6 +61,7 @@ pub fn default_journal_for(doc_type: &str) -> &'static str {
         "supplier_invoice" => "ACH",
         "customer_invoice" => "VTE",
         "customer_quote" => "DEV",
+        "customer_order" => "CMD",
         "expense_receipt" => "ACH",
         "bank_statement" => "BQ",
         "ticket" => "OD",
@@ -69,7 +73,7 @@ pub fn default_ht_account_for(doc_type: &str, reverse: bool) -> &'static str {
     match doc_type {
         "supplier_invoice" if reverse => "604",
         "supplier_invoice" => "606",
-        "customer_invoice" | "customer_quote" => "706",
+        "customer_invoice" | "customer_quote" | "customer_order" => "706",
         "expense_receipt" | "ticket" => "625",
         "bank_statement" => "471",
         _ => "606",
@@ -79,7 +83,7 @@ pub fn default_ht_account_for(doc_type: &str, reverse: bool) -> &'static str {
 pub fn default_counterpart_for(doc_type: &str) -> &'static str {
     match doc_type {
         "supplier_invoice" | "expense_receipt" => "401",
-        "customer_invoice" | "customer_quote" => "411",
+        "customer_invoice" | "customer_quote" | "customer_order" => "411",
         "ticket" => "530",
         "bank_statement" => "512",
         _ => "401",
@@ -93,7 +97,7 @@ pub fn migrate_documents(conn: &Connection) -> DbResult<()> {
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             doc_type TEXT NOT NULL
                 CHECK (doc_type IN (
-                    'supplier_invoice','customer_invoice','customer_quote',
+                    'supplier_invoice','customer_invoice','customer_quote','customer_order',
                     'expense_receipt','bank_statement','ticket','unknown'
                 )),
             source_file_name TEXT NOT NULL,
@@ -110,6 +114,7 @@ pub fn migrate_documents(conn: &Connection) -> DbResult<()> {
             entry_id INTEGER REFERENCES entry(id),
             invoice_id INTEGER,
             quote_id INTEGER,
+            order_id INTEGER,
             created_at TEXT NOT NULL,
             confirmed_at TEXT,
             source_fingerprint TEXT,
@@ -150,8 +155,16 @@ pub fn migrate_documents(conn: &Connection) -> DbResult<()> {
             [],
         )?;
     }
+    if !cols.iter().any(|c| c == "order_id") {
+        conn.execute(
+            "ALTER TABLE document_import ADD COLUMN order_id INTEGER",
+            [],
+        )?;
+    }
     // v19 — élargir le CHECK doc_type pour accepter customer_quote (rebuild).
     enrich_document_import_quote_type(conn)?;
+    // v20 — customer_order (+ conserver customer_credit si déjà présent / SC-97).
+    enrich_document_import_order_type(conn)?;
     // Un même fichier (contenu) n’est importé qu’une fois tant qu’il n’est pas écarté.
     conn.execute_batch(
         r#"
@@ -185,7 +198,7 @@ fn enrich_document_import_quote_type(conn: &Connection) -> DbResult<()> {
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             doc_type TEXT NOT NULL
                 CHECK (doc_type IN (
-                    'supplier_invoice','customer_invoice','customer_quote',
+                    'supplier_invoice','customer_invoice','customer_quote','customer_order',
                     'expense_receipt','bank_statement','ticket','unknown'
                 )),
             source_file_name TEXT NOT NULL,
@@ -202,6 +215,7 @@ fn enrich_document_import_quote_type(conn: &Connection) -> DbResult<()> {
             entry_id INTEGER REFERENCES entry(id),
             invoice_id INTEGER,
             quote_id INTEGER,
+            order_id INTEGER,
             created_at TEXT NOT NULL,
             confirmed_at TEXT,
             source_fingerprint TEXT,
@@ -210,12 +224,12 @@ fn enrich_document_import_quote_type(conn: &Connection) -> DbResult<()> {
         INSERT INTO document_import_v17(
             id, doc_type, source_file_name, stored_path, mime_type,
             extraction_method, extraction_json, confidence, status,
-            entry_id, invoice_id, quote_id, created_at, confirmed_at,
+            entry_id, invoice_id, quote_id, order_id, created_at, confirmed_at,
             source_fingerprint, source_origin_path
         )
         SELECT id, doc_type, source_file_name, stored_path, mime_type,
             extraction_method, extraction_json, confidence, status,
-            entry_id, invoice_id, quote_id, created_at, confirmed_at,
+            entry_id, invoice_id, quote_id, order_id, created_at, confirmed_at,
             source_fingerprint, source_origin_path
         FROM document_import;
         DROP TABLE document_import;
@@ -227,6 +241,81 @@ fn enrich_document_import_quote_type(conn: &Connection) -> DbResult<()> {
     )?;
     Ok(())
 }
+
+/// Rebuild `document_import` si le CHECK n’autorise pas encore `customer_order`.
+/// Préserve `customer_credit` (SC-97 avoir) s’il figure déjà dans le DDL.
+fn enrich_document_import_order_type(conn: &Connection) -> DbResult<()> {
+    let sql: Option<String> = conn
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='document_import'",
+            [],
+            |r| r.get(0),
+        )
+        .optional()?;
+    let Some(ddl) = sql else {
+        return Ok(());
+    };
+    if ddl.contains("customer_order") {
+        return Ok(());
+    }
+    let credit_bit = if ddl.contains("customer_credit") {
+        ",'customer_credit'"
+    } else {
+        ""
+    };
+    let create_sql = format!(
+        r#"
+        PRAGMA foreign_keys = OFF;
+        CREATE TABLE document_import_v20 (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            doc_type TEXT NOT NULL
+                CHECK (doc_type IN (
+                    'supplier_invoice','customer_invoice','customer_quote','customer_order'{credit_bit},
+                    'expense_receipt','bank_statement','ticket','unknown'
+                )),
+            source_file_name TEXT NOT NULL,
+            stored_path TEXT NOT NULL,
+            mime_type TEXT,
+            extraction_method TEXT NOT NULL DEFAULT 'none'
+                CHECK (extraction_method IN (
+                    'pdf_text','image_pending_ocr','manual','none'
+                )),
+            extraction_json TEXT NOT NULL,
+            confidence REAL NOT NULL DEFAULT 0,
+            status TEXT NOT NULL DEFAULT 'pending_review'
+                CHECK (status IN ('pending_review','confirmed','discarded')),
+            entry_id INTEGER REFERENCES entry(id),
+            invoice_id INTEGER,
+            quote_id INTEGER,
+            order_id INTEGER,
+            created_at TEXT NOT NULL,
+            confirmed_at TEXT,
+            source_fingerprint TEXT,
+            source_origin_path TEXT
+        );
+        INSERT INTO document_import_v20(
+            id, doc_type, source_file_name, stored_path, mime_type,
+            extraction_method, extraction_json, confidence, status,
+            entry_id, invoice_id, quote_id, order_id, created_at, confirmed_at,
+            source_fingerprint, source_origin_path
+        )
+        SELECT id, doc_type, source_file_name, stored_path, mime_type,
+            extraction_method, extraction_json, confidence, status,
+            entry_id, invoice_id, quote_id, order_id, created_at, confirmed_at,
+            source_fingerprint, source_origin_path
+        FROM document_import;
+        DROP TABLE document_import;
+        ALTER TABLE document_import_v20 RENAME TO document_import;
+        CREATE INDEX IF NOT EXISTS idx_document_import_status
+            ON document_import(status);
+        PRAGMA foreign_keys = ON;
+        "#,
+        credit_bit = credit_bit
+    );
+    conn.execute_batch(&create_sql)?;
+    Ok(())
+}
+
 
 /// v16 — crée les fiches Factures manquantes pour les `customer_invoice` déjà confirmés
 /// (imports antérieurs à #52 : VTE présente, `invoice_id` NULL). Idempotent.
@@ -945,6 +1034,22 @@ pub fn parse_invoice_number(text: &str) -> Option<String> {
         "devis:",
         "proposition n°",
         "proposition no",
+        "numéro de commande",
+        "numero de commande",
+        "n° de commande",
+        "no de commande",
+        "n° commande",
+        "commande n°",
+        "commande no",
+        "commande:",
+        "bon de commande n°",
+        "bon de commande no",
+        "bdc n°",
+        "bdc no",
+        "purchase order",
+        "order n°",
+        "order no",
+        "order #",
         "numéro de facture",
         "numero de facture",
         "n° de facture",
@@ -1219,10 +1324,45 @@ pub fn classify_document_with_org(
         || lower.contains("affactur")
         || lower.contains("subrogation")
         || lower.contains("subroga")
-        || lower.contains("bon de commande")
         || lower.contains("conditions de règlement")
         || lower.contains("conditions de reglement")
         || lower.contains("merci de votre confiance");
+
+    let has_facture_word = lower.contains("facture") || lower.contains("invoice");
+    let has_avoir_word = lower.contains("avoir")
+        || lower.contains("credit note")
+        || lower.contains("note de crédit")
+        || lower.contains("note de credit");
+    // « Numéro de bon de commande » sur une facture ≠ document commande.
+    let order_ref_on_invoice = lower.contains("numéro de bon de commande")
+        || lower.contains("numero de bon de commande")
+        || lower.contains("n° de bon de commande")
+        || lower.contains("no de bon de commande");
+    let order_doc_signals = !has_facture_word
+        && !has_avoir_word
+        && !order_ref_on_invoice
+        && (lower.contains("bon de commande")
+            || lower.contains("commande client")
+            || lower.contains("purchase order")
+            || lower.contains("sales order")
+            || lower.contains("bdc n")
+            || lower.contains("bdc:")
+            || lower.contains("bdc ")
+            || lower.starts_with("bdc")
+            || lower.contains("order confirmation")
+            || lower.contains("order n")
+            || lower.contains("order #")
+            || lower.contains("order no"));
+    let order_soft = !has_facture_word
+        && !has_avoir_word
+        && !invoice_refs_quote
+        && !order_ref_on_invoice
+        && (lower.contains("commande n")
+            || lower.contains("commande:")
+            || lower.contains("commande ")
+            || lower.contains("bon de commande")
+            || lower.contains(" bdc")
+            || lower.contains("order"));
 
     let quote_doc_signals = (lower.contains("devis")
         || lower.contains("proposition commerciale")
@@ -1314,6 +1454,9 @@ pub fn classify_document_with_org(
                 if quote_doc_signals {
                     v -= 0.45;
                 }
+                if order_doc_signals {
+                    v -= 0.45;
+                }
                 if let Some(o) = org {
                     if org_appears_as_issuer(text, &o) && !org_appears_as_buyer(text, &o) {
                         v += 0.5;
@@ -1342,6 +1485,36 @@ pub fn classify_document_with_org(
                     v += 0.15;
                 }
                 if invoice_refs_quote || lower.contains("facture") {
+                    v -= 0.5;
+                }
+                if order_doc_signals {
+                    v -= 0.4;
+                }
+                if let Some(o) = org {
+                    if org_appears_as_issuer(text, &o) && !org_appears_as_buyer(text, &o) {
+                        v += 0.25;
+                    }
+                    if org_appears_as_buyer(text, &o) {
+                        v -= 0.35;
+                    }
+                }
+                v.max(0.0).min(0.95)
+            }
+            "customer_order" => {
+                let mut v: f64 = 0.0;
+                if order_doc_signals {
+                    v += 0.55;
+                }
+                if order_soft {
+                    v += 0.3;
+                }
+                if lower.contains("total ht") || lower.contains("total ttc") {
+                    v += 0.1;
+                }
+                if has_facture_word || has_avoir_word || quote_doc_signals {
+                    v -= 0.55;
+                }
+                if order_ref_on_invoice {
                     v -= 0.5;
                 }
                 if let Some(o) = org {
@@ -1488,7 +1661,7 @@ fn match_third_party(
 fn party_kind_for_doc(doc_type: &str) -> Option<&'static str> {
     match doc_type {
         "supplier_invoice" | "expense_receipt" => Some("supplier"),
-        "customer_invoice" | "customer_quote" => Some("customer"),
+        "customer_invoice" | "customer_quote" | "customer_order" => Some("customer"),
         "ticket" => Some("supplier"), // commerçant optionnel
         _ => None,
     }
@@ -1509,10 +1682,14 @@ fn build_extraction_payload(
     let reverse = detect_reverse_charge_implicit(text, &amounts)
         && matches!(
             doc_type,
-            "supplier_invoice" | "customer_invoice" | "customer_quote"
+            "supplier_invoice" | "customer_invoice" | "customer_quote" | "customer_order"
         );
-    let is_sale = matches!(doc_type, "customer_invoice" | "customer_quote");
+    let is_sale = matches!(
+        doc_type,
+        "customer_invoice" | "customer_quote" | "customer_order"
+    );
     let is_quote = doc_type == "customer_quote";
+    let is_order = doc_type == "customer_order";
     let is_bank = doc_type == "bank_statement";
     let vat_mode = if reverse && doc_type == "supplier_invoice" {
         "autoliquidation_sous_traitance"
@@ -1555,6 +1732,8 @@ fn build_extraction_payload(
         "Texte peu lisible ou image scannée : OCR local non activé (pas d’API cloud). Vérifiez / saisissez les montants."
     } else if is_quote {
         "Devis détecté : à la confirmation, une fiche Commercial → Devis sera créée (numéro externe conservé). Aucune écriture comptable."
+    } else if is_order {
+        "Commande client détectée : à la confirmation, une fiche Commercial → Commandes sera créée (numéro externe conservé). Aucune écriture comptable."
     } else if is_bank {
         "Relevé : une écriture BQ brouillon par mouvement saisi (pièce jointe = le relevé). Vérifiez sens, montant et contrepartie (souvent 471 en attente)."
     } else {
@@ -1606,16 +1785,17 @@ fn row_to_import(r: &rusqlite::Row<'_>) -> rusqlite::Result<DocumentImport> {
         entry_id: r.get(9)?,
         invoice_id: r.get(10)?,
         quote_id: r.get(11)?,
-        created_at: r.get(12)?,
-        confirmed_at: r.get(13)?,
-        source_fingerprint: r.get(14)?,
-        source_origin_path: r.get(15)?,
+        order_id: r.get(12)?,
+        created_at: r.get(13)?,
+        confirmed_at: r.get(14)?,
+        source_fingerprint: r.get(15)?,
+        source_origin_path: r.get(16)?,
     })
 }
 
 const SELECT_COLS: &str = "id, doc_type, source_file_name, stored_path, mime_type,
     extraction_method, extraction_json, confidence, status, entry_id, invoice_id,
-    quote_id, created_at, confirmed_at, source_fingerprint, source_origin_path";
+    quote_id, order_id, created_at, confirmed_at, source_fingerprint, source_origin_path";
 
 /// Empreinte SHA-256 hex du contenu (idempotence import).
 pub fn file_fingerprint(path: &Path) -> DbResult<String> {
@@ -2332,11 +2512,105 @@ fn confirm_customer_quote_import(
     get_document_import(conn, id)
 }
 
+
+/// Confirmation d’une commande importée → fiche Commercial / Commandes (pas d’écriture).
+fn confirm_customer_order_import(
+    conn: &Connection,
+    id: i64,
+    doc: &DocumentImport,
+    input: &ConfirmDocumentImportInput,
+) -> DbResult<DocumentImport> {
+    let ht = input.ht_cents;
+    if ht <= 0 {
+        return Err("Montant HT invalide pour la commande".into());
+    }
+    let vat_mode = input.vat_mode.as_str();
+    if !matches!(
+        vat_mode,
+        "normale" | "sans" | "autoliquidation_chantier"
+    ) {
+        return Err("Régime TVA invalide pour une commande client".into());
+    }
+    let rate = input.rate_bp.max(0);
+    let vat_code = if input.vat_code.trim().is_empty() {
+        "T20C".to_string()
+    } else {
+        input.vat_code.trim().to_string()
+    };
+    tax::ensure_vat_code(conn, &vat_code)?;
+    let ht_account = if input.ht_account.trim().is_empty() {
+        "706".to_string()
+    } else {
+        input.ht_account.trim().to_string()
+    };
+    let (tp_id, _) = ensure_party_for_confirm(conn, input, "customer", true)?
+        .ok_or_else(|| "Client requis".to_string())?;
+    let order_vat = if vat_mode == "normale" {
+        input
+            .vat_cents
+            .filter(|v| *v >= 0)
+            .unwrap_or_else(|| compute_vat_cents(ht, rate))
+    } else {
+        0
+    };
+    let label = if input.label.trim().is_empty() {
+        let piece = input.piece_ref.trim().to_string().if_empty("commande");
+        format!("Import {piece}")
+    } else {
+        input.label.trim().to_string()
+    };
+
+    let tx = conn.unchecked_transaction()?;
+    let order = billing::create_imported_order(
+        &tx,
+        id,
+        tp_id,
+        &input.entry_date,
+        &input.piece_ref,
+        &label,
+        ht,
+        order_vat,
+        rate,
+        vat_mode,
+        &vat_code,
+        &ht_account,
+        Some(doc.stored_path.as_str()),
+    )?;
+
+    let mut extraction = doc.extraction.clone();
+    if let Some(obj) = extraction.as_object_mut() {
+        obj.insert("confirmedDocType".into(), json!("customer_order"));
+        obj.insert("confirmedHtCents".into(), json!(ht));
+        obj.insert("confirmedVatMode".into(), json!(vat_mode));
+        obj.insert("confirmedOrderId".into(), json!(order.id));
+        obj.insert("confirmedOrderNumber".into(), json!(order.number.clone()));
+    }
+    let now = now_iso();
+    let updated = tx.execute(
+        "UPDATE document_import SET
+            doc_type = 'customer_order',
+            extraction_json = ?1,
+            status = 'confirmed',
+            order_id = ?2,
+            confirmed_at = ?3
+         WHERE id = ?4 AND status = 'pending_review' AND order_id IS NULL AND entry_id IS NULL",
+        params![extraction.to_string(), order.id, now, id],
+    )?;
+    if updated != 1 {
+        return Err(
+            "Confirmation concurrente ou état incohérent — aucune commande en double n'a été créée"
+                .into(),
+        );
+    }
+    tx.commit()?;
+    get_document_import(conn, id)
+}
+
 /// Confirmation humaine obligatoire → écriture **postée** + pièce jointe liée
-/// (ou fiche devis commerciale pour `customer_quote`, sans écriture).
+/// (ou fiche commerciale devis / commande, sans écriture).
 ///
 /// Flux comptable : `create_draft` → pièce jointe (exige encore draft) → `post_entry`.
-/// Flux devis : `create_imported_quote` uniquement (Commercial → Devis).
+/// Flux devis / commande : `create_imported_quote` / `create_imported_order` (Commercial).
 /// La revue Import reste le seul filet humain ; pas de 2ᵉ validation Écritures.
 pub fn confirm_document_import(
     conn: &Connection,
@@ -2361,6 +2635,12 @@ pub fn confirm_document_import(
                 .into(),
         );
     }
+    if doc.order_id.is_some() {
+        return Err(
+            "Import déjà lié à une commande — confirmation impossible (évite un doublon)"
+                .into(),
+        );
+    }
     let doc_type = if input.doc_type.trim().is_empty() {
         doc.doc_type.clone()
     } else {
@@ -2371,12 +2651,15 @@ pub fn confirm_document_import(
     }
     if !confirm_supported(&doc_type) {
         return Err(
-            "Précisez le type de document (inconnu ne crée pas d’écriture ni de devis)."
+            "Précisez le type de document (inconnu ne crée pas d’écriture ni de fiche commerciale)."
                 .into(),
         );
     }
     if doc_type == "customer_quote" {
         return confirm_customer_quote_import(conn, id, &doc, input);
+    }
+    if doc_type == "customer_order" {
+        return confirm_customer_order_import(conn, id, &doc, input);
     }
     if !posting_supported(&doc_type) {
         return Err(
@@ -2390,7 +2673,7 @@ pub fn confirm_document_import(
     let vat_mode = input.vat_mode.as_str();
     let rate = input.rate_bp.max(0);
     let default_vat = match doc_type.as_str() {
-        "customer_invoice" | "customer_quote" => "T20C",
+        "customer_invoice" | "customer_quote" | "customer_order" => "T20C",
         "bank_statement" => "TEX",
         _ => "T20D",
     };
@@ -3473,6 +3756,129 @@ Total TTC                 120,00
             .collect();
         assert_eq!(imported.len(), 1);
         assert_eq!(imported[0].id, qid);
+    }
+
+    #[test]
+    fn classify_standalone_commande_as_customer_order() {
+        let text = "BON DE COMMANDE N° BC-2024-0088\nCommande client\nClient ACME SAS\n\
+            Total HT 800,00\nTVA 20 % 160,00\nTotal TTC 960,00";
+        let (t, c) = classify_document(text);
+        assert_eq!(t, "customer_order", "confidence {c}");
+        assert!(c >= 0.45, "confidence {c}");
+        assert_eq!(parse_invoice_number(text).as_deref(), Some("BC-2024-0088"));
+    }
+
+    #[test]
+    fn classify_invoice_with_po_ref_stays_customer_invoice() {
+        let text = include_str!("fixtures/import_ocr/2611-F-2026-1132-3PSI.txt");
+        let (t, _) = classify_document(text);
+        assert_eq!(t, "customer_invoice");
+    }
+
+    #[test]
+    fn confirm_customer_order_creates_commercial_commande_without_entry() {
+        let dir = tempdir().unwrap();
+        let ws = dir.path().join("demo.sascompta");
+        let info = db::create_demo_workspace(&ws).unwrap();
+        let (conn, _) = db::open_workspace(&info.path, db::DEMO_PASSWORD).unwrap();
+
+        let pdf = dir.path().join("ancienne-commande.pdf");
+        write_simple_pdf(
+            &pdf,
+            "BON DE COMMANDE N° BC-LEG-42\nCommande client\nClient ACME\n\
+             Total HT 100,00\nTVA 20,00\nTotal TTC 120,00",
+        );
+        let doc = analyze_document_with_hint(
+            &conn,
+            Path::new(&info.path),
+            &pdf,
+            Some("customer_order"),
+        )
+        .unwrap();
+        assert_eq!(doc.doc_type, "customer_order");
+
+        let confirmed = confirm_document_import(
+            &conn,
+            doc.id,
+            &ConfirmDocumentImportInput {
+                doc_type: "customer_order".into(),
+                entry_date: "2024-06-01".into(),
+                piece_ref: "BC-LEG-42".into(),
+                label: "Import BC-LEG-42".into(),
+                journal_code: "CMD".into(),
+                ht_cents: 10_000,
+                vat_cents: Some(2_000),
+                rate_bp: 2000,
+                vat_mode: "normale".into(),
+                vat_code: "T20C".into(),
+                ht_account: "706".into(),
+                counterpart_account: Some("411".into()),
+                bank_direction: None,
+                third_party_id: None,
+                create_supplier_name: Some("ACME SAS".into()),
+                create_supplier_code: Some("C911".into()),
+                create_supplier_siret: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(confirmed.status, "confirmed");
+        assert!(confirmed.entry_id.is_none());
+        assert!(confirmed.invoice_id.is_none());
+        assert!(confirmed.quote_id.is_none());
+        let oid = confirmed.order_id.expect("commande Commercial liée");
+        let o = billing::get_customer_order(&conn, oid).unwrap();
+        assert_eq!(o.source, "import");
+        assert_eq!(o.status, "confirmed");
+        assert_eq!(o.number, "BC-LEG-42");
+        assert_eq!(o.document_import_id, Some(confirmed.id));
+        assert_eq!(o.ht_cents, 10_000);
+        assert_eq!(o.vat_cents, 2_000);
+        assert_eq!(o.ttc_cents, 12_000);
+        assert!(!o.lines.is_empty());
+
+        let err = confirm_document_import(
+            &conn,
+            confirmed.id,
+            &ConfirmDocumentImportInput {
+                doc_type: "customer_order".into(),
+                entry_date: "2024-06-01".into(),
+                piece_ref: "BC-LEG-42".into(),
+                label: "Import BC-LEG-42".into(),
+                journal_code: "CMD".into(),
+                ht_cents: 10_000,
+                vat_cents: Some(2_000),
+                rate_bp: 2000,
+                vat_mode: "normale".into(),
+                vat_code: "T20C".into(),
+                ht_account: "706".into(),
+                counterpart_account: Some("411".into()),
+                bank_direction: None,
+                third_party_id: None,
+                create_supplier_name: Some("ACME SAS".into()),
+                create_supplier_code: Some("C911".into()),
+                create_supplier_siret: None,
+            },
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("revue") || err.to_string().contains("déjà"));
+
+        let again = analyze_document_idempotent(
+            &conn,
+            Path::new(&info.path),
+            &pdf,
+            Some("customer_order"),
+            true,
+        )
+        .unwrap();
+        assert_eq!(again.id, confirmed.id);
+        assert_eq!(again.order_id, Some(oid));
+        let imported: Vec<_> = billing::list_customer_orders(&conn)
+            .unwrap()
+            .into_iter()
+            .filter(|o| o.source == "import" && o.document_import_id == Some(confirmed.id))
+            .collect();
+        assert_eq!(imported.len(), 1);
+        assert_eq!(imported[0].id, oid);
     }
 
     #[test]

@@ -261,6 +261,73 @@ export interface CreateQuoteInput {
   lines: QuoteLineInput[];
 }
 
+export type CustomerOrderStatus =
+  | "draft"
+  | "sent"
+  | "confirmed"
+  | "cancelled";
+
+export interface CustomerOrderLine {
+  id: number;
+  orderId: number;
+  lineNo: number;
+  label: string;
+  description?: string | null;
+  quantityMilli: number;
+  unit: string;
+  unitPriceCents: number;
+  htCents: number;
+  vatRateBp: number;
+  vatCode: string | null;
+  accountNumber: string;
+}
+
+export interface CustomerOrderLineInput {
+  label: string;
+  description?: string | null;
+  quantityMilli: number;
+  unit: string;
+  unitPriceCents: number;
+  htCents?: number;
+  vatRateBp: number;
+  vatCode?: string | null;
+  accountNumber: string;
+}
+
+export type CustomerOrderSource = "native" | "import";
+
+export interface CustomerOrder {
+  id: number;
+  number: string;
+  thirdPartyId: number;
+  thirdPartyCode: string;
+  thirdPartyName: string;
+  status: CustomerOrderStatus | string;
+  issueDate: string;
+  currency: string;
+  htCents: number;
+  vatCents: number;
+  ttcCents: number;
+  vatMode: BillingVatMode | string;
+  notes: string | null;
+  legalMentions: string | null;
+  createdAt: string;
+  updatedAt: string;
+  source?: CustomerOrderSource | string;
+  documentImportId?: number | null;
+  pdfPath?: string | null;
+  lines: CustomerOrderLine[];
+}
+
+export interface CreateCustomerOrderInput {
+  thirdPartyId: number;
+  issueDate: string;
+  vatMode: BillingVatMode | string;
+  notes?: string | null;
+  legalMentions?: string | null;
+  lines: CustomerOrderLineInput[];
+}
+
 export type InvoiceKind = "standard" | "deposit" | "balance" | "credit_note";
 
 export type InvoiceStatus =
@@ -737,6 +804,7 @@ export type NavId =
   | "etats"
   | "cloture"
   | "devis"
+  | "commandes"
   | "factures"
   | "relances"
   | "einvoice"

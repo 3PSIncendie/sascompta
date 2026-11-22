@@ -15,6 +15,7 @@ import { AssetsScreen } from "./screens/AssetsScreen";
 import { StatementsScreen } from "./screens/StatementsScreen";
 import { ClosingScreen } from "./screens/ClosingScreen";
 import { QuotesScreen } from "./screens/QuotesScreen";
+import { OrdersScreen } from "./screens/OrdersScreen";
 import { InvoicesScreen } from "./screens/InvoicesScreen";
 import { RemindersScreen } from "./screens/RemindersScreen";
 import { EInvoiceScreen } from "./screens/EInvoiceScreen";
@@ -38,6 +39,7 @@ const PREVIEW_NAV_IDS: NavId[] = [
   "etats",
   "cloture",
   "devis",
+  "commandes",
   "factures",
   "relances",
   "einvoice",
@@ -159,6 +161,12 @@ export default function App() {
       )}
       {nav === "devis" && (
         <QuotesScreen
+          organization={workspace.organization}
+          onNavigate={setNav}
+        />
+      )}
+      {nav === "commandes" && (
+        <OrdersScreen
           organization={workspace.organization}
           onNavigate={setNav}
         />

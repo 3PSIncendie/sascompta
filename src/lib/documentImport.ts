@@ -1,7 +1,7 @@
 /**
  * Import documents — registre extensible (facture fournisseur, client, devis,
- * frais, tickets, relevés → écriture journal postée après revue humaine ;
- * devis → fiche Commercial sans écriture).
+ * commande, frais, tickets, relevés → écriture journal postée après revue humaine ;
+ * devis / commande → fiche Commercial sans écriture).
  *
  * Pour ajouter un type : 1) classifier Rust, 2) entrée DOC_TYPE_REGISTRY,
  * 3) template de lignes (buildProposedLines + Rust) si posting, 4) flags.
@@ -19,6 +19,7 @@ export type DocumentDocType =
   | "supplier_invoice"
   | "customer_invoice"
   | "customer_quote"
+  | "customer_order"
   | "expense_receipt"
   | "bank_statement"
   | "ticket"
@@ -64,6 +65,8 @@ export type DocumentExtraction = {
   confirmedInvoiceId?: number;
   confirmedQuoteId?: number;
   confirmedQuoteNumber?: string;
+  confirmedOrderId?: number;
+  confirmedOrderNumber?: string;
 };
 
 export type DocumentImport = {
@@ -81,6 +84,8 @@ export type DocumentImport = {
   invoiceId?: number | null;
   /** Devis client créé à la confirmation (Commercial → Devis). */
   quoteId?: number | null;
+  /** Commande client créée à la confirmation (Commercial → Commandes). */
+  orderId?: number | null;
   createdAt: string;
   confirmedAt: string | null;
   sourceFingerprint?: string | null;
@@ -115,6 +120,8 @@ export type DocTypeMeta = {
   postingSupported: boolean;
   /** Crée une fiche Commercial → Devis (sans écriture). */
   createsQuote?: boolean;
+  /** Crée une fiche Commercial → Commandes (sans écriture). */
+  createsOrder?: boolean;
   defaultJournal: string;
   /** Compte HT / produit / contrepartie mouvement (relevé). */
   defaultHtAccount: string;
@@ -124,9 +131,13 @@ export type DocTypeMeta = {
   comingSoonHint?: string;
 };
 
-/** Confirmable = écriture journal ou fiche devis commerciale. */
+/** Confirmable = écriture journal ou fiche commerciale (devis / commande). */
 export function confirmSupported(meta: DocTypeMeta): boolean {
-  return meta.postingSupported || meta.createsQuote === true;
+  return (
+    meta.postingSupported ||
+    meta.createsQuote === true ||
+    meta.createsOrder === true
+  );
 }
 
 /** Registre typé — extension = ajouter une entrée + template. */
@@ -162,6 +173,19 @@ export const DOC_TYPE_REGISTRY: DocTypeMeta[] = [
     postingSupported: false,
     createsQuote: true,
     defaultJournal: "DEV",
+    defaultHtAccount: "706",
+    defaultCounterpart: "411",
+    partyKind: "customer",
+    partyRequired: true,
+  },
+  {
+    id: "customer_order",
+    label: "Commande client",
+    shortHelp:
+      "Bon de commande / commande PDF → fiche Commercial / Commandes (numéro externe). Aucune écriture comptable.",
+    postingSupported: false,
+    createsOrder: true,
+    defaultJournal: "CMD",
     defaultHtAccount: "706",
     defaultCounterpart: "411",
     partyKind: "customer",
@@ -271,7 +295,9 @@ export function formFromImport(doc: DocumentImport): ReviewFormState {
   const counterpart =
     x.counterpartAccount || meta.defaultCounterpart || "401";
   const saleDoc =
-    doc.docType === "customer_invoice" || doc.docType === "customer_quote";
+    doc.docType === "customer_invoice" ||
+    doc.docType === "customer_quote" ||
+    doc.docType === "customer_order";
   return {
     docType: doc.docType || "supplier_invoice",
     entryDate: x.issueDate || new Date().toISOString().slice(0, 10),
@@ -302,7 +328,10 @@ export function formFromImport(doc: DocumentImport): ReviewFormState {
 /** Applique les défauts compte / journal quand l’utilisateur change de type. */
 export function applyDocTypeDefaults(form: ReviewFormState, docType: string): ReviewFormState {
   const meta = docTypeMeta(docType);
-  const saleDoc = docType === "customer_invoice" || docType === "customer_quote";
+  const saleDoc =
+    docType === "customer_invoice" ||
+    docType === "customer_quote" ||
+    docType === "customer_order";
   const vatMode: GuidedVatMode =
     docType === "bank_statement"
       ? "sans"
@@ -775,6 +804,39 @@ export function previewDocumentImports(): DocumentImport[] {
       confirmedAt: null,
     },
     ...pendingExtras,
+    {
+      id: 13,
+      docType: "customer_order",
+      sourceFileName: "commande-BC-2024-0088.pdf",
+      storedPath: "/preview/imports/commande-BC-2024-0088.pdf",
+      mimeType: "application/pdf",
+      extractionMethod: "pdf_text",
+      extraction: {
+        issueDate: "2024-07-01",
+        invoiceNumber: "BC-2024-0088",
+        supplierName: "ACME SAS",
+        htCents: 80_000,
+        vatCents: 16_000,
+        ttcCents: 96_000,
+        rateBp: 2000,
+        vatMode: "normale",
+        vatCode: "T20C",
+        htAccount: "706",
+        counterpartAccount: "411",
+        journalCode: "CMD",
+        postingSupported: false,
+        notes:
+          "Commande détectée : à la confirmation, une fiche Commercial → Commandes sera créée (numéro externe conservé). Aucune écriture comptable.",
+        rawTextPreview:
+          "BON DE COMMANDE N° BC-2024-0088\nCommande client\nTotal TTC 960,00",
+      },
+      confidence: 0.82,
+      status: "pending_review",
+      entryId: null,
+      orderId: null,
+      createdAt: "2024-07-01T10:00:00Z",
+      confirmedAt: null,
+    },
     {
       id: 12,
       docType: "customer_quote",

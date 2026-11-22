@@ -174,6 +174,7 @@ export function DocumentImportScreen({ onNavigate }: Props) {
   const meta = form ? docTypeMeta(form.docType) : null;
   const canPost = meta?.postingSupported === true;
   const createsQuote = meta?.createsQuote === true;
+  const createsOrder = meta?.createsOrder === true;
   const canConfirm = meta ? confirmSupported(meta) : false;
   const partyKind = meta?.partyKind ?? "none";
   const showParty = partyKind !== "none" && form?.docType !== "bank_statement";
@@ -190,7 +191,7 @@ export function DocumentImportScreen({ onNavigate }: Props) {
 
   const vatModeOptions = useMemo(() => {
     if (!form) return [] as { value: ReviewFormState["vatMode"]; label: string }[];
-    if (form.docType === "customer_invoice" || form.docType === "customer_quote") {
+    if (form.docType === "customer_invoice" || form.docType === "customer_quote" || form.docType === "customer_order") {
       return [
         { value: "normale" as const, label: "TVA classique" },
         { value: "sans" as const, label: "Sans TVA" },
@@ -221,7 +222,7 @@ export function DocumentImportScreen({ onNavigate }: Props) {
 
   const filteredVatCodes = useMemo(() => {
     if (!form) return vatCodes;
-    if (form.docType === "customer_invoice" || form.docType === "customer_quote") {
+    if (form.docType === "customer_invoice" || form.docType === "customer_quote" || form.docType === "customer_order") {
       if (form.vatMode === "sans") return vatCodes.filter((c) => c.direction === "exempt");
       if (form.vatMode === "autoliquidation_chantier")
         return vatCodes.filter((c) => c.direction === "reverse" || c.direction === "exempt");
@@ -241,7 +242,7 @@ export function DocumentImportScreen({ onNavigate }: Props) {
     if (!canConfirm) {
       setError(
         meta?.comingSoonHint ||
-          "Précisez le type de document pour proposer une écriture ou un devis.",
+          "Précisez le type de document pour proposer une écriture ou une fiche commerciale.",
       );
       return;
     }
@@ -271,9 +272,11 @@ export function DocumentImportScreen({ onNavigate }: Props) {
       const journal = form.journalCode || suggestedJournal(form);
       if (PREVIEW || !isTauriRuntime()) {
         setStatus(
-          createsQuote
-            ? "Aperçu : un devis aurait été créé dans Commercial → Devis. Passez par le desktop pour persister."
-            : `Aperçu : écriture ${journal} aurait été postée après confirmation. Passez par le desktop pour persister.`,
+          createsOrder
+            ? "Aperçu : une commande aurait été créée dans Commercial → Commandes. Passez par le desktop pour persister."
+            : createsQuote
+              ? "Aperçu : un devis aurait été créé dans Commercial → Devis. Passez par le desktop pour persister."
+              : `Aperçu : écriture ${journal} aurait été postée après confirmation. Passez par le desktop pour persister.`,
         );
         return;
       }
@@ -281,7 +284,15 @@ export function DocumentImportScreen({ onNavigate }: Props) {
         selected.id,
         toConfirmInput({ ...form, journalCode: journal }, htCents, vatCents),
       );
-      if (confirmed.docType === "customer_quote" && confirmed.quoteId) {
+      if (confirmed.docType === "customer_order" && confirmed.orderId) {
+        const num =
+          confirmed.extraction.confirmedOrderNumber ||
+          confirmed.extraction.invoiceNumber ||
+          `#${confirmed.orderId}`;
+        setStatus(
+          `Commande ${num} créée dans Commercial → Commandes (suivi). Aucune écriture comptable. La revue Import était le filet de validation.`,
+        );
+      } else if (confirmed.docType === "customer_quote" && confirmed.quoteId) {
         const num =
           confirmed.extraction.confirmedQuoteNumber ||
           confirmed.extraction.invoiceNumber ||
@@ -473,7 +484,11 @@ export function DocumentImportScreen({ onNavigate }: Props) {
           ) : (
             <>
               <h2>
-                {createsQuote ? "Revue avant devis" : "Revue avant écriture"}
+                {createsOrder
+                  ? "Revue avant commande"
+                  : createsQuote
+                    ? "Revue avant devis"
+                    : "Revue avant écriture"}
               </h2>
               <p className="muted">
                 Méthode : <strong>{selected.extractionMethod}</strong> · confiance{" "}
@@ -590,7 +605,8 @@ export function DocumentImportScreen({ onNavigate }: Props) {
                           vatMode === "autoliquidation_sous_traitance"
                             ? "604"
                             : form.docType === "customer_invoice" ||
-                                form.docType === "customer_quote"
+                                form.docType === "customer_quote" ||
+                                form.docType === "customer_order"
                               ? form.htAccount || "706"
                               : form.docType === "expense_receipt" ||
                                   form.docType === "ticket"
@@ -602,7 +618,8 @@ export function DocumentImportScreen({ onNavigate }: Props) {
                             : vatMode === "sans"
                               ? "TEX"
                               : form.docType === "customer_invoice" ||
-                                  form.docType === "customer_quote"
+                                  form.docType === "customer_quote" ||
+                                  form.docType === "customer_order"
                                 ? "T20C"
                                 : "T20D",
                       });
@@ -643,7 +660,8 @@ export function DocumentImportScreen({ onNavigate }: Props) {
 
                 <label>
                   {form.docType === "customer_invoice" ||
-                  form.docType === "customer_quote"
+                  form.docType === "customer_quote" ||
+                  form.docType === "customer_order"
                     ? "Compte produit"
                     : form.docType === "bank_statement"
                       ? "Contrepartie (souvent 471)"
@@ -809,6 +827,17 @@ export function DocumentImportScreen({ onNavigate }: Props) {
                 </div>
               )}
 
+              {createsOrder && form && selected.status === "pending_review" && (
+                <div className="proposed-lines">
+                  <h3>Fiche commande proposée</h3>
+                  <p className="muted tiny">
+                    À la confirmation : commande « {form.pieceRef || "n° externe"} »{" "}
+                    dans Commercial → Commandes (statut Confirmée). Pas
+                    d’écriture au Grand livre.
+                  </p>
+                </div>
+              )}
+
               {canPost && proposed.length > 0 && (
                 <div className="proposed-lines">
                   <h3>Lignes proposées ({journalLabel})</h3>
@@ -851,9 +880,11 @@ export function DocumentImportScreen({ onNavigate }: Props) {
                     disabled={busy || !canConfirm}
                     onClick={() => void onConfirm()}
                   >
-                    {createsQuote
-                      ? "Confirmer → créer le devis"
-                      : `Confirmer → poster ${journalLabel}`}
+                    {createsOrder
+                      ? "Confirmer → créer la commande"
+                      : createsQuote
+                        ? "Confirmer → créer le devis"
+                        : `Confirmer → poster ${journalLabel}`}
                   </button>
                   <button
                     type="button"
@@ -882,6 +913,28 @@ export function DocumentImportScreen({ onNavigate }: Props) {
                         onClick={() => onNavigate("devis")}
                       >
                         Ouvrir Devis
+                      </button>
+                    </>
+                  )}
+                </p>
+              )}
+
+              {selected.status === "confirmed" && selected.orderId && (
+                <p className="ok">
+                  Liée à la commande #{selected.orderId}
+                  {selected.extraction.confirmedOrderNumber
+                    ? ` (${selected.extraction.confirmedOrderNumber})`
+                    : ""}
+                  {onNavigate && (
+                    <>
+                      {" "}
+                      —{" "}
+                      <button
+                        type="button"
+                        className="linkish"
+                        onClick={() => onNavigate("commandes")}
+                      >
+                        Ouvrir Commandes
                       </button>
                     </>
                   )}

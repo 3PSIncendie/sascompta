@@ -205,25 +205,25 @@ export const HELP: Record<string, HelpTopic> = {
   numerotationFactures: {
     term: "Numérotation des factures",
     plain:
-      "Chaque facture reçoit un numéro unique au format FAAAA-MMNN (ex. F2026-1101) ; chaque devis au format DAAAA-MMNN (ex. D2026-1101). Le mois (MM) est celui de la date du document ; le compteur sur 2 chiffres reprend à 01 chaque 1er janvier. Si vous avez déjà facturé hors SasCompta, indiquez ici le prochain numéro de la série annuelle.",
+      "Chaque facture reçoit un numéro unique au format FAAAA-MMNN (ex. F2026-1101) ; chaque devis au format DAAAA-MMNN ; chaque commande au format CAAAA-MMNN. Le mois (MM) est celui de la date du document ; le compteur sur 2 chiffres reprend à 01 chaque 1er janvier. Si vous avez déjà facturé hors SasCompta, indiquez ici le prochain numéro de la série annuelle.",
     example: "Dernière facture F2026-1041 → prochain numéro = 42 → F2026-1142",
   },
   prochainNumero: {
     term: "Prochain numéro",
     plain:
-      "Le compteur annuel qui sera attribué à la prochaine émission de cette série (factures ou devis). SasCompta refuse une valeur trop basse si un document de la même année porte déjà ce numéro (ou un numéro supérieur).",
+      "Le compteur annuel qui sera attribué à la prochaine émission de cette série (factures, devis ou commandes). SasCompta refuse une valeur trop basse si un document de la même année porte déjà ce numéro (ou un numéro supérieur).",
     example: "Série Factures, année 2026 → aperçu F2026-1142",
   },
   importDocType: {
     term: "Type de document",
     plain:
-      "Ce que SasCompta croit reconnaître : facture fournisseur (ACH), facture client (VTE), devis client (Commercial), note de frais / reçu (ACH ou OD), ticket de caisse (OD), relevé bancaire (BQ). Vous pouvez corriger le type avant de confirmer.",
-    example: "PDF « D-2024-0012 » → Devis client → Commercial / Devis",
+      "Ce que SasCompta croit reconnaître : facture fournisseur (ACH), facture client (VTE), devis client (Commercial), commande client (Commercial), note de frais / reçu (ACH ou OD), ticket de caisse (OD), relevé bancaire (BQ). Vous pouvez corriger le type avant de confirmer.",
+    example: "PDF « BC-2024-0088 » → Commande client → Commercial / Commandes",
   },
   importRevue: {
     term: "Revue avant écriture",
     plain:
-      "Étape obligatoire : vous vérifiez type, date, montants, tiers et lignes proposées. Rien n’est comptabilisé tant que vous n’avez pas confirmé. À la confirmation l’écriture est postée (Grand livre / TVA / FEC) ; le fichier reste en pièce jointe. Une facture client crée aussi une fiche dans Factures (numéro externe conservé) pour Encaisser. Un devis crée une fiche dans Commercial → Devis (sans écriture).",
+      "Étape obligatoire : vous vérifiez type, date, montants, tiers et lignes proposées. Rien n’est comptabilisé tant que vous n’avez pas confirmé. À la confirmation l’écriture est postée (Grand livre / TVA / FEC) ; le fichier reste en pièce jointe. Une facture client crée aussi une fiche dans Factures (numéro externe conservé) pour Encaisser. Un devis ou une commande crée une fiche dans Commercial (sans écriture).",
   },
   compagnonMobile: {
     term: "Compagnon mobile",

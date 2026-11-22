@@ -615,6 +615,84 @@ pub struct CreateQuoteInput {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct CustomerOrderLine {
+    pub id: i64,
+    pub order_id: i64,
+    pub line_no: i32,
+    pub label: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    pub quantity_milli: i64,
+    pub unit: String,
+    pub unit_price_cents: i64,
+    pub ht_cents: i64,
+    pub vat_rate_bp: i32,
+    pub vat_code: Option<String>,
+    pub account_number: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CustomerOrderLineInput {
+    pub label: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    pub quantity_milli: i64,
+    pub unit: String,
+    pub unit_price_cents: i64,
+    #[serde(default)]
+    pub ht_cents: i64,
+    pub vat_rate_bp: i32,
+    pub vat_code: Option<String>,
+    pub account_number: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CustomerOrder {
+    pub id: i64,
+    pub number: String,
+    pub third_party_id: i64,
+    pub third_party_code: String,
+    pub third_party_name: String,
+    pub status: String,
+    pub issue_date: String,
+    pub currency: String,
+    pub ht_cents: i64,
+    pub vat_cents: i64,
+    pub ttc_cents: i64,
+    pub vat_mode: String,
+    pub notes: Option<String>,
+    pub legal_mentions: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+    /// `native` (saisie) ou `import` (PDF commande confirmé).
+    #[serde(default = "default_order_source")]
+    pub source: String,
+    #[serde(default)]
+    pub document_import_id: Option<i64>,
+    #[serde(default)]
+    pub pdf_path: Option<String>,
+    pub lines: Vec<CustomerOrderLine>,
+}
+
+fn default_order_source() -> String {
+    "native".into()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateCustomerOrderInput {
+    pub third_party_id: i64,
+    pub issue_date: String,
+    pub vat_mode: String,
+    pub notes: Option<String>,
+    pub legal_mentions: Option<String>,
+    pub lines: Vec<CustomerOrderLineInput>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct InvoiceLine {
     pub id: i64,
     pub invoice_id: i64,
@@ -1045,6 +1123,9 @@ pub struct DocumentImport {
     /// Devis client créé à la confirmation (customer_quote uniquement).
     #[serde(default)]
     pub quote_id: Option<i64>,
+    /// Commande client créée à la confirmation (customer_order uniquement).
+    #[serde(default)]
+    pub order_id: Option<i64>,
     pub created_at: String,
     pub confirmed_at: Option<String>,
     /// SHA-256 hex du contenu source (idempotence dossier / re-dépôt).
