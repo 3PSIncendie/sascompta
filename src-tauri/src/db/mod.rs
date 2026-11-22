@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use thiserror::Error;
 
-pub const SCHEMA_VERSION: i32 = 20;
+pub const SCHEMA_VERSION: i32 = 21;
 pub const DEMO_PASSWORD: &str = "SecretPass1";
 
 #[derive(Debug, Error)]
@@ -219,9 +219,15 @@ pub fn migrate(conn: &Connection) -> DbResult<()> {
     // v18 = note permanente conditions de facturation (organization.invoice_billing_notes)
     // v19 = devis client importé → fiche Commercial / Devis + liens import↔quote
     // v20 = commandes clients (Commercial → Commandes) + import customer_order
+    // v21 = réouverture de tous les exercices (import 2026 / stance « tous ouverts »)
 
     // Idempotent : à chaque ouverture, recrée les fiches manquantes (no-op si déjà liées).
     documents::backfill_imported_customer_invoices(conn)?;
+
+    // Stance temporaire : garder tous les exercices ouverts (pas de blocage import/UI).
+    // Idempotent — no-op si déjà ouverts. La clôture manuelle reste possible en session
+    // mais une FY clôturée est rouverte à la prochaine ouverture du workspace.
+    closing::reopen_all_fiscal_years(conn)?;
 
     if version < SCHEMA_VERSION {
         conn.execute(

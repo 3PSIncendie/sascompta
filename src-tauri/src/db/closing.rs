@@ -31,6 +31,18 @@ pub fn migrate_closing(conn: &Connection) -> DbResult<()> {
     Ok(())
 }
 
+/// Stance produit temporaire : tous les exercices restent utilisables
+/// (import 2026, saisie, UI). Pas d’auto-clôture ; une FY `closed`/`closing`
+/// est rouverte. La clôture manuelle reste disponible mais n’empêche plus
+/// l’import sur l’année concernée.
+pub fn reopen_all_fiscal_years(conn: &Connection) -> DbResult<usize> {
+    let n = conn.execute(
+        "UPDATE fiscal_year SET status = 'open' WHERE status != 'open'",
+        [],
+    )?;
+    Ok(n)
+}
+
 pub fn current_fiscal_year(conn: &Connection) -> DbResult<FiscalYear> {
     // Préférer l’exercice le plus récent par dates (pas par id) : les imports
     // peuvent créer des exercices antérieurs ouverts avec un id plus élevé.
@@ -110,7 +122,17 @@ fn fy_overlapping_range(
     .map_err(|e| e.into())
 }
 
+/// Rouvre un exercice `closed` / `closing` (pas de création).
+fn reopen_fiscal_year(conn: &Connection, id: i64) -> DbResult<FiscalYear> {
+    conn.execute(
+        "UPDATE fiscal_year SET status = 'open' WHERE id = ?1 AND status != 'open'",
+        params![id],
+    )?;
+    fiscal_year_by_id(conn, id)
+}
+
 /// Crée un exercice civil `YYYY` ouvert s’il manque (sans clôturer quoi que ce soit).
+/// Si un exercice existant chevauche mais est clôturé, le rouvre (pas de blocage).
 fn ensure_open_calendar_year(conn: &Connection, year: i32) -> DbResult<FiscalYear> {
     let start = format!("{year}-01-01");
     let end = format!("{year}-12-31");
@@ -128,11 +150,8 @@ fn ensure_open_calendar_year(conn: &Connection, year: i32) -> DbResult<FiscalYea
         if fy.status == "open" {
             return Ok(fy);
         }
-        return Err(format!(
-            "Exercice « {} » ({}) clôturé ({} → {}) — réouverture manuelle requise pour importer sur {}",
-            fy.label, fy.status, fy.start_date, fy.end_date, year
-        )
-        .into());
+        // Clôturé / en clôture : rouvrir pour permettre l’import (stance « tous ouverts »).
+        return reopen_fiscal_year(conn, fy.id);
     }
     conn.execute(
         "INSERT INTO fiscal_year(label, start_date, end_date, status) VALUES (?1, ?2, ?3, 'open')",
@@ -144,7 +163,9 @@ fn ensure_open_calendar_year(conn: &Connection, year: i32) -> DbResult<FiscalYea
 /// À la confirmation d’import : garantit un exercice **ouvert** couvrant
 /// `entry_date`, en créant au besoin les exercices civils manquants depuis
 /// [`IMPORT_FY_FLOOR_YEAR`] (2024) jusqu’à l’année de la pièce — **sans**
-/// auto-clôture. Si la pièce est antérieure à 2024, crée aussi cette année-là.
+/// auto-clôture. Un exercice déjà présent mais `closed`/`closing` est
+/// **rouvert** (pas de blocage). Si la pièce est antérieure à 2024, crée
+/// aussi cette année-là.
 ///
 /// Retourne l’id de l’exercice ouvert qui couvre la date.
 pub fn ensure_open_fiscal_years_for_import(
@@ -878,7 +899,7 @@ mod tests {
     }
 
     #[test]
-    fn import_ensure_refuses_closed_overlapping_year() {
+    fn import_ensure_reopens_closed_overlapping_year() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("fy-closed.sascompta");
         create_demo_workspace(&path).unwrap();
@@ -891,10 +912,63 @@ mod tests {
         )
         .unwrap();
 
-        let err = ensure_open_fiscal_years_for_import(&conn, "2024-05-01").unwrap_err();
-        assert!(
-            err.to_string().contains("clôturé"),
-            "unexpected: {err}"
-        );
+        let fy_id = ensure_open_fiscal_years_for_import(&conn, "2024-05-01").unwrap();
+        let fy = fiscal_year_by_id(&conn, fy_id).unwrap();
+        assert_eq!(fy.label, "2024");
+        assert_eq!(fy.status, "open");
+        assert_eq!(fy.start_date, "2024-01-01");
+    }
+
+    #[test]
+    fn import_ensure_reopens_closed_current_year_2026() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("fy-2026-closed.sascompta");
+        create_demo_workspace(&path).unwrap();
+        let conn = open_connection(&path).unwrap();
+
+        let cur = current_fiscal_year(&conn).unwrap();
+        assert_eq!(cur.label, "2026");
+        conn.execute(
+            "UPDATE fiscal_year SET status = 'closed' WHERE id = ?1",
+            params![cur.id],
+        )
+        .unwrap();
+
+        let fy_id = ensure_open_fiscal_years_for_import(&conn, "2026-03-15").unwrap();
+        assert_eq!(fy_id, cur.id);
+        let fy = fiscal_year_by_id(&conn, fy_id).unwrap();
+        assert_eq!(fy.status, "open");
+        assert_eq!(fy.label, "2026");
+    }
+
+    #[test]
+    fn reopen_all_fiscal_years_opens_closed() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("fy-reopen-all.sascompta");
+        create_demo_workspace(&path).unwrap();
+        let conn = open_connection(&path).unwrap();
+
+        conn.execute(
+            "INSERT INTO fiscal_year(label, start_date, end_date, status)
+             VALUES ('2025', '2025-01-01', '2025-12-31', 'closed')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE fiscal_year SET status = 'closing' WHERE label = '2026'",
+            [],
+        )
+        .unwrap();
+
+        let n = reopen_all_fiscal_years(&conn).unwrap();
+        assert!(n >= 2);
+        let closed: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM fiscal_year WHERE status != 'open'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(closed, 0);
     }
 }
