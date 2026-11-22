@@ -1916,18 +1916,18 @@ fn ink_color() -> Color {
     Color::Rgb(Rgb::new(0.18, 0.18, 0.17, None))
 }
 
-/// Remplissage bandeaux (en-tête tableau, Total TTC, pied) — gris moyen, plus soft que noir.
+/// Remplissage bandeaux (en-tête tableau, Total TTC, pied) — gris clair.
 fn header_fill() -> Color {
-    Color::Rgb(Rgb::new(0.38, 0.38, 0.36, None)) // ≈ #61615C
+    Color::Rgb(Rgb::new(0.91, 0.91, 0.898, None)) // ≈ #E8E8E5
 }
 
 fn rule_color() -> Color {
     Color::Rgb(Rgb::new(0.863, 0.863, 0.851, None))
 }
 
-/// Texte sur bandeau sombre (réf. Qonto/3PSI ≈ #F8F8F7, pas blanc pur).
+/// Texte sur bandeau clair — anthracite pour le contraste.
 fn band_text_color() -> Color {
-    Color::Rgb(Rgb::new(0.973, 0.973, 0.969, None))
+    ink_color()
 }
 
 fn fill_rect(layer: &PdfLayerReference, x0: f32, y0: f32, x1: f32, y1: f32, color: Color) {

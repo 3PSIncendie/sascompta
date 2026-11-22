@@ -2218,9 +2218,9 @@ button.linkish {
   --doc-ink: #2e2e2b;
   --doc-muted: #5a5a54;
   --doc-rule: #dcdcd9;
-  /* Gris moyen (plus soft que noir) — en-tête tableau / TTC / pied */
-  --doc-band: #61615c;
-  --doc-band-text: #f8f8f7;
+  /* Gris clair — en-tête tableau / TTC / pied (texte sombre pour contraste) */
+  --doc-band: #e8e8e5;
+  --doc-band-text: #2e2e2b;
   --doc-margin-l: 12.7mm;
   --doc-margin-r: 11.6mm;
   --a4-w: 210mm;
