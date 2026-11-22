@@ -363,7 +363,8 @@ fn now_iso() -> String {
 
 fn open_fy_id(conn: &Connection) -> DbResult<i64> {
     conn.query_row(
-        "SELECT id FROM fiscal_year WHERE status = 'open' ORDER BY id DESC LIMIT 1",
+        "SELECT id FROM fiscal_year WHERE status = 'open'
+         ORDER BY start_date DESC, id DESC LIMIT 1",
         [],
         |r| r.get(0),
     )
