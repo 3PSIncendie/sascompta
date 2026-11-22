@@ -4654,6 +4654,7 @@ Total TTC                 120,00
                 create_supplier_name: Some("Fournisseur 2024".into()),
                 create_supplier_code: Some("F924".into()),
                 create_supplier_siret: None,
+                is_credit_note: false,
             },
         )
         .unwrap();
@@ -4681,5 +4682,59 @@ Total TTC                 120,00
         let cur = closing::current_fiscal_year(&conn).unwrap();
         assert_eq!(cur.label, "2026");
         assert_eq!(cur.status, "open");
+    }
+
+    #[test]
+    fn confirm_import_2026_reopens_closed_exercice_and_posts() {
+        let dir = tempdir().unwrap();
+        let ws = dir.path().join("demo.sascompta");
+        let info = db::create_demo_workspace(&ws).unwrap();
+        let (conn, _) = db::open_workspace(&info.path, db::DEMO_PASSWORD).unwrap();
+
+        let cur = closing::current_fiscal_year(&conn).unwrap();
+        assert_eq!(cur.label, "2026");
+        conn.execute(
+            "UPDATE fiscal_year SET status = 'closed' WHERE id = ?1",
+            params![cur.id],
+        )
+        .unwrap();
+
+        let pdf = dir.path().join("fa-2026.pdf");
+        write_simple_pdf(&pdf, sample_invoice_text());
+        let doc = analyze_document(&conn, Path::new(&info.path), &pdf).unwrap();
+
+        let confirmed = confirm_document_import(
+            &conn,
+            doc.id,
+            &ConfirmDocumentImportInput {
+                doc_type: "supplier_invoice".into(),
+                entry_date: "2026-04-10".into(),
+                piece_ref: "FA-2026-1".into(),
+                label: "Import FA-2026-1".into(),
+                journal_code: "ACH".into(),
+                ht_cents: 10_000,
+                vat_cents: Some(2_000),
+                rate_bp: 2000,
+                vat_mode: "normale".into(),
+                vat_code: "T20D".into(),
+                ht_account: "606".into(),
+                counterpart_account: Some("401".into()),
+                bank_direction: None,
+                third_party_id: None,
+                create_supplier_name: Some("Fournisseur 2026".into()),
+                create_supplier_code: Some("F926".into()),
+                create_supplier_siret: None,
+                is_credit_note: false,
+            },
+        )
+        .unwrap();
+        assert_eq!(confirmed.status, "confirmed");
+        let entry_id = confirmed.entry_id.expect("écriture postée");
+        let entry = ledger::get_entry(&conn, entry_id).unwrap();
+        assert_eq!(entry.status, "posted");
+        assert_eq!(entry.fiscal_year_id, cur.id);
+
+        let fy = closing::fiscal_year_by_id(&conn, cur.id).unwrap();
+        assert_eq!(fy.status, "open");
     }
 }
