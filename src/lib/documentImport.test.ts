@@ -3,6 +3,7 @@ import {
   applyDocTypeDefaults,
   buildProposedLines,
   confidenceLabel,
+  confirmSupported,
   DOC_TYPE_REGISTRY,
   docTypeMeta,
   formFromImport,
@@ -39,13 +40,42 @@ const sample: DocumentImport = {
 
 describe("documentImport registry", () => {
   it("exposes posting for practical document types", () => {
-    expect(DOC_TYPE_REGISTRY.length).toBeGreaterThanOrEqual(5);
+    expect(DOC_TYPE_REGISTRY.length).toBeGreaterThanOrEqual(6);
     expect(docTypeMeta("supplier_invoice").postingSupported).toBe(true);
     expect(docTypeMeta("customer_invoice").postingSupported).toBe(true);
+    expect(docTypeMeta("customer_quote").postingSupported).toBe(false);
+    expect(docTypeMeta("customer_quote").createsQuote).toBe(true);
+    expect(confirmSupported(docTypeMeta("customer_quote"))).toBe(true);
     expect(docTypeMeta("expense_receipt").postingSupported).toBe(true);
     expect(docTypeMeta("bank_statement").postingSupported).toBe(true);
     expect(docTypeMeta("ticket").postingSupported).toBe(true);
     expect(docTypeMeta("unknown").postingSupported).toBe(false);
+    expect(confirmSupported(docTypeMeta("unknown"))).toBe(false);
+  });
+
+  it("maps devis extraction into review form without ledger lines", () => {
+    const devis: DocumentImport = {
+      ...sample,
+      docType: "customer_quote",
+      extraction: {
+        issueDate: "2024-06-01",
+        invoiceNumber: "D-2024-0012",
+        supplierName: "ACME SAS",
+        htCents: 120_000,
+        vatCents: 24_000,
+        rateBp: 2000,
+        vatMode: "normale",
+        vatCode: "T20C",
+        htAccount: "706",
+        journalCode: "DEV",
+      },
+    };
+    const form = formFromImport(devis);
+    expect(form.docType).toBe("customer_quote");
+    expect(form.pieceRef).toBe("D-2024-0012");
+    expect(form.journalCode).toBe("DEV");
+    expect(form.vatCode).toBe("T20C");
+    expect(buildProposedLines(form)).toEqual([]);
   });
 
   it("maps extraction into review form", () => {

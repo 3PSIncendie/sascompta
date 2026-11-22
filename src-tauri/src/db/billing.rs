@@ -174,6 +174,7 @@ pub fn migrate_billing(conn: &Connection) -> DbResult<()> {
     enrich_billing_line_description(conn)?;
     enrich_invoice_import_link(conn)?;
     enrich_invoice_purchase_order(conn)?;
+    enrich_quote_import_link(conn)?;
     Ok(())
 }
 
@@ -203,6 +204,27 @@ fn enrich_invoice_import_link(conn: &Connection) -> DbResult<()> {
             "ALTER TABLE invoice ADD COLUMN document_import_id INTEGER",
             [],
         )?;
+    }
+    Ok(())
+}
+
+/// v19 — origine import + lien document_import sur devis (workspaces antérieurs).
+fn enrich_quote_import_link(conn: &Connection) -> DbResult<()> {
+    let cols = table_columns(conn, "quote")?;
+    if !cols.iter().any(|c| c == "source") {
+        conn.execute(
+            "ALTER TABLE quote ADD COLUMN source TEXT NOT NULL DEFAULT 'native'",
+            [],
+        )?;
+    }
+    if !cols.iter().any(|c| c == "document_import_id") {
+        conn.execute(
+            "ALTER TABLE quote ADD COLUMN document_import_id INTEGER",
+            [],
+        )?;
+    }
+    if !cols.iter().any(|c| c == "pdf_path") {
+        conn.execute("ALTER TABLE quote ADD COLUMN pdf_path TEXT", [])?;
     }
     Ok(())
 }
@@ -726,6 +748,11 @@ fn map_quote_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Quote> {
         legal_mentions: r.get(14)?,
         created_at: r.get(15)?,
         updated_at: r.get(16)?,
+        source: r
+            .get::<_, Option<String>>(17)?
+            .unwrap_or_else(|| "native".into()),
+        document_import_id: r.get(18)?,
+        pdf_path: r.get(19)?,
         lines: Vec::new(),
     })
 }
@@ -759,7 +786,8 @@ fn get_quote_header(conn: &Connection, id: i64) -> DbResult<Quote> {
     conn.query_row(
         "SELECT q.id, q.number, q.third_party_id, tp.code, tp.name, q.status,
                 q.issue_date, q.valid_until, q.currency, q.ht_cents, q.vat_cents, q.ttc_cents,
-                q.vat_mode, q.notes, q.legal_mentions, q.created_at, q.updated_at
+                q.vat_mode, q.notes, q.legal_mentions, q.created_at, q.updated_at,
+                q.source, q.document_import_id, q.pdf_path
          FROM quote q
          JOIN third_party tp ON tp.id = q.third_party_id
          WHERE q.id = ?1",
@@ -779,7 +807,8 @@ pub fn list_quotes(conn: &Connection) -> DbResult<Vec<Quote>> {
     let mut stmt = conn.prepare(
         "SELECT q.id, q.number, q.third_party_id, tp.code, tp.name, q.status,
                 q.issue_date, q.valid_until, q.currency, q.ht_cents, q.vat_cents, q.ttc_cents,
-                q.vat_mode, q.notes, q.legal_mentions, q.created_at, q.updated_at
+                q.vat_mode, q.notes, q.legal_mentions, q.created_at, q.updated_at,
+                q.source, q.document_import_id, q.pdf_path
          FROM quote q
          JOIN third_party tp ON tp.id = q.third_party_id
          ORDER BY q.issue_date DESC, q.id DESC",
@@ -1392,6 +1421,147 @@ fn resolve_external_invoice_number(
     Ok(alt)
 }
 
+/// Numéro externe (logiciel tiers) pour un devis importé — ne consomme pas la série DEV.
+fn resolve_external_quote_number(
+    conn: &Connection,
+    piece_ref: &str,
+    document_import_id: i64,
+) -> DbResult<String> {
+    let base = piece_ref.trim();
+    let candidate = if base.is_empty() {
+        format!("IMP-D-{document_import_id}")
+    } else {
+        base.to_string()
+    };
+    let taken: bool = conn
+        .query_row(
+            "SELECT 1 FROM quote WHERE number = ?1 LIMIT 1",
+            params![candidate],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some();
+    if !taken {
+        return Ok(candidate);
+    }
+    let alt = format!("{candidate}·imp{document_import_id}");
+    let alt_taken: bool = conn
+        .query_row(
+            "SELECT 1 FROM quote WHERE number = ?1 LIMIT 1",
+            params![alt],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some();
+    if alt_taken {
+        return Err(format!(
+            "Numéro de devis « {candidate} » déjà utilisé — renommez la pièce"
+        )
+        .into());
+    }
+    Ok(alt)
+}
+
+/// Crée un devis **envoyé** depuis un import document (pas d’écriture comptable).
+/// Conserve le numéro externe (`piece_ref`) — pas d’allocation série DEV.
+pub fn create_imported_quote(
+    conn: &Connection,
+    document_import_id: i64,
+    third_party_id: i64,
+    issue_date: &str,
+    piece_ref: &str,
+    label: &str,
+    ht_cents: i64,
+    vat_cents: i64,
+    rate_bp: i32,
+    vat_mode: &str,
+    vat_code: &str,
+    ht_account: &str,
+    pdf_path: Option<&str>,
+) -> DbResult<Quote> {
+    ensure_customer(conn, third_party_id)?;
+    validate_vat_mode(vat_mode)?;
+    if ht_cents <= 0 {
+        return Err("Montant HT invalide pour le devis importé".into());
+    }
+    // Idempotence : un même import ne crée qu’un devis.
+    if let Some(existing_id) = conn
+        .query_row(
+            "SELECT id FROM quote WHERE document_import_id = ?1 LIMIT 1",
+            params![document_import_id],
+            |r| r.get::<_, i64>(0),
+        )
+        .optional()?
+    {
+        return get_quote(conn, existing_id);
+    }
+    let vat = if vat_mode == "normale" {
+        vat_cents.max(0)
+    } else {
+        0
+    };
+    let ttc = ht_cents + vat;
+    let number = resolve_external_quote_number(conn, piece_ref, document_import_id)?;
+    let account = if ht_account.trim().is_empty() {
+        "706".to_string()
+    } else {
+        ht_account.trim().to_string()
+    };
+    let line_label = {
+        let t = label.trim();
+        if t.is_empty() {
+            format!("Import {number}")
+        } else {
+            t.to_string()
+        }
+    };
+    let notes = format!("Import document #{document_import_id}");
+    let legal = legal_mentions_for(vat_mode);
+    let now = now_iso();
+    let vat_code_opt = if vat_code.trim().is_empty() {
+        None
+    } else {
+        Some(vat_code.trim().to_string())
+    };
+    let line_vat_code = vat_code_opt.clone();
+    conn.execute(
+        "INSERT INTO quote(
+            number, third_party_id, status, issue_date, valid_until, currency,
+            ht_cents, vat_cents, ttc_cents, vat_mode, notes, legal_mentions,
+            created_at, updated_at, source, document_import_id, pdf_path
+         ) VALUES (?1, ?2, 'sent', ?3, NULL, 'EUR', ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10,
+            'import', ?11, ?12)",
+        params![
+            number,
+            third_party_id,
+            issue_date,
+            ht_cents,
+            vat,
+            ttc,
+            vat_mode,
+            notes,
+            if legal.is_empty() { None } else { Some(legal) },
+            now,
+            document_import_id,
+            pdf_path,
+        ],
+    )?;
+    let id = conn.last_insert_rowid();
+    let line = QuoteLineInput {
+        label: line_label,
+        description: Some("Devis client importé (autre logiciel)".into()),
+        quantity_milli: 1000,
+        unit: "u".into(),
+        unit_price_cents: ht_cents,
+        ht_cents,
+        vat_rate_bp: rate_bp.max(0),
+        vat_code: line_vat_code,
+        account_number: account,
+    };
+    insert_quote_lines(conn, id, &[(line, ht_cents)])?;
+    get_quote(conn, id)
+}
+
 /// Crée une facture **émise** liée à une écriture VTE déjà produite par l’import client.
 /// Conserve le numéro externe (`piece_ref`) — pas d’allocation série FACT, pas de 2ᵉ VTE.
 pub fn create_imported_customer_invoice(
@@ -1951,9 +2121,9 @@ fn stroke_rect(
     thickness: f32,
     color: Color,
 ) {
-    fill_rect(layer, x0, y0, x1, y0 + thickness, color);
-    fill_rect(layer, x0, y1 - thickness, x1, y1, color);
-    fill_rect(layer, x0, y0, x0 + thickness, y1, color);
+    fill_rect(layer, x0, y0, x1, y0 + thickness, color.clone());
+    fill_rect(layer, x0, y1 - thickness, x1, y1, color.clone());
+    fill_rect(layer, x0, y0, x0 + thickness, y1, color.clone());
     fill_rect(layer, x1 - thickness, y0, x1, y1, color);
 }
 

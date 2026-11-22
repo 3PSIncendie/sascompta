@@ -9,6 +9,7 @@ import {
   applyDocTypeDefaults,
   buildProposedLines,
   confidenceLabel,
+  confirmSupported,
   DOC_TYPE_REGISTRY,
   docTypeMeta,
   formFromImport,
@@ -172,6 +173,8 @@ export function DocumentImportScreen({ onNavigate }: Props) {
 
   const meta = form ? docTypeMeta(form.docType) : null;
   const canPost = meta?.postingSupported === true;
+  const createsQuote = meta?.createsQuote === true;
+  const canConfirm = meta ? confirmSupported(meta) : false;
   const partyKind = meta?.partyKind ?? "none";
   const showParty = partyKind !== "none" && form?.docType !== "bank_statement";
   const partyNeeded =
@@ -187,7 +190,7 @@ export function DocumentImportScreen({ onNavigate }: Props) {
 
   const vatModeOptions = useMemo(() => {
     if (!form) return [] as { value: ReviewFormState["vatMode"]; label: string }[];
-    if (form.docType === "customer_invoice") {
+    if (form.docType === "customer_invoice" || form.docType === "customer_quote") {
       return [
         { value: "normale" as const, label: "TVA classique" },
         { value: "sans" as const, label: "Sans TVA" },
@@ -218,7 +221,7 @@ export function DocumentImportScreen({ onNavigate }: Props) {
 
   const filteredVatCodes = useMemo(() => {
     if (!form) return vatCodes;
-    if (form.docType === "customer_invoice") {
+    if (form.docType === "customer_invoice" || form.docType === "customer_quote") {
       if (form.vatMode === "sans") return vatCodes.filter((c) => c.direction === "exempt");
       if (form.vatMode === "autoliquidation_chantier")
         return vatCodes.filter((c) => c.direction === "reverse" || c.direction === "exempt");
@@ -235,10 +238,10 @@ export function DocumentImportScreen({ onNavigate }: Props) {
 
   async function onConfirm() {
     if (!form || !selected) return;
-    if (!canPost) {
+    if (!canConfirm) {
       setError(
         meta?.comingSoonHint ||
-          "Précisez le type de document pour proposer une écriture.",
+          "Précisez le type de document pour proposer une écriture ou un devis.",
       );
       return;
     }
@@ -268,7 +271,9 @@ export function DocumentImportScreen({ onNavigate }: Props) {
       const journal = form.journalCode || suggestedJournal(form);
       if (PREVIEW || !isTauriRuntime()) {
         setStatus(
-          `Aperçu : écriture ${journal} aurait été postée après confirmation. Passez par le desktop pour persister.`,
+          createsQuote
+            ? "Aperçu : un devis aurait été créé dans Commercial → Devis. Passez par le desktop pour persister."
+            : `Aperçu : écriture ${journal} aurait été postée après confirmation. Passez par le desktop pour persister.`,
         );
         return;
       }
@@ -276,13 +281,23 @@ export function DocumentImportScreen({ onNavigate }: Props) {
         selected.id,
         toConfirmInput({ ...form, journalCode: journal }, htCents, vatCents),
       );
-      const invoiceBit =
-        confirmed.docType === "customer_invoice" && confirmed.invoiceId
-          ? ` Facture #${confirmed.invoiceId} créée dans Factures (Encaisser).`
-          : "";
-      setStatus(
-        `Écriture #${confirmed.entryId} postée (${journal}) — visible au Grand livre, TVA et FEC.${invoiceBit} La revue Import était le filet de validation.`,
-      );
+      if (confirmed.docType === "customer_quote" && confirmed.quoteId) {
+        const num =
+          confirmed.extraction.confirmedQuoteNumber ||
+          confirmed.extraction.invoiceNumber ||
+          `#${confirmed.quoteId}`;
+        setStatus(
+          `Devis ${num} créé dans Commercial → Devis (suivi). Aucune écriture comptable. La revue Import était le filet de validation.`,
+        );
+      } else {
+        const invoiceBit =
+          confirmed.docType === "customer_invoice" && confirmed.invoiceId
+            ? ` Facture #${confirmed.invoiceId} créée dans Factures (Encaisser).`
+            : "";
+        setStatus(
+          `Écriture #${confirmed.entryId} postée (${journal}) — visible au Grand livre, TVA et FEC.${invoiceBit} La revue Import était le filet de validation.`,
+        );
+      }
       await reload();
       setSelectedId(confirmed.id);
       setForm(formFromImport(confirmed));
@@ -441,12 +456,17 @@ export function DocumentImportScreen({ onNavigate }: Props) {
             </p>
           ) : (
             <>
-              <h2>Revue avant écriture</h2>
+              <h2>
+                {createsQuote ? "Revue avant devis" : "Revue avant écriture"}
+              </h2>
               <p className="muted">
                 Méthode : <strong>{selected.extractionMethod}</strong> · confiance{" "}
                 <strong>{confidenceLabel(selected.confidence)}</strong> (
                 {Math.round(selected.confidence * 100)} %) · statut{" "}
                 <strong>{selected.status}</strong>
+                {selected.status === "confirmed" && selected.quoteId
+                  ? " · déjà importé en devis"
+                  : ""}
               </p>
               {selected.extraction.notes && (
                 <p className="hint-banner">{selected.extraction.notes}</p>
@@ -465,12 +485,12 @@ export function DocumentImportScreen({ onNavigate }: Props) {
                     {DOC_TYPE_REGISTRY.map((t) => (
                       <option key={t.id} value={t.id}>
                         {t.label}
-                        {!t.postingSupported ? " — à préciser" : ""}
+                        {!confirmSupported(t) ? " — à préciser" : ""}
                       </option>
                     ))}
                   </select>
                   <span className="field-hint">{meta?.shortHelp}</span>
-                  {!canPost && meta?.comingSoonHint && (
+                  {!canConfirm && meta?.comingSoonHint && (
                     <span className="field-hint warn">{meta.comingSoonHint}</span>
                   )}
                 </label>
@@ -553,7 +573,8 @@ export function DocumentImportScreen({ onNavigate }: Props) {
                         htAccount:
                           vatMode === "autoliquidation_sous_traitance"
                             ? "604"
-                            : form.docType === "customer_invoice"
+                            : form.docType === "customer_invoice" ||
+                                form.docType === "customer_quote"
                               ? form.htAccount || "706"
                               : form.docType === "expense_receipt" ||
                                   form.docType === "ticket"
@@ -564,7 +585,8 @@ export function DocumentImportScreen({ onNavigate }: Props) {
                             ? "T20R"
                             : vatMode === "sans"
                               ? "TEX"
-                              : form.docType === "customer_invoice"
+                              : form.docType === "customer_invoice" ||
+                                  form.docType === "customer_quote"
                                 ? "T20C"
                                 : "T20D",
                       });
@@ -604,7 +626,8 @@ export function DocumentImportScreen({ onNavigate }: Props) {
                 )}
 
                 <label>
-                  {form.docType === "customer_invoice"
+                  {form.docType === "customer_invoice" ||
+                  form.docType === "customer_quote"
                     ? "Compte produit"
                     : form.docType === "bank_statement"
                       ? "Contrepartie (souvent 471)"
@@ -759,6 +782,17 @@ export function DocumentImportScreen({ onNavigate }: Props) {
                 </div>
               )}
 
+              {createsQuote && form && selected.status === "pending_review" && (
+                <div className="proposed-lines">
+                  <h3>Fiche devis proposée</h3>
+                  <p className="muted tiny">
+                    À la confirmation : devis « {form.pieceRef || "n° externe"} »{" "}
+                    dans Commercial → Devis (statut Envoyé). Pas d’écriture au
+                    Grand livre.
+                  </p>
+                </div>
+              )}
+
               {canPost && proposed.length > 0 && (
                 <div className="proposed-lines">
                   <h3>Lignes proposées ({journalLabel})</h3>
@@ -798,10 +832,12 @@ export function DocumentImportScreen({ onNavigate }: Props) {
                   <button
                     type="button"
                     className="primary"
-                    disabled={busy || !canPost}
+                    disabled={busy || !canConfirm}
                     onClick={() => void onConfirm()}
                   >
-                    Confirmer → poster {journalLabel}
+                    {createsQuote
+                      ? "Confirmer → créer le devis"
+                      : `Confirmer → poster ${journalLabel}`}
                   </button>
                   <button
                     type="button"
@@ -812,6 +848,28 @@ export function DocumentImportScreen({ onNavigate }: Props) {
                     Supprimer
                   </button>
                 </div>
+              )}
+
+              {selected.status === "confirmed" && selected.quoteId && (
+                <p className="ok">
+                  Lié au devis #{selected.quoteId}
+                  {selected.extraction.confirmedQuoteNumber
+                    ? ` (${selected.extraction.confirmedQuoteNumber})`
+                    : ""}
+                  {onNavigate && (
+                    <>
+                      {" "}
+                      —{" "}
+                      <button
+                        type="button"
+                        className="linkish"
+                        onClick={() => onNavigate("devis")}
+                      >
+                        Ouvrir Devis
+                      </button>
+                    </>
+                  )}
+                </p>
               )}
 
               {selected.status === "confirmed" && selected.entryId && (

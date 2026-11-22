@@ -224,6 +224,8 @@ export interface QuoteLineInput {
   accountNumber: string;
 }
 
+export type QuoteSource = "native" | "import";
+
 export interface Quote {
   id: number;
   number: string;
@@ -242,6 +244,10 @@ export interface Quote {
   legalMentions: string | null;
   createdAt: string;
   updatedAt: string;
+  /** `native` (saisie) ou `import` (PDF devis confirmé). */
+  source?: QuoteSource | string;
+  documentImportId?: number | null;
+  pdfPath?: string | null;
   lines: QuoteLine[];
 }
 

@@ -18,6 +18,14 @@ export const QUOTE_STATUS_LABELS: Record<QuoteStatus, string> = {
   invoiced: "Facturé",
 };
 
+export function quoteSourceHint(source?: string | null): string | null {
+  return source === "import" ? "Import" : null;
+}
+
+export function isImportedQuote(q: Pick<Quote, "source">): boolean {
+  return q.source === "import";
+}
+
 export const BILLING_VAT_MODE_OPTIONS: {
   id: BillingVatMode;
   label: string;
@@ -291,6 +299,7 @@ export function previewQuotes(): Quote[] {
       legalMentions: null,
       createdAt: now,
       updatedAt: now,
+      source: "native",
       lines: [
         {
           id: 1,

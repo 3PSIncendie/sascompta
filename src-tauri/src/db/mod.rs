@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use thiserror::Error;
 
-pub const SCHEMA_VERSION: i32 = 18;
+pub const SCHEMA_VERSION: i32 = 19;
 pub const DEMO_PASSWORD: &str = "SecretPass1";
 
 #[derive(Debug, Error)]
@@ -217,6 +217,7 @@ pub fn migrate(conn: &Connection) -> DbResult<()> {
     // v16 = backfill Factures pour customer_invoice confirmés avant #52 (sans invoice_id)
     // v17 = organization.email / iban / bic (PDF devis/facture calque 3PSI)
     // v18 = note permanente conditions de facturation (organization.invoice_billing_notes)
+    // v19 = devis client importé → fiche Commercial / Devis + liens import↔quote
 
     // Idempotent : à chaque ouverture, recrée les fiches manquantes (no-op si déjà liées).
     documents::backfill_imported_customer_invoices(conn)?;

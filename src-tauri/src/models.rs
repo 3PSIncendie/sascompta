@@ -587,7 +587,18 @@ pub struct Quote {
     pub legal_mentions: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+    /// `native` (saisie) ou `import` (PDF devis confirmé).
+    #[serde(default = "default_quote_source")]
+    pub source: String,
+    #[serde(default)]
+    pub document_import_id: Option<i64>,
+    #[serde(default)]
+    pub pdf_path: Option<String>,
     pub lines: Vec<QuoteLine>,
+}
+
+fn default_quote_source() -> String {
+    "native".into()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1031,6 +1042,9 @@ pub struct DocumentImport {
     /// Facture client créée à la confirmation (customer_invoice uniquement).
     #[serde(default)]
     pub invoice_id: Option<i64>,
+    /// Devis client créé à la confirmation (customer_quote uniquement).
+    #[serde(default)]
+    pub quote_id: Option<i64>,
     pub created_at: String,
     pub confirmed_at: Option<String>,
     /// SHA-256 hex du contenu source (idempotence dossier / re-dépôt).
