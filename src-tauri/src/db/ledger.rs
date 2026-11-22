@@ -107,20 +107,17 @@ fn insert_lines(conn: &Connection, entry_id: i64, lines: &[EntryLineInput]) -> D
     Ok(())
 }
 
-/// Vérifie que `entry_date` tombe dans l'exercice ouvert et renvoie son id.
+/// Vérifie que `entry_date` tombe dans **un** exercice ouvert et renvoie son id.
+/// Plusieurs exercices peuvent être ouverts (imports d’années antérieures).
 fn open_fy_id_for_entry_date(conn: &Connection, entry_date: &str) -> DbResult<i64> {
-    let (fy_id, start, end): (i64, String, String) = conn.query_row(
-        "SELECT id, start_date, end_date FROM fiscal_year WHERE status = 'open' ORDER BY id DESC LIMIT 1",
-        [],
-        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-    )?;
-    if entry_date < start.as_str() || entry_date > end.as_str() {
-        return Err(format!(
-            "Date d'écriture {entry_date} hors exercice ouvert ({start} → {end})"
-        )
-        .into());
+    if let Some(fy) = super::closing::open_fy_covering_date(conn, entry_date)? {
+        return Ok(fy.id);
     }
-    Ok(fy_id)
+    // Message de repli : citer l’exercice courant (dates les plus récentes).
+    let hint = super::closing::current_fiscal_year(conn)
+        .map(|fy| format!("{} → {}", fy.start_date, fy.end_date))
+        .unwrap_or_else(|_| "aucun".into());
+    Err(format!("Date d'écriture {entry_date} hors exercice ouvert ({hint})").into())
 }
 
 pub fn create_draft(conn: &Connection, input: &CreateEntryInput) -> DbResult<Entry> {

@@ -486,7 +486,8 @@ pub fn set_invoice_billing_notes(
 pub fn load_workspace_info(conn: &Connection, path: &Path) -> DbResult<WorkspaceInfo> {
     let organization = load_organization(conn)?;
     let fiscal_year = conn.query_row(
-        "SELECT id, label, start_date, end_date, status FROM fiscal_year ORDER BY id DESC LIMIT 1",
+        "SELECT id, label, start_date, end_date, status FROM fiscal_year
+         ORDER BY start_date DESC, id DESC LIMIT 1",
         [],
         |r| {
             Ok(FiscalYear {

@@ -32,8 +32,11 @@ pub fn migrate_closing(conn: &Connection) -> DbResult<()> {
 }
 
 pub fn current_fiscal_year(conn: &Connection) -> DbResult<FiscalYear> {
+    // Préférer l’exercice le plus récent par dates (pas par id) : les imports
+    // peuvent créer des exercices antérieurs ouverts avec un id plus élevé.
     conn.query_row(
-        "SELECT id, label, start_date, end_date, status FROM fiscal_year ORDER BY id DESC LIMIT 1",
+        "SELECT id, label, start_date, end_date, status FROM fiscal_year
+         ORDER BY start_date DESC, id DESC LIMIT 1",
         [],
         |r| {
             Ok(FiscalYear {
@@ -46,6 +49,127 @@ pub fn current_fiscal_year(conn: &Connection) -> DbResult<FiscalYear> {
         },
     )
     .map_err(|e| e.into())
+}
+
+/// Plancher produit pour l’auto-création d’exercices à l’import (« depuis 2024 »).
+pub const IMPORT_FY_FLOOR_YEAR: i32 = 2024;
+
+fn parse_entry_year(entry_date: &str) -> DbResult<i32> {
+    let y = entry_date
+        .get(0..4)
+        .ok_or("Date d'écriture invalide")?;
+    if !y.chars().all(|c| c.is_ascii_digit()) {
+        return Err("Date d'écriture invalide".into());
+    }
+    y.parse::<i32>()
+        .map_err(|_| "Année d'écriture invalide".into())
+}
+
+/// Exercice ouvert dont la plage couvre `entry_date`, s’il existe.
+pub fn open_fy_covering_date(conn: &Connection, entry_date: &str) -> DbResult<Option<FiscalYear>> {
+    conn.query_row(
+        "SELECT id, label, start_date, end_date, status FROM fiscal_year
+         WHERE status = 'open' AND start_date <= ?1 AND end_date >= ?1
+         ORDER BY start_date DESC, id DESC LIMIT 1",
+        params![entry_date],
+        |r| {
+            Ok(FiscalYear {
+                id: r.get(0)?,
+                label: r.get(1)?,
+                start_date: r.get(2)?,
+                end_date: r.get(3)?,
+                status: r.get(4)?,
+            })
+        },
+    )
+    .optional()
+    .map_err(|e| e.into())
+}
+
+fn fy_overlapping_range(
+    conn: &Connection,
+    start: &str,
+    end: &str,
+) -> DbResult<Option<FiscalYear>> {
+    conn.query_row(
+        "SELECT id, label, start_date, end_date, status FROM fiscal_year
+         WHERE start_date <= ?2 AND end_date >= ?1
+         ORDER BY start_date ASC, id ASC LIMIT 1",
+        params![start, end],
+        |r| {
+            Ok(FiscalYear {
+                id: r.get(0)?,
+                label: r.get(1)?,
+                start_date: r.get(2)?,
+                end_date: r.get(3)?,
+                status: r.get(4)?,
+            })
+        },
+    )
+    .optional()
+    .map_err(|e| e.into())
+}
+
+/// Crée un exercice civil `YYYY` ouvert s’il manque (sans clôturer quoi que ce soit).
+fn ensure_open_calendar_year(conn: &Connection, year: i32) -> DbResult<FiscalYear> {
+    let start = format!("{year}-01-01");
+    let end = format!("{year}-12-31");
+    if let Some(fy) = open_fy_covering_date(conn, &start)? {
+        // Déjà un ouvert qui couvre le 1er janvier (cas civil classique).
+        if fy.start_date.as_str() <= start.as_str() && fy.end_date.as_str() >= end.as_str() {
+            return Ok(fy);
+        }
+        // Exercice ouvert partiel qui chevauche : on ne recrée pas.
+        if fy.start_date.as_str() <= end.as_str() && fy.end_date.as_str() >= start.as_str() {
+            return Ok(fy);
+        }
+    }
+    if let Some(fy) = fy_overlapping_range(conn, &start, &end)? {
+        if fy.status == "open" {
+            return Ok(fy);
+        }
+        return Err(format!(
+            "Exercice « {} » ({}) clôturé ({} → {}) — réouverture manuelle requise pour importer sur {}",
+            fy.label, fy.status, fy.start_date, fy.end_date, year
+        )
+        .into());
+    }
+    conn.execute(
+        "INSERT INTO fiscal_year(label, start_date, end_date, status) VALUES (?1, ?2, ?3, 'open')",
+        params![year.to_string(), start, end],
+    )?;
+    fiscal_year_by_id(conn, conn.last_insert_rowid())
+}
+
+/// À la confirmation d’import : garantit un exercice **ouvert** couvrant
+/// `entry_date`, en créant au besoin les exercices civils manquants depuis
+/// [`IMPORT_FY_FLOOR_YEAR`] (2024) jusqu’à l’année de la pièce — **sans**
+/// auto-clôture. Si la pièce est antérieure à 2024, crée aussi cette année-là.
+///
+/// Retourne l’id de l’exercice ouvert qui couvre la date.
+pub fn ensure_open_fiscal_years_for_import(
+    conn: &Connection,
+    entry_date: &str,
+) -> DbResult<i64> {
+    if let Some(fy) = open_fy_covering_date(conn, entry_date)? {
+        return Ok(fy.id);
+    }
+    let year = parse_entry_year(entry_date)?;
+    let from = if year >= IMPORT_FY_FLOOR_YEAR {
+        IMPORT_FY_FLOOR_YEAR
+    } else {
+        year
+    };
+    for y in from..=year {
+        ensure_open_calendar_year(conn, y)?;
+    }
+    match open_fy_covering_date(conn, entry_date)? {
+        Some(fy) => Ok(fy.id),
+        None => Err(format!(
+            "Impossible de créer un exercice ouvert couvrant {entry_date}"
+        )
+        .into()),
+    }
 }
 
 pub fn fiscal_year_by_id(conn: &Connection, id: i64) -> DbResult<FiscalYear> {
@@ -677,5 +801,100 @@ mod tests {
         assert!(zip_path.metadata().unwrap().len() > 100);
         assert_eq!(meta.resultat_cents, 567_500);
         assert_eq!(meta.siren, "123456782");
+    }
+
+    #[test]
+    fn import_ensure_creates_open_years_from_2024_without_closing() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("fy-import.sascompta");
+        create_demo_workspace(&path).unwrap();
+        let conn = open_connection(&path).unwrap();
+
+        let before = current_fiscal_year(&conn).unwrap();
+        assert_eq!(before.label, "2026");
+        assert_eq!(before.status, "open");
+
+        // 2025 → crée 2024 + 2025 ouverts ; 2026 reste l’exercice « courant ».
+        let fy_id = ensure_open_fiscal_years_for_import(&conn, "2025-06-15").unwrap();
+        let fy2025 = fiscal_year_by_id(&conn, fy_id).unwrap();
+        assert_eq!(fy2025.label, "2025");
+        assert_eq!(fy2025.status, "open");
+        assert_eq!(fy2025.start_date, "2025-01-01");
+        assert_eq!(fy2025.end_date, "2025-12-31");
+
+        let fy2024 = open_fy_covering_date(&conn, "2024-01-01")
+            .unwrap()
+            .expect("2024 créé");
+        assert_eq!(fy2024.label, "2024");
+        assert_eq!(fy2024.status, "open");
+
+        let cur = current_fiscal_year(&conn).unwrap();
+        assert_eq!(cur.label, "2026");
+        assert_eq!(cur.status, "open");
+
+        // Idempotent : pas de doublon.
+        let again = ensure_open_fiscal_years_for_import(&conn, "2025-06-15").unwrap();
+        assert_eq!(again, fy_id);
+        let n2025: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM fiscal_year WHERE label = '2025'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n2025, 1);
+
+        // Aucune clôture automatique.
+        let closed: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM fiscal_year WHERE status != 'open'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(closed, 0);
+    }
+
+    #[test]
+    fn import_ensure_pre_2024_creates_document_year_only() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("fy-pre.sascompta");
+        create_demo_workspace(&path).unwrap();
+        let conn = open_connection(&path).unwrap();
+
+        let fy_id = ensure_open_fiscal_years_for_import(&conn, "2023-03-01").unwrap();
+        let fy = fiscal_year_by_id(&conn, fy_id).unwrap();
+        assert_eq!(fy.label, "2023");
+        assert_eq!(fy.status, "open");
+
+        let n2024: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM fiscal_year WHERE label = '2024'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n2024, 0, "ne pas inventer 2024 pour une pièce 2023");
+    }
+
+    #[test]
+    fn import_ensure_refuses_closed_overlapping_year() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("fy-closed.sascompta");
+        create_demo_workspace(&path).unwrap();
+        let conn = open_connection(&path).unwrap();
+
+        conn.execute(
+            "INSERT INTO fiscal_year(label, start_date, end_date, status)
+             VALUES ('2024', '2024-01-01', '2024-12-31', 'closed')",
+            [],
+        )
+        .unwrap();
+
+        let err = ensure_open_fiscal_years_for_import(&conn, "2024-05-01").unwrap_err();
+        assert!(
+            err.to_string().contains("clôturé"),
+            "unexpected: {err}"
+        );
     }
 }

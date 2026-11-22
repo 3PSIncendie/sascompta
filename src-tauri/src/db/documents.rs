@@ -11,6 +11,7 @@
 //! Devis / commande client : fiche Commercial (numéro externe) — pas de VTE.
 
 use super::billing;
+use super::closing;
 use super::ledger;
 use super::tax;
 use super::DbResult;
@@ -2983,6 +2984,10 @@ pub fn confirm_document_import(
         input.label.trim().to_string()
     };
 
+    // Exercices civils manquants depuis 2024 (ouverts, non clôturés) pour
+    // débloquer ACH/VTE datés sur des années antérieures à l’exercice courant.
+    closing::ensure_open_fiscal_years_for_import(conn, &input.entry_date)?;
+
     // Transaction atomique : post + passage confirmed. Sinon un crash après
     // `post_entry` laisse l'import en `pending_review` → double confirmation = double post.
     let tx = conn.unchecked_transaction()?;
@@ -4615,5 +4620,66 @@ Total TTC                 120,00
         assert_eq!(new_inv.source, "import");
         assert_eq!(new_inv.number.as_deref(), Some("WRONG-1"));
         assert_eq!(new_inv.entry_id, confirmed.entry_id);
+    }
+
+    #[test]
+    fn confirm_prior_year_import_creates_open_exercice_and_posts() {
+        let dir = tempdir().unwrap();
+        let ws = dir.path().join("demo.sascompta");
+        let info = db::create_demo_workspace(&ws).unwrap();
+        let (conn, _) = db::open_workspace(&info.path, db::DEMO_PASSWORD).unwrap();
+
+        let pdf = dir.path().join("fa-2024.pdf");
+        write_simple_pdf(&pdf, sample_invoice_text());
+        let doc = analyze_document(&conn, Path::new(&info.path), &pdf).unwrap();
+
+        let confirmed = confirm_document_import(
+            &conn,
+            doc.id,
+            &ConfirmDocumentImportInput {
+                doc_type: "supplier_invoice".into(),
+                entry_date: "2024-06-15".into(),
+                piece_ref: "FA-2024-1".into(),
+                label: "Import FA-2024-1".into(),
+                journal_code: "ACH".into(),
+                ht_cents: 10_000,
+                vat_cents: Some(2_000),
+                rate_bp: 2000,
+                vat_mode: "normale".into(),
+                vat_code: "T20D".into(),
+                ht_account: "606".into(),
+                counterpart_account: Some("401".into()),
+                bank_direction: None,
+                third_party_id: None,
+                create_supplier_name: Some("Fournisseur 2024".into()),
+                create_supplier_code: Some("F924".into()),
+                create_supplier_siret: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(confirmed.status, "confirmed");
+        let entry_id = confirmed.entry_id.expect("écriture postée");
+        let entry = ledger::get_entry(&conn, entry_id).unwrap();
+        assert_eq!(entry.status, "posted");
+        assert_eq!(entry.entry_date, "2024-06-15");
+
+        let fy = closing::fiscal_year_by_id(&conn, entry.fiscal_year_id).unwrap();
+        assert_eq!(fy.label, "2024");
+        assert_eq!(fy.status, "open");
+
+        // Chaîne depuis 2024 : 2024 créé ; 2025 non requis pour une pièce 2024.
+        let n2025: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM fiscal_year WHERE label = '2025'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n2025, 0);
+
+        // Exercice courant UI reste 2026.
+        let cur = closing::current_fiscal_year(&conn).unwrap();
+        assert_eq!(cur.label, "2026");
+        assert_eq!(cur.status, "open");
     }
 }
