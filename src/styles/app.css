@@ -2204,61 +2204,101 @@ button.linkish {
   flex: 1 1 auto;
 }
 
+/* Conteneur qui scale la feuille A4 pour tenir dans la colonne aperçu. */
+.billing-doc-a4-fit {
+  width: 100%;
+  display: flex;
+  justify-content: center;
+  container-type: inline-size;
+  container-name: billing-a4;
+}
+
 .billing-doc-sheet {
-  --doc-ink: #1d1d1b;
+  /* Feuille A4 exacte — même composition que l’export PDF (210 × 297 mm). */
+  --doc-ink: #2e2e2b;
   --doc-muted: #5a5a54;
   --doc-rule: #dcdcd9;
-  --doc-band: #1d1d1b;
-  background: #fffefb;
+  /* Gris clair — en-tête tableau / TTC / pied (texte sombre pour contraste) */
+  --doc-band: #e8e8e5;
+  --doc-band-text: #2e2e2b;
+  --doc-margin-l: 12.7mm;
+  --doc-margin-r: 11.6mm;
+  --a4-w: 210mm;
+  box-sizing: border-box;
+  width: var(--a4-w);
+  min-width: var(--a4-w);
+  min-height: 297mm;
+  max-width: var(--a4-w);
+  background: #ffffff;
   color: var(--doc-ink);
-  border-radius: 4px;
+  border-radius: 0;
   box-shadow: 0 1px 0 rgba(28, 46, 36, 0.04), 0 10px 28px rgba(28, 46, 36, 0.08);
-  padding: 1.35rem 1.25rem 0;
-  font-size: 0.78rem;
+  padding: 17.6mm var(--doc-margin-r) 0 var(--doc-margin-l);
+  font-family: Helvetica, Arial, sans-serif;
+  font-size: 7.5pt;
   line-height: 1.35;
-  min-height: 32rem;
   display: flex;
   flex-direction: column;
+  transform-origin: top center;
+}
+
+/* Scale down when the preview column is narrower than A4 (~794px at 96dpi). */
+@container billing-a4 (max-width: 210mm) {
+  .billing-doc-sheet {
+    /* 100cqi / 210mm ≈ scale to fit; keep layout metrics in mm. */
+    zoom: calc(100cqi / 210mm);
+  }
+}
+
+@supports not (zoom: 1) {
+  @container billing-a4 (max-width: 210mm) {
+    .billing-doc-sheet {
+      zoom: unset;
+      transform: scale(calc(100cqi / 210mm));
+      margin-bottom: calc((297mm * (1 - (100cqi / 210mm))) * -1);
+    }
+  }
 }
 
 .billing-doc-head-row {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 0.85rem 1.1rem;
-  margin: 0 0 0.85rem;
+  gap: 4mm;
+  margin: 0 0 0;
 }
 
 .billing-doc-title {
   font-family: Helvetica, Arial, sans-serif;
-  font-size: 1.65rem;
+  font-size: 24pt;
   font-weight: 700;
   letter-spacing: -0.02em;
-  margin: 0;
+  margin: 0 0 5.7mm;
   color: var(--doc-ink);
   flex: 1 1 auto;
   min-width: 0;
+  line-height: 1;
 }
 
-/* ~24–28 mm on A4-ish preview width — keeps parties/header balanced */
+/* Réf. 3PSI : logo ~33,3 mm haut-droite */
 .billing-doc-logo {
-  width: 3.55rem;
-  height: auto;
-  max-height: 3.55rem;
+  width: 33.34mm;
+  height: 33.34mm;
   object-fit: contain;
   flex: 0 0 auto;
+  margin-top: -1mm;
 }
 
 .billing-doc-meta {
-  margin: 0 0 1.15rem;
+  margin: 0 0 5.3mm;
   display: grid;
-  gap: 0.28rem;
+  gap: 1.85mm;
 }
 
 .billing-doc-meta-row {
   display: grid;
-  grid-template-columns: 9.5rem 1fr;
-  gap: 0.5rem;
+  grid-template-columns: 39.3mm 1fr;
+  gap: 2mm;
 }
 
 .billing-doc-meta dt {
@@ -2273,8 +2313,9 @@ button.linkish {
 .billing-doc-parties {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 1rem;
-  margin-bottom: 1.25rem;
+  gap: 4mm;
+  margin-bottom: 8mm;
+  font-size: 7.5pt;
 }
 
 .billing-doc-party {
@@ -2284,25 +2325,25 @@ button.linkish {
 
 .billing-doc-party strong {
   display: block;
-  margin-bottom: 0.25rem;
-  font-size: 0.88rem;
+  margin-bottom: 1.5mm;
+  font-size: 9pt;
 }
 
 .billing-doc-table {
   width: 100%;
   border-collapse: collapse;
   table-layout: fixed;
-  margin-bottom: 0.85rem;
+  margin-bottom: 3mm;
 }
 
 .billing-doc-table th {
   background: var(--doc-band);
-  color: #fff;
+  color: var(--doc-band-text);
   font-weight: 700;
-  font-size: 0.7rem;
-  padding: 0.42rem 0.45rem;
+  font-size: 7.5pt;
+  padding: 1.8mm 1.6mm;
   text-align: left;
-  border-right: 1px solid rgba(255, 255, 255, 0.12);
+  border-right: 0.35mm solid #ffffff;
 }
 
 .billing-doc-table th:last-child,
@@ -2318,63 +2359,79 @@ button.linkish {
 
 .billing-doc-table th.col-desc,
 .billing-doc-table td.col-desc {
-  width: 44%;
+  width: 48.7%;
 }
 
 .billing-doc-table td {
-  padding: 0.55rem 0.45rem;
+  padding: 2.2mm 1.6mm;
   vertical-align: middle;
-  border-bottom: 1px solid var(--doc-rule);
+  border-bottom: 0.26mm solid var(--doc-rule);
   color: var(--doc-ink);
 }
 
 .billing-doc-line-label {
-  font-weight: 600;
+  font-weight: 400;
 }
 
 .billing-doc-line-desc {
   color: var(--doc-muted);
-  font-size: 0.72rem;
+  font-size: 7.5pt;
 }
 
 .billing-doc-empty {
   color: var(--doc-muted);
   font-style: italic;
   text-align: center;
-  padding: 1.1rem 0.5rem !important;
+  padding: 4mm 2mm !important;
 }
 
 .billing-doc-totals {
   align-self: flex-end;
-  width: min(100%, 15.5rem);
+  width: 78.1mm;
   display: grid;
-  gap: 0.45rem;
-  margin: 0.25rem 0 1rem;
+  gap: 3mm;
+  margin: 1mm 0 5mm;
 }
 
 .billing-doc-total-row {
   display: flex;
   justify-content: space-between;
-  gap: 1rem;
+  gap: 4mm;
   font-weight: 700;
 }
 
 .billing-doc-ttc {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0;
+  background: transparent;
+  color: var(--doc-band-text);
+  padding: 0;
+  border-radius: 0;
+  overflow: hidden;
+}
+
+.billing-doc-ttc-label,
+.billing-doc-ttc-value {
   background: var(--doc-band);
-  color: #fff;
-  padding: 0.45rem 0.55rem;
-  border-radius: 2px;
+  padding: 2.2mm 2mm;
+  font-weight: 700;
+}
+
+.billing-doc-ttc-value {
+  text-align: right;
+  min-width: 26mm;
 }
 
 .billing-doc-notes {
-  margin: 0 0 1.25rem;
-  color: var(--doc-muted);
+  margin: 0 0 5mm;
+  color: var(--doc-ink);
 }
 
 .billing-doc-notes p {
-  margin: 0 0 0.35rem;
+  margin: 0 0 1.5mm;
   color: inherit;
-  font-size: 0.74rem;
+  font-size: 7.5pt;
 }
 
 .billing-doc-legal {
@@ -2383,16 +2440,25 @@ button.linkish {
 
 .billing-doc-footer {
   margin-top: auto;
-  margin-left: -1.25rem;
-  margin-right: -1.25rem;
+  margin-left: calc(-1 * var(--doc-margin-l));
+  margin-right: calc(-1 * var(--doc-margin-r));
+  background: var(--doc-band);
+  color: var(--doc-band-text);
+  padding: 7mm var(--doc-margin-r) 9mm var(--doc-margin-l);
+  font-size: 7.5pt;
+  min-height: 23.28mm;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 3mm;
+}
+
+.billing-doc-footer-identity {
   display: flex;
   justify-content: space-between;
-  gap: 1rem;
+  gap: 4mm;
   flex-wrap: wrap;
-  background: var(--doc-band);
-  color: #fff;
-  padding: 0.75rem 1.25rem;
-  font-size: 0.7rem;
 }
 
 @media (max-width: 1100px) {

@@ -21,6 +21,7 @@ export function BillingDocumentPreview({
         <span className="muted small">Se met à jour à chaque saisie</span>
       </div>
       <div className="billing-doc-sheet-scroll">
+        <div className="billing-doc-a4-fit">
         <article className="billing-doc-sheet" aria-live="polite">
           <header className="billing-doc-head">
             <div className="billing-doc-head-row">
@@ -49,6 +50,7 @@ export function BillingDocumentPreview({
               {model.org.addressLines.map((line) => (
                 <div key={line}>{line}</div>
               ))}
+              {model.org.email ? <div>{model.org.email}</div> : null}
               {model.org.idLine ? <div>{model.org.idLine}</div> : null}
             </div>
             <div className="billing-doc-party">
@@ -111,8 +113,8 @@ export function BillingDocumentPreview({
               <strong>{model.vatLabel}</strong>
             </div>
             <div className="billing-doc-total-row billing-doc-ttc">
-              <span>Total TTC</span>
-              <strong>{model.ttcLabel}</strong>
+              <span className="billing-doc-ttc-label">Total TTC</span>
+              <strong className="billing-doc-ttc-value">{model.ttcLabel}</strong>
             </div>
           </div>
 
@@ -126,12 +128,15 @@ export function BillingDocumentPreview({
           ) : null}
 
           <footer className="billing-doc-footer">
-            <span>{model.footerLeft}</span>
-            <span>
-              {model.number} · 1/1
-            </span>
+            <div className="billing-doc-footer-identity">
+              <span>{model.footerLeft}</span>
+              <span>
+                {model.number} · 1/1
+              </span>
+            </div>
           </footer>
         </article>
+        </div>
       </div>
     </aside>
   );

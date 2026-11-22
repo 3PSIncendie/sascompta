@@ -61,6 +61,9 @@ function previewWorkspace(): WorkspaceInfo | null {
       vatRegime: "reel_mensuel",
       address: "12 rue des Lilas\n75011 Paris",
       capitalCents: 1_000_00,
+      email: "contact@atelier-lumiere.fr",
+      iban: "FR7616958000014398156414622",
+      bic: "QNTOFRP1XXX",
     },
     fiscalYear: {
       id: 1,
