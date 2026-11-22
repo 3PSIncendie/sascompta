@@ -2148,6 +2148,8 @@ pub fn export_customer_order_pdf(
 
 /// Crée une facture **émise** liée à une écriture VTE déjà produite par l’import client.
 /// Conserve le numéro externe (`piece_ref`) — pas d’allocation série FACT, pas de 2ᵉ VTE.
+/// Si `is_credit_note`, kind = `credit_note` (sans `parent_invoice_id` : l’import n’offre pas
+/// encore le lien facture d’origine — l’écriture VTE est déjà inversée par documents).
 pub fn create_imported_customer_invoice(
     conn: &Connection,
     document_import_id: i64,
@@ -2163,6 +2165,7 @@ pub fn create_imported_customer_invoice(
     vat_code: &str,
     ht_account: &str,
     pdf_path: Option<&str>,
+    is_credit_note: bool,
 ) -> DbResult<Invoice> {
     ensure_customer(conn, third_party_id)?;
     validate_vat_mode(vat_mode)?;
@@ -2185,7 +2188,16 @@ pub fn create_imported_customer_invoice(
             t.to_string()
         }
     };
-    let notes = format!("Import document #{document_import_id}");
+    let kind = if is_credit_note {
+        "credit_note"
+    } else {
+        "standard"
+    };
+    let notes = if is_credit_note {
+        format!("Import avoir #{document_import_id}")
+    } else {
+        format!("Import document #{document_import_id}")
+    };
     let legal = legal_mentions_for(vat_mode);
     let now = now_iso();
     let vat_code_opt = if vat_code.trim().is_empty() {
@@ -2194,16 +2206,22 @@ pub fn create_imported_customer_invoice(
         Some(vat_code.trim().to_string())
     };
     let line_vat_code = vat_code_opt.clone();
+    let line_description = if is_credit_note {
+        "Avoir client importé (autre logiciel)"
+    } else {
+        "Facture client importée (autre logiciel)"
+    };
     conn.execute(
         "INSERT INTO invoice(
             number, kind, third_party_id, quote_id, parent_invoice_id, status,
             issue_date, due_date, service_date, ht_cents, vat_cents, ttc_cents, paid_cents,
             vat_mode, vat_code, notes, legal_mentions, entry_id, pdf_path,
             created_at, updated_at, source, document_import_id
-         ) VALUES (?1, 'standard', ?2, NULL, NULL, 'issued', ?3, NULL, NULL, ?4, ?5, ?6, 0,
-            ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?13, 'import', ?14)",
+         ) VALUES (?1, ?2, ?3, NULL, NULL, 'issued', ?4, NULL, NULL, ?5, ?6, ?7, 0,
+            ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?14, 'import', ?15)",
         params![
             number,
+            kind,
             third_party_id,
             issue_date,
             ht_cents,
@@ -2222,7 +2240,7 @@ pub fn create_imported_customer_invoice(
     let id = conn.last_insert_rowid();
     let line = InvoiceLineInput {
         label: line_label,
-        description: Some("Facture client importée (autre logiciel)".into()),
+        description: Some(line_description.into()),
         quantity_milli: 1000,
         unit: "u".into(),
         unit_price_cents: ht_cents,

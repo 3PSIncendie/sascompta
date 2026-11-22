@@ -234,6 +234,59 @@ describe("documentImport registry", () => {
     expect(input.vatCents).toBe(2_000);
     expect(input.thirdPartyId).toBe(3);
     expect(input.counterpartAccount).toBeTruthy();
+    expect(input.isCreditNote).toBe(false);
+    expect(form.isAvoir).toBe(false);
+  });
+
+  it("does not auto-check avoir from PDF hint (manual selection)", () => {
+    const hinted: DocumentImport = {
+      ...sample,
+      extraction: { ...sample.extraction, creditNoteHint: true },
+    };
+    expect(formFromImport(hinted).isAvoir).toBe(false);
+    const confirmed: DocumentImport = {
+      ...sample,
+      status: "confirmed",
+      extraction: {
+        ...sample.extraction,
+        creditNoteHint: true,
+        confirmedIsCreditNote: true,
+      },
+    };
+    expect(formFromImport(confirmed).isAvoir).toBe(true);
+  });
+
+  it("reverses ACH lines when avoir is selected", () => {
+    const form = { ...formFromImport(sample), isAvoir: true };
+    const lines = buildProposedLines(form);
+    const d = lines.reduce((s, l) => s + l.debitCents, 0);
+    const c = lines.reduce((s, l) => s + l.creditCents, 0);
+    expect(d).toBe(c);
+    expect(lines.find((l) => l.accountNumber === "401")?.debitCents).toBe(
+      12_000,
+    );
+    expect(lines.find((l) => l.accountNumber === "606")?.creditCents).toBe(
+      10_000,
+    );
+    expect(toConfirmInput(form, 10_000, 2_000).isCreditNote).toBe(true);
+  });
+
+  it("reverses VTE lines when customer avoir is selected", () => {
+    const form = {
+      ...applyDocTypeDefaults(formFromImport(sample), "customer_invoice"),
+      htStr: "100,00",
+      vatMode: "normale" as const,
+      vatCode: "T20C",
+      rateBp: 2000,
+      isAvoir: true,
+    };
+    const lines = buildProposedLines(form);
+    expect(lines.find((l) => l.accountNumber === "411")?.creditCents).toBe(
+      12_000,
+    );
+    expect(lines.find((l) => l.accountNumber === "706")?.debitCents).toBe(
+      10_000,
+    );
   });
 
   it("labels confidence for beginners", () => {

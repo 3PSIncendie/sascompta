@@ -10,6 +10,7 @@ import {
   buildProposedLines,
   confidenceLabel,
   confirmSupported,
+  creditNoteApplicable,
   DOC_TYPE_REGISTRY,
   docTypeMeta,
   formFromImport,
@@ -301,12 +302,17 @@ export function DocumentImportScreen({ onNavigate }: Props) {
           `Devis ${num} créé dans Commercial → Devis (suivi). Aucune écriture comptable. La revue Import était le filet de validation.`,
         );
       } else {
+        const asAvoir = confirmed.extraction.confirmedIsCreditNote === true;
         const invoiceBit =
           confirmed.docType === "customer_invoice" && confirmed.invoiceId
-            ? ` Facture #${confirmed.invoiceId} créée dans Factures (Encaisser).`
+            ? asAvoir
+              ? ` Avoir #${confirmed.invoiceId} créé dans Factures (kind credit_note).`
+              : ` Facture #${confirmed.invoiceId} créée dans Factures (Encaisser).`
             : "";
         setStatus(
-          `Écriture #${confirmed.entryId} postée (${journal}) — visible au Grand livre, TVA et FEC.${invoiceBit} La revue Import était le filet de validation.`,
+          asAvoir
+            ? `Écriture avoir #${confirmed.entryId} postée (${journal}, sens inversé) — visible au Grand livre, TVA et FEC.${invoiceBit} La revue Import était le filet de validation.`
+            : `Écriture #${confirmed.entryId} postée (${journal}) — visible au Grand livre, TVA et FEC.${invoiceBit} La revue Import était le filet de validation.`,
         );
       }
       await reload();
@@ -441,7 +447,8 @@ export function DocumentImportScreen({ onNavigate }: Props) {
                   >
                     <span className="doc-name">{d.sourceFileName}</span>
                     <span className="doc-meta">
-                      {docTypeMeta(d.docType).label} ·{" "}
+                      {docTypeMeta(d.docType).label}
+                      {d.extraction.creditNoteHint ? " · indice avoir" : ""} ·{" "}
                       {confidenceLabel(d.confidence)}
                     </span>
                   </button>
@@ -462,6 +469,9 @@ export function DocumentImportScreen({ onNavigate }: Props) {
                         <span className="doc-name">{d.sourceFileName}</span>
                         <span className="doc-meta">
                           {d.status}
+                          {d.extraction.confirmedIsCreditNote
+                            ? " · avoir"
+                            : ""}
                           {d.entryId ? ` · écriture #${d.entryId}` : ""}
                         </span>
                       </button>
@@ -502,6 +512,16 @@ export function DocumentImportScreen({ onNavigate }: Props) {
               {selected.extraction.notes && (
                 <p className="hint-banner">{selected.extraction.notes}</p>
               )}
+              {selected.status === "pending_review" &&
+                selected.extraction.creditNoteHint &&
+                creditNoteApplicable(form.docType) &&
+                !form.isAvoir && (
+                  <p className="hint-banner warn">
+                    Indice PDF : ce document ressemble à un avoir (note de crédit).
+                    Cochez « Avoir » ci-dessous pour inverser l’écriture — la
+                    sélection manuelle est obligatoire.
+                  </p>
+                )}
 
               <div className="form-grid">
                 <label>
@@ -525,6 +545,50 @@ export function DocumentImportScreen({ onNavigate }: Props) {
                     <span className="field-hint warn">{meta.comingSoonHint}</span>
                   )}
                 </label>
+
+                {creditNoteApplicable(form.docType) && (
+                  <div className="import-avoir-field">
+                    <label className="field checkbox">
+                      <input
+                        type="checkbox"
+                        checked={form.isAvoir}
+                        disabled={selected.status !== "pending_review"}
+                        onChange={(e) => {
+                          const isAvoir = e.target.checked;
+                          const party =
+                            form.createSupplierName ||
+                            tiers.find((t) => t.id === form.thirdPartyId)
+                              ?.name ||
+                            "";
+                          const autoLabel = form.label.startsWith("Import ");
+                          setForm({
+                            ...form,
+                            isAvoir,
+                            label: autoLabel
+                              ? isAvoir
+                                ? form.docType === "customer_invoice"
+                                  ? `Import avoir client ${form.pieceRef || party}`.trim()
+                                  : `Import avoir fournisseur ${form.pieceRef || party}`.trim()
+                                : form.docType === "customer_invoice"
+                                  ? `Import facture client ${form.pieceRef || party}`.trim()
+                                  : `Import facture fournisseur ${form.pieceRef || party}`.trim()
+                              : form.label,
+                          });
+                        }}
+                      />
+                      <LabelWithHelp topic="importAvoir">
+                        Avoir (note de crédit)
+                      </LabelWithHelp>
+                    </label>
+                    <span className="field-hint">
+                      {form.isAvoir
+                        ? form.docType === "customer_invoice"
+                          ? "VTE inversée + fiche Factures en kind « credit_note »."
+                          : "ACH inversée (charge / TVA / 401 au sens avoir)."
+                        : "Non — facture normale. Cochez si c’est un avoir."}
+                    </span>
+                  </div>
+                )}
 
                 <label>
                   <LabelWithHelp topic="piece">N° pièce</LabelWithHelp>
@@ -840,10 +904,14 @@ export function DocumentImportScreen({ onNavigate }: Props) {
 
               {canPost && proposed.length > 0 && (
                 <div className="proposed-lines">
-                  <h3>Lignes proposées ({journalLabel})</h3>
+                  <h3>
+                    Lignes proposées ({journalLabel}
+                    {form.isAvoir ? " · avoir" : ""})
+                  </h3>
                   <p className="muted tiny">
-                    Aperçu — à la confirmation l’écriture est créée et postée
-                    (plus d’étape Valider dans Écritures pour cet import).
+                    {form.isAvoir
+                      ? "Aperçu avoir — sens débit/crédit inversé par rapport à une facture. À la confirmation l’écriture est postée."
+                      : "Aperçu — à la confirmation l’écriture est créée et postée (plus d’étape Valider dans Écritures pour cet import)."}
                   </p>
                   <table>
                     <thead>
