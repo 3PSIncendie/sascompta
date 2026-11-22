@@ -112,6 +112,14 @@ pub fn update_organization(
 }
 
 #[tauri::command]
+pub fn set_invoice_billing_notes(
+    state: State<'_, AppState>,
+    notes: Option<String>,
+) -> Result<Organization, String> {
+    db::with_conn(&state, |conn| db::set_invoice_billing_notes(conn, notes)).map_err(map_err)
+}
+
+#[tauri::command]
 pub fn close_workspace(
     state: State<'_, AppState>,
     hub: State<'_, crate::companion::CompanionHub>,

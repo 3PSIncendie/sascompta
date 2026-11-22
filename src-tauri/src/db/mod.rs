@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use thiserror::Error;
 
-pub const SCHEMA_VERSION: i32 = 17;
+pub const SCHEMA_VERSION: i32 = 19;
 pub const DEMO_PASSWORD: &str = "SecretPass1";
 
 #[derive(Debug, Error)]
@@ -186,6 +186,8 @@ pub fn migrate(conn: &Connection) -> DbResult<()> {
     assets::migrate_assets(conn)?;
     closing::migrate_closing(conn)?;
     migrate_organization_siret(conn)?;
+    migrate_organization_contact_bank(conn)?;
+    migrate_organization_invoice_billing_notes(conn)?;
     billing::migrate_billing(conn)?;
     hr::migrate_hr(conn)?;
     einvoice::migrate_einvoice(conn)?;
@@ -213,7 +215,9 @@ pub fn migrate(conn: &Connection) -> DbResult<()> {
     // v14 = empreinte source (idempotence import / dossier surveillé)
     // v15 = facture client importée → fiche Factures (Encaisser) + liens import↔invoice
     // v16 = backfill Factures pour customer_invoice confirmés avant #52 (sans invoice_id)
-    // v17 = devis client importé → fiche Commercial / Devis + liens import↔quote
+    // v17 = organization.email / iban / bic (PDF devis/facture calque 3PSI)
+    // v18 = note permanente conditions de facturation (organization.invoice_billing_notes)
+    // v19 = devis client importé → fiche Commercial / Devis + liens import↔quote
 
     // Idempotent : à chaque ouverture, recrée les fiches manquantes (no-op si déjà liées).
     documents::backfill_imported_customer_invoices(conn)?;
@@ -237,6 +241,39 @@ fn migrate_organization_siret(conn: &Connection) -> DbResult<()> {
         .collect();
     if !cols.iter().any(|c| c == "siret") {
         conn.execute("ALTER TABLE organization ADD COLUMN siret TEXT", [])?;
+    }
+    Ok(())
+}
+
+fn migrate_organization_contact_bank(conn: &Connection) -> DbResult<()> {
+    let mut stmt = conn.prepare("PRAGMA table_info(organization)")?;
+    let cols: Vec<String> = stmt
+        .query_map([], |r| r.get::<_, String>(1))?
+        .filter_map(|r| r.ok())
+        .collect();
+    for (col, ddl) in [
+        ("email", "ALTER TABLE organization ADD COLUMN email TEXT"),
+        ("iban", "ALTER TABLE organization ADD COLUMN iban TEXT"),
+        ("bic", "ALTER TABLE organization ADD COLUMN bic TEXT"),
+    ] {
+        if !cols.iter().any(|c| c == col) {
+            conn.execute(ddl, [])?;
+        }
+    }
+    Ok(())
+}
+
+fn migrate_organization_invoice_billing_notes(conn: &Connection) -> DbResult<()> {
+    let mut stmt = conn.prepare("PRAGMA table_info(organization)")?;
+    let cols: Vec<String> = stmt
+        .query_map([], |r| r.get::<_, String>(1))?
+        .filter_map(|r| r.ok())
+        .collect();
+    if !cols.iter().any(|c| c == "invoice_billing_notes") {
+        conn.execute(
+            "ALTER TABLE organization ADD COLUMN invoice_billing_notes TEXT",
+            [],
+        )?;
     }
     Ok(())
 }
@@ -411,17 +448,38 @@ fn map_organization(r: &rusqlite::Row<'_>) -> rusqlite::Result<Organization> {
         vat_regime: r.get(5)?,
         address: r.get(6)?,
         capital_cents: r.get(7)?,
+        email: r.get(8)?,
+        iban: r.get(9)?,
+        bic: r.get(10)?,
+        invoice_billing_notes: r.get(11)?,
     })
 }
 
 pub fn load_organization(conn: &Connection) -> DbResult<Organization> {
     conn.query_row(
-        "SELECT id, name, siren, siret, legal_form, vat_regime, address, capital_cents
+        "SELECT id, name, siren, siret, legal_form, vat_regime, address, capital_cents,
+                email, iban, bic, invoice_billing_notes
          FROM organization WHERE id = 1",
         [],
         map_organization,
     )
     .map_err(|e| e.into())
+}
+
+/// Met à jour uniquement la note permanente « conditions de facturation ».
+pub fn set_invoice_billing_notes(
+    conn: &Connection,
+    notes: Option<String>,
+) -> DbResult<Organization> {
+    let cleaned = notes
+        .as_ref()
+        .map(|n| n.trim().to_string())
+        .filter(|n| !n.is_empty());
+    conn.execute(
+        "UPDATE organization SET invoice_billing_notes = ?1 WHERE id = 1",
+        params![cleaned],
+    )?;
+    load_organization(conn)
 }
 
 pub fn load_workspace_info(conn: &Connection, path: &Path) -> DbResult<WorkspaceInfo> {
@@ -506,6 +564,42 @@ pub fn update_organization(
         .map(|a| a.trim().to_string())
         .filter(|a| !a.is_empty());
 
+    let email = input
+        .email
+        .as_ref()
+        .map(|a| a.trim().to_string())
+        .filter(|a| !a.is_empty());
+    if let Some(ref e) = email {
+        if !e.contains('@') || e.len() < 5 {
+            return Err("E-mail société invalide".into());
+        }
+    }
+    let iban = input
+        .iban
+        .as_ref()
+        .map(|a| a.chars().filter(|c| !c.is_whitespace()).collect::<String>())
+        .filter(|a| !a.is_empty());
+    if let Some(ref i) = iban {
+        let upper = i.to_uppercase();
+        if upper.len() < 15 || upper.len() > 34 || !upper.chars().all(|c| c.is_ascii_alphanumeric())
+        {
+            return Err("IBAN invalide (15–34 caractères alphanumériques)".into());
+        }
+    }
+    let bic = input
+        .bic
+        .as_ref()
+        .map(|a| a.chars().filter(|c| !c.is_whitespace()).collect::<String>())
+        .filter(|a| !a.is_empty());
+    if let Some(ref b) = bic {
+        let upper = b.to_uppercase();
+        if !(upper.len() == 8 || upper.len() == 11)
+            || !upper.chars().all(|c| c.is_ascii_alphanumeric())
+        {
+            return Err("BIC invalide (8 ou 11 caractères)".into());
+        }
+    }
+
     let fy_label = input.fiscal_year_label.trim();
     if fy_label.is_empty() {
         return Err("Indiquez le libellé d’exercice".into());
@@ -526,7 +620,10 @@ pub fn update_organization(
             legal_form = ?4,
             vat_regime = ?5,
             address = ?6,
-            capital_cents = ?7
+            capital_cents = ?7,
+            email = ?8,
+            iban = ?9,
+            bic = ?10
          WHERE id = 1",
         params![
             name,
@@ -535,7 +632,10 @@ pub fn update_organization(
             legal_form,
             vat_regime,
             address,
-            input.capital_cents
+            input.capital_cents,
+            email,
+            iban.as_ref().map(|s| s.to_uppercase()),
+            bic.as_ref().map(|s| s.to_uppercase()),
         ],
     )?;
 
@@ -677,6 +777,9 @@ mod tests {
                 vat_regime: "reel_trimestriel".into(),
                 address: Some("12 rue des Lilas\n75011 Paris".into()),
                 capital_cents: 10_000_00,
+                email: Some("contact@atelier-lumiere.fr".into()),
+                iban: Some("FR7616958000014398156414622".into()),
+                bic: Some("QNTOFRP1XXX".into()),
                 display_name: "Marie".into(),
                 fiscal_year_label: "2026".into(),
                 start_date: "2026-01-01".into(),
@@ -693,6 +796,28 @@ mod tests {
         assert_eq!(updated.organization.capital_cents, 10_000_00);
         assert_eq!(updated.profile.display_name, "Marie");
         assert!(updated.organization.address.as_ref().unwrap().contains("Lilas"));
+assert_eq!(
+            updated.organization.email.as_deref(),
+            Some("contact@atelier-lumiere.fr")
+        );
+        assert_eq!(
+            updated.organization.iban.as_deref(),
+            Some("FR7616958000014398156414622")
+        );
+        assert_eq!(updated.organization.bic.as_deref(), Some("QNTOFRP1XXX"));
+        assert!(updated.organization.invoice_billing_notes.is_none());
+
+        let with_notes = set_invoice_billing_notes(
+            &conn,
+            Some("  Paiement à 30 jours.  ".into()),
+        )
+        .unwrap();
+        assert_eq!(
+            with_notes.invoice_billing_notes.as_deref(),
+            Some("Paiement à 30 jours.")
+        );
+        let cleared = set_invoice_billing_notes(&conn, Some("   ".into())).unwrap();
+        assert!(cleared.invoice_billing_notes.is_none());
 
         let bad = update_organization(
             &conn,
@@ -705,6 +830,9 @@ mod tests {
                 vat_regime: "reel_mensuel".into(),
                 address: None,
                 capital_cents: 100,
+                email: None,
+                iban: None,
+                bic: None,
                 display_name: "Marie".into(),
                 fiscal_year_label: "2026".into(),
                 start_date: "2026-01-01".into(),

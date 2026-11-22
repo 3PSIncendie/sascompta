@@ -11,6 +11,18 @@ pub struct Organization {
     pub vat_regime: String,
     pub address: Option<String>,
     pub capital_cents: i64,
+    /// E-mail société (bloc émetteur PDF / aperçu).
+    #[serde(default)]
+    pub email: Option<String>,
+    /// IBAN société (bandeau « Détails du paiement » facture).
+    #[serde(default)]
+    pub iban: Option<String>,
+    /// BIC société (bandeau paiement facture).
+    #[serde(default)]
+    pub bic: Option<String>,
+    /// Note permanente « conditions de facturation » (préremplit les nouvelles factures).
+    #[serde(default)]
+    pub invoice_billing_notes: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -23,6 +35,12 @@ pub struct UpdateOrganizationInput {
     pub vat_regime: String,
     pub address: Option<String>,
     pub capital_cents: i64,
+    #[serde(default)]
+    pub email: Option<String>,
+    #[serde(default)]
+    pub iban: Option<String>,
+    #[serde(default)]
+    pub bic: Option<String>,
     pub display_name: String,
     pub fiscal_year_label: String,
     pub start_date: String,
@@ -642,6 +660,9 @@ pub struct Invoice {
     pub facturx_path: Option<String>,
     pub notes: Option<String>,
     pub legal_mentions: Option<String>,
+    /// Numéro de bon de commande client (saisie manuelle, PDF / aperçu).
+    #[serde(default)]
+    pub purchase_order_number: Option<String>,
     pub created_at: String,
     pub updated_at: String,
     /// `native` (saisie SasCompta) ou `import` (PDF client confirmé).
@@ -687,6 +708,9 @@ pub struct CreateInvoiceInput {
     pub vat_mode: String,
     pub notes: Option<String>,
     pub legal_mentions: Option<String>,
+    /// Numéro de bon de commande (saisie manuelle).
+    #[serde(default)]
+    pub purchase_order_number: Option<String>,
     pub lines: Vec<InvoiceLineInput>,
 }
 

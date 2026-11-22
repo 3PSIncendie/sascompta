@@ -150,7 +150,7 @@ pub fn migrate_documents(conn: &Connection) -> DbResult<()> {
             [],
         )?;
     }
-    // v17 — élargir le CHECK doc_type pour accepter customer_quote (rebuild).
+    // v19 — élargir le CHECK doc_type pour accepter customer_quote (rebuild).
     enrich_document_import_quote_type(conn)?;
     // Un même fichier (contenu) n’est importé qu’une fois tant qu’il n’est pas écarté.
     conn.execute_batch(

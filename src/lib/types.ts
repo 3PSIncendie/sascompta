@@ -7,6 +7,14 @@ export interface Organization {
   vatRegime: string;
   address: string | null;
   capitalCents: number;
+  /** E-mail société (bloc émetteur PDF). */
+  email?: string | null;
+  /** IBAN société (bandeau paiement facture). */
+  iban?: string | null;
+  /** BIC société (bandeau paiement facture). */
+  bic?: string | null;
+  /** Note permanente « conditions de facturation » (préremplit les nouvelles factures). */
+  invoiceBillingNotes?: string | null;
 }
 
 export interface UpdateOrganizationInput {
@@ -17,6 +25,9 @@ export interface UpdateOrganizationInput {
   vatRegime: string;
   address?: string | null;
   capitalCents: number;
+  email?: string | null;
+  iban?: string | null;
+  bic?: string | null;
   displayName: string;
   fiscalYearLabel: string;
   startDate: string;
@@ -317,6 +328,8 @@ export interface Invoice {
   facturxPath: string | null;
   notes: string | null;
   legalMentions: string | null;
+  /** Numéro de bon de commande client (saisie manuelle). */
+  purchaseOrderNumber?: string | null;
   createdAt: string;
   updatedAt: string;
   /** `native` (saisie) ou `import` (PDF client confirmé). */
@@ -336,6 +349,7 @@ export interface CreateInvoiceInput {
   vatMode: BillingVatMode | string;
   notes?: string | null;
   legalMentions?: string | null;
+  purchaseOrderNumber?: string | null;
   lines: InvoiceLineInput[];
 }
 
