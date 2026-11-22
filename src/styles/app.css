@@ -1573,36 +1573,6 @@ label {
     overflow: visible;
   }
 
-  /* Import revue : garder containment plein viewport même sous 900px */
-  html:has(.document-import-screen) {
-    overflow: hidden;
-    height: 100%;
-  }
-
-  .app-shell:has(.document-import-screen) {
-    height: 100%;
-    max-height: 100%;
-    min-height: 0;
-    overflow: hidden;
-    display: grid;
-    grid-template-columns: 1fr;
-    grid-template-rows: minmax(0, 28vh) minmax(0, 1fr);
-  }
-
-  .app-shell:has(.document-import-screen) .sidebar {
-    height: 100%;
-    max-height: 100%;
-    min-height: 0;
-    overflow: auto;
-  }
-
-  .main:has(.document-import-screen) {
-    height: 100%;
-    max-height: 100%;
-    min-height: 0;
-    overflow: hidden;
-  }
-
   .welcome-viewport {
     padding: 1.25rem 1.25rem 1rem;
   }
@@ -1835,46 +1805,22 @@ label {
   max-width: 52rem;
 }
 
-/* Import docs : plein viewport — pas de scroll page ; scroll interne file / revue */
+/* Import docs : page scrollable ; dossiers / QR visibles ; revue sticky en revue */
 .main:has(.document-import-screen) {
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  padding: 1.15rem 1.35rem 1rem;
-}
-
-.main:has(.document-import-screen) > .update-banner,
-.main:has(.document-import-screen) > .deadline-banner {
-  flex: 0 0 auto;
+  overflow: auto;
 }
 
 .panel.document-import-screen {
   display: flex;
   flex-direction: column;
-  flex: 1 1 auto;
-  min-height: 0;
-  height: 100%;
-  max-height: 100%;
-  gap: 0.65rem;
-  padding: 1rem 1.15rem;
-  /* Contredit .panel { overflow: visible } — nécessaire pour colonnes internes */
-  overflow: hidden;
+  gap: 0.85rem;
+  overflow: visible;
+  height: auto;
+  max-height: none;
 }
 
 .document-import-screen > .panel-head {
   flex: 0 0 auto;
-}
-
-.document-import-screen > .panel-head p {
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-  margin-bottom: 0;
-}
-
-.document-import-screen.is-reviewing > .panel-head p {
-  display: none;
 }
 
 .document-import-screen > .error,
@@ -1884,23 +1830,118 @@ label {
 }
 
 .document-import-ingest {
-  flex: 0 1 auto;
-  max-height: min(22vh, 11.5rem);
-  min-height: 0;
-  overflow: auto;
-  padding-right: 0.2rem;
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  /* Dropzone · dossiers · QR compagnon — une seule rangée sur desktop */
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.05fr) minmax(0, 1.15fr);
   gap: 0.75rem;
+  align-items: stretch;
+  overflow: visible;
+  max-height: none;
 }
 
-/* Revue active : compresser l’ingest pour laisser la place à la revue plein écran */
-.document-import-screen.is-reviewing .document-import-ingest {
-  max-height: min(10vh, 5.25rem);
+/* Les slots compagnons participent à la grille parent */
+.document-import-ingest-companions {
+  display: contents;
 }
 
 .document-import-ingest .companion-import-slot {
   margin: 0;
+  min-width: 0;
+  height: 100%;
+}
+
+.document-import-ingest .folder-watch,
+.document-import-ingest .companion-bridge {
+  height: 100%;
+  padding: 0.7rem 0.8rem 0.8rem;
+  box-sizing: border-box;
+}
+
+.document-import-ingest .import-dropzone {
+  height: 100%;
+  padding: 0.75rem 0.9rem;
+  box-sizing: border-box;
+}
+
+.document-import-ingest .import-dropzone > p:first-child {
+  margin: 0 0 0.55rem;
+  font-size: 0.9rem;
+  line-height: 1.35;
+}
+
+.document-import-ingest .panel-head {
+  margin-bottom: 0.45rem;
+}
+
+.document-import-ingest .panel-head h2 {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.document-import-ingest .panel-head p,
+.document-import-ingest .companion-idle > p,
+.document-import-ingest .folder-watch > p.muted {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  margin: 0.2rem 0 0.45rem;
+  font-size: 0.8rem;
+  line-height: 1.35;
+}
+
+/* QR bien visible, méta densifiée */
+.document-import-ingest .companion-qr {
+  width: 132px;
+  height: 132px;
+}
+
+.document-import-ingest .companion-live-grid {
+  grid-template-columns: minmax(120px, 140px) 1fr;
+  gap: 0.55rem 0.7rem;
+}
+
+.document-import-ingest .companion-code {
+  font-size: 1.35rem;
+}
+
+.document-import-ingest .companion-meta-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.3rem;
+  margin-bottom: 0.35rem;
+}
+
+.document-import-ingest .companion-meta .meta-item {
+  padding: 0.3rem 0.4rem;
+}
+
+.document-import-ingest .companion-meta .meta-item span {
+  font-size: 0.65rem;
+  margin-bottom: 0.1rem;
+}
+
+.document-import-ingest .companion-meta .meta-item strong {
+  font-size: 0.78rem;
+}
+
+.document-import-ingest .companion-lan-pick > .muted.tiny,
+.document-import-ingest .companion-meta > .muted.tiny {
+  display: none;
+}
+
+.document-import-ingest .companion-lan-pick {
+  margin: 0.2rem 0 0.35rem;
+}
+
+.document-import-ingest .companion-lan-btns {
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+
+.document-import-ingest .companion-lan-btns .ghost,
+.document-import-ingest .companion-lan-btns .primary {
+  padding: 0.28rem 0.55rem;
+  font-size: 0.8rem;
 }
 
 .import-dropzone {
@@ -1937,14 +1978,16 @@ label {
   grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
   gap: 1.1rem;
   align-items: stretch;
-  flex: 1 1 auto;
-  min-height: 0;
+}
+
+.document-import-review-col {
+  min-width: 0;
+  /* Colonne étirée = course sticky = hauteur de la file */
 }
 
 .document-import-list,
 .document-import-review {
   min-width: 0;
-  min-height: 0;
   display: flex;
   flex-direction: column;
   border: 1px solid var(--line);
@@ -1977,9 +2020,7 @@ label {
 }
 
 .document-import-list-scroll {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow: auto;
+  overflow: visible;
   padding-right: 0.15rem;
 }
 
@@ -2035,8 +2076,6 @@ label {
 }
 
 .document-import-review {
-  align-self: stretch;
-  overflow: hidden;
   background:
     linear-gradient(150deg, rgba(255, 122, 46, 0.1), transparent 40%),
     linear-gradient(320deg, rgba(31, 201, 112, 0.1), transparent 48%),
@@ -2044,22 +2083,45 @@ label {
   padding: 0;
 }
 
+/* En revue : panneau collé pendant le scroll de la page (ingest / file) */
+.document-import-screen.is-reviewing .document-import-list {
+  /* Garantit une course sticky suffisante même si peu de docs */
+  min-height: calc(100vh - 1.5rem);
+  /* Marge basse : la revue reste collée pendant tout le parcours de la file */
+  padding-bottom: 2.5rem;
+}
+
+.document-import-screen.is-reviewing .document-import-list-scroll {
+  padding-bottom: min(40vh, 18rem);
+}
+
+.document-import-screen.is-reviewing .document-import-review {
+  position: sticky;
+  top: 0.65rem;
+  max-height: calc(100vh - 1.3rem);
+  overflow: hidden;
+  z-index: 2;
+}
+
 .document-import-review-empty {
-  margin: 1rem 1.15rem;
+  margin: 0.85rem 1rem;
 }
 
 .document-import-review-head {
   flex: 0 0 auto;
-  padding: 0.85rem 1.15rem 0.55rem;
+  padding: 0.65rem 0.95rem 0.45rem;
   border-bottom: 1px solid var(--line);
 }
 
 .document-import-review-head h2 {
-  margin: 0 0 0.25rem;
+  margin: 0 0 0.15rem;
+  font-size: 1.12rem;
 }
 
 .document-import-review-head .muted {
-  margin-bottom: 0.45rem;
+  margin: 0 0 0.35rem;
+  font-size: 0.82rem;
+  line-height: 1.35;
 }
 
 .document-import-review-head .hint-banner {
@@ -2070,12 +2132,24 @@ label {
   flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
-  padding: 0.85rem 1.15rem 1rem;
+  padding: 0.45rem 0.85rem 0.55rem;
+}
+
+/* Densifier : libellés + champs plus bas pour tenir dans le viewport */
+.document-import-review-body .field-hint {
+  -webkit-line-clamp: 1;
+}
+
+.document-import-review-body .import-avoir-field .field-hint,
+.document-import-review-body .import-avoir-field .muted,
+.document-import-review-body .import-avoir-field > .muted,
+.document-import-review .import-avoir-field p {
+  display: none;
 }
 
 .document-import-review-actions {
   flex: 0 0 auto;
-  padding: 0.7rem 1.15rem 0.85rem;
+  padding: 0.55rem 0.95rem 0.7rem;
   border-top: 1px solid var(--line);
   background:
     linear-gradient(180deg, rgba(244, 252, 248, 0.92), var(--surface));
@@ -2083,18 +2157,21 @@ label {
 
 .document-import-review-actions .btn-row {
   margin-top: 0;
+  gap: 0.55rem;
 }
 
 .document-import-review-actions .ok {
   margin: 0;
+  font-size: 0.88rem;
 }
 
 .document-import-review .hint-banner {
   background: var(--accent-soft);
   color: var(--accent-ink);
-  border-radius: 10px;
-  padding: 0.65rem 0.85rem;
-  font-size: 0.9rem;
+  border-radius: 8px;
+  padding: 0.45rem 0.65rem;
+  font-size: 0.82rem;
+  line-height: 1.35;
 }
 
 .document-import-review .hint-banner.warn {
@@ -2103,20 +2180,21 @@ label {
 }
 
 .document-import-review .import-avoir-field {
-  grid-column: 1 / -1;
   display: flex;
   flex-direction: column;
-  gap: 0.3rem;
-  padding: 0.55rem 0.7rem;
-  border-radius: 10px;
+  justify-content: center;
+  gap: 0.15rem;
+  padding: 0.35rem 0.5rem;
+  border-radius: 8px;
   background: color-mix(in srgb, var(--brand) 8%, transparent);
+  min-width: 0;
 }
 
 .document-import-review .import-avoir-field .field.checkbox {
   display: flex;
   flex-direction: row;
   align-items: center;
-  gap: 0.5rem;
+  gap: 0.45rem;
   margin: 0;
 }
 
@@ -2129,8 +2207,8 @@ label {
   display: grid;
   /* 2 colonnes stables : auto-fit + inputs sans width:100% provoquaient des chevauchements. */
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.85rem 1.1rem;
-  margin: 0 0 1rem;
+  gap: 0.35rem 0.65rem;
+  margin: 0 0 0.5rem;
   align-items: start;
 }
 
@@ -2138,7 +2216,8 @@ label {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 0.3rem;
+  gap: 0.18rem;
+  font-size: 0.86rem;
 }
 
 .document-import-review .form-grid input,
@@ -2147,6 +2226,8 @@ label {
   min-width: 0;
   max-width: 100%;
   box-sizing: border-box;
+  padding: 0.38rem 0.55rem;
+  font-size: 0.9rem;
 }
 
 .document-import-review .form-grid .third-party-select {
@@ -2158,6 +2239,16 @@ label {
   grid-column: 1 / -1;
 }
 
+.document-import-review .form-grid .field-hint {
+  margin-top: 0.1rem;
+  font-size: 0.75rem;
+  line-height: 1.3;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
 @media (max-width: 720px) {
   .document-import-review .form-grid {
     grid-template-columns: 1fr;
@@ -2165,34 +2256,47 @@ label {
 }
 
 .proposed-lines {
-  margin: 0 0 1rem;
+  margin: 0 0 0.55rem;
   overflow-x: auto;
+}
+
+.proposed-lines > summary {
+  cursor: pointer;
+  font-weight: 650;
+  font-size: 0.92rem;
+  margin-bottom: 0.25rem;
+}
+
+.proposed-lines h3 {
+  margin: 0 0 0.25rem;
+  font-size: 0.95rem;
 }
 
 .proposed-lines table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 0.9rem;
+  font-size: 0.82rem;
 }
 
 .proposed-lines th,
 .proposed-lines td {
   text-align: left;
-  padding: 0.4rem 0.5rem;
+  padding: 0.28rem 0.4rem;
   border-bottom: 1px solid var(--line);
 }
 
 .raw-extract {
-  margin-top: 0.25rem;
+  margin-top: 0.15rem;
+  font-size: 0.85rem;
 }
 
 .raw-extract pre {
-  max-height: min(28vh, 180px);
+  max-height: 7.5rem;
   overflow: auto;
   background: var(--surface-tint);
   border-radius: 8px;
-  padding: 0.75rem;
-  font-size: 0.78rem;
+  padding: 0.55rem 0.65rem;
+  font-size: 0.74rem;
   white-space: pre-wrap;
 }
 
@@ -2206,63 +2310,47 @@ button.linkish {
   font: inherit;
 }
 
-@media (max-width: 860px) {
-  /* Mobile : pile verticale mais toujours sans scroll page — panes internes */
-  .main:has(.document-import-screen) {
-    overflow: hidden;
-    padding: 0.85rem 0.85rem 0.75rem;
-  }
-
-  .panel.document-import-screen {
-    overflow: hidden;
-    padding: 0.75rem 0.85rem;
-    gap: 0.45rem;
-  }
-
-  .document-import-screen.is-reviewing > .panel-head {
-    display: none;
-  }
-
+@media (max-width: 1180px) {
   .document-import-ingest {
-    max-height: min(16vh, 7.5rem);
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .document-import-ingest .import-dropzone {
+    grid-column: 1 / -1;
+    height: auto;
+  }
+}
+
+@media (max-width: 860px) {
+  .main:has(.document-import-screen) {
     overflow: auto;
   }
 
-  .document-import-screen.is-reviewing .document-import-ingest {
-    display: none;
+  .panel.document-import-screen {
+    overflow: visible;
+  }
+
+  .document-import-ingest {
+    grid-template-columns: 1fr;
+  }
+
+  .document-import-ingest .import-dropzone {
+    grid-column: auto;
   }
 
   .document-import-layout {
     grid-template-columns: 1fr;
-    grid-template-rows: minmax(0, 28%) minmax(0, 1fr);
-    flex: 1 1 auto;
-    min-height: 0;
   }
 
-  .document-import-list {
+  .document-import-screen.is-reviewing .document-import-review {
+    position: relative;
+    top: auto;
     max-height: none;
-  }
-
-  .document-import-review {
-    min-height: 0;
-    height: 100%;
-  }
-
-  .document-import-review-head {
-    padding: 0.55rem 0.85rem 0.4rem;
-  }
-
-  .document-import-review-head .muted,
-  .document-import-review-head .hint-banner {
-    display: none;
+    overflow: visible;
   }
 
   .document-import-review-body {
-    padding: 0.55rem 0.85rem 0.65rem;
-  }
-
-  .document-import-review-actions {
-    padding: 0.55rem 0.85rem 0.65rem;
+    overflow: visible;
   }
 }
 

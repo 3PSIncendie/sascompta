@@ -416,12 +416,20 @@ export function DocumentImportScreen({ onNavigate }: Props) {
           </p>
         </div>
 
-        <div className="companion-import-slot">
-          <FolderWatchPanel onDocumentReceived={() => void reload()} />
-        </div>
+        <div className="document-import-ingest-companions">
+          <div className="companion-import-slot">
+            <FolderWatchPanel
+              compact
+              onDocumentReceived={() => void reload()}
+            />
+          </div>
 
-        <div className="companion-import-slot">
-          <CompanionBridgePanel onDocumentReceived={() => void reload()} />
+          <div className="companion-import-slot">
+            <CompanionBridgePanel
+              compact
+              onDocumentReceived={() => void reload()}
+            />
+          </div>
         </div>
       </div>
 
@@ -434,7 +442,7 @@ export function DocumentImportScreen({ onNavigate }: Props) {
           <div className="document-import-list-head">
             <h2>En revue ({pending.length})</h2>
             <p className="muted tiny">
-              Faites défiler la file — la revue reste visible à droite.
+              Faites défiler la page — la revue reste collée à droite.
             </p>
           </div>
           <div className="document-import-list-scroll">
@@ -487,6 +495,7 @@ export function DocumentImportScreen({ onNavigate }: Props) {
           </div>
         </aside>
 
+        <div className="document-import-review-col">
         <section
           className="document-import-review"
           aria-label="Revue avant écriture"
@@ -889,37 +898,37 @@ export function DocumentImportScreen({ onNavigate }: Props) {
               )}
 
               {createsQuote && form && selected.status === "pending_review" && (
-                <div className="proposed-lines">
-                  <h3>Fiche devis proposée</h3>
+                <details className="proposed-lines">
+                  <summary>Fiche devis proposée</summary>
                   <p className="muted tiny">
                     À la confirmation : devis « {form.pieceRef || "n° externe"} »{" "}
                     dans Commercial → Devis (statut Envoyé). Pas d’écriture au
                     Grand livre.
                   </p>
-                </div>
+                </details>
               )}
 
               {createsOrder && form && selected.status === "pending_review" && (
-                <div className="proposed-lines">
-                  <h3>Fiche commande proposée</h3>
+                <details className="proposed-lines">
+                  <summary>Fiche commande proposée</summary>
                   <p className="muted tiny">
                     À la confirmation : commande « {form.pieceRef || "n° externe"} »{" "}
                     dans Commercial → Commandes (statut Confirmée). Pas
                     d’écriture au Grand livre.
                   </p>
-                </div>
+                </details>
               )}
 
               {canPost && proposed.length > 0 && (
-                <div className="proposed-lines">
-                  <h3>
+                <details className="proposed-lines">
+                  <summary>
                     Lignes proposées ({journalLabel}
                     {form.isAvoir ? " · avoir" : ""})
-                  </h3>
+                  </summary>
                   <p className="muted tiny">
                     {form.isAvoir
-                      ? "Aperçu avoir — sens débit/crédit inversé par rapport à une facture. À la confirmation l’écriture est postée."
-                      : "Aperçu — à la confirmation l’écriture est créée et postée (plus d’étape Valider dans Écritures pour cet import)."}
+                      ? "Aperçu avoir — sens débit/crédit inversé. Postée à la confirmation."
+                      : "Aperçu — postée à la confirmation (plus d’étape Valider)."}
                   </p>
                   <table>
                     <thead>
@@ -945,7 +954,7 @@ export function DocumentImportScreen({ onNavigate }: Props) {
                       ))}
                     </tbody>
                   </table>
-                </div>
+                </details>
               )}
 
               {selected.extraction.rawTextPreview && (
@@ -1062,6 +1071,7 @@ export function DocumentImportScreen({ onNavigate }: Props) {
             </>
           )}
         </section>
+        </div>
       </div>
     </div>
   );
