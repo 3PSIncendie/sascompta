@@ -13,10 +13,12 @@ use std::path::Path;
 
 /// Logo 3PSI embarqué (PNG) — rendu PDF offline (Tauri desktop).
 const COMMERCIAL_LOGO_PNG: &[u8] = include_bytes!("../../../src/assets/brand/3psi-logo.png");
-/// Largeur/hauteur logo sur A4 (~24 mm) — ne compacte pas le bloc client/émetteur.
-const COMMERCIAL_LOGO_MM: f32 = 24.0;
+/// Largeur/hauteur logo sur A4 — calé sur la référence 3PSI (~94,5 pt ≈ 33,34 mm).
+const COMMERCIAL_LOGO_MM: f32 = 33.34;
+/// Hauteur page A4 (mm) — origine PDF en bas à gauche.
+const PAGE_H_MM: f32 = 297.0;
 
-pub const SCHEMA_BILLING_VERSION: i32 = 11;
+pub const SCHEMA_BILLING_VERSION: i32 = 12;
 
 /// Séries documentaires configurables (compteur annuel calendaire).
 /// Les factures (standard / acompte / solde / avoir) partagent la série FACT
@@ -122,6 +124,7 @@ pub fn migrate_billing(conn: &Connection) -> DbResult<()> {
             facturx_path TEXT,
             notes TEXT,
             legal_mentions TEXT,
+            purchase_order_number TEXT,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
             source TEXT NOT NULL DEFAULT 'native'
@@ -170,6 +173,19 @@ pub fn migrate_billing(conn: &Connection) -> DbResult<()> {
     )?;
     enrich_billing_line_description(conn)?;
     enrich_invoice_import_link(conn)?;
+    enrich_invoice_purchase_order(conn)?;
+    Ok(())
+}
+
+/// v12 billing — numéro de bon de commande (saisie manuelle facture).
+fn enrich_invoice_purchase_order(conn: &Connection) -> DbResult<()> {
+    let cols = table_columns(conn, "invoice")?;
+    if !cols.iter().any(|c| c == "purchase_order_number") {
+        conn.execute(
+            "ALTER TABLE invoice ADD COLUMN purchase_order_number TEXT",
+            [],
+        )?;
+    }
     Ok(())
 }
 
@@ -1006,10 +1022,11 @@ fn map_invoice_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Invoice> {
         facturx_path: r.get(22)?,
         notes: r.get(23)?,
         legal_mentions: r.get(24)?,
-        created_at: r.get(25)?,
-        updated_at: r.get(26)?,
-        source: r.get::<_, Option<String>>(27)?.unwrap_or_else(|| "native".into()),
-        document_import_id: r.get(28)?,
+        purchase_order_number: r.get(25)?,
+        created_at: r.get(26)?,
+        updated_at: r.get(27)?,
+        source: r.get::<_, Option<String>>(28)?.unwrap_or_else(|| "native".into()),
+        document_import_id: r.get(29)?,
         lines: Vec::new(),
     })
 }
@@ -1045,7 +1062,7 @@ const INVOICE_SELECT: &str = "SELECT i.id, i.number, i.kind, i.third_party_id, t
                 i.service_date, i.ht_cents, i.vat_cents, i.ttc_cents, i.paid_cents,
                 i.vat_mode, i.vat_code, i.einvoice_profile, i.einvoice_status,
                 i.entry_id, i.pdf_path, i.facturx_path, i.notes, i.legal_mentions,
-                i.created_at, i.updated_at, i.source, i.document_import_id
+                i.purchase_order_number, i.created_at, i.updated_at, i.source, i.document_import_id
          FROM invoice i
          JOIN third_party tp ON tp.id = i.third_party_id";
 
@@ -1184,12 +1201,17 @@ pub fn create_invoice(conn: &Connection, input: &CreateInvoiceInput) -> DbResult
         .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(|| legal_mentions_for(&input.vat_mode));
     let vat_code = lines.iter().find_map(|l| l.vat_code.clone());
+    let po = input
+        .purchase_order_number
+        .as_ref()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
     conn.execute(
         "INSERT INTO invoice(
             number, kind, third_party_id, quote_id, parent_invoice_id, status,
             issue_date, due_date, service_date, ht_cents, vat_cents, ttc_cents, paid_cents,
-            vat_mode, vat_code, notes, legal_mentions, created_at, updated_at
-         ) VALUES (NULL, ?1, ?2, ?3, ?4, 'draft', ?5, ?6, ?7, ?8, ?9, ?10, 0, ?11, ?12, ?13, ?14, ?15, ?15)",
+            vat_mode, vat_code, notes, legal_mentions, purchase_order_number, created_at, updated_at
+         ) VALUES (NULL, ?1, ?2, ?3, ?4, 'draft', ?5, ?6, ?7, ?8, ?9, ?10, 0, ?11, ?12, ?13, ?14, ?15, ?16, ?16)",
         params![
             input.kind,
             input.third_party_id,
@@ -1205,6 +1227,7 @@ pub fn create_invoice(conn: &Connection, input: &CreateInvoiceInput) -> DbResult
             vat_code,
             input.notes,
             if legal.is_empty() { None } else { Some(legal) },
+            po,
             now,
         ],
     )?;
@@ -1236,12 +1259,17 @@ pub fn update_invoice(
         .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(|| legal_mentions_for(&input.vat_mode));
     let vat_code = lines.iter().find_map(|l| l.vat_code.clone());
+    let po = input
+        .purchase_order_number
+        .as_ref()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
     conn.execute(
         "UPDATE invoice SET kind = ?1, third_party_id = ?2, quote_id = ?3, parent_invoice_id = ?4,
             issue_date = ?5, due_date = ?6, service_date = ?7,
             ht_cents = ?8, vat_cents = ?9, ttc_cents = ?10, vat_mode = ?11, vat_code = ?12,
-            notes = ?13, legal_mentions = ?14, updated_at = ?15
-         WHERE id = ?16",
+            notes = ?13, legal_mentions = ?14, purchase_order_number = ?15, updated_at = ?16
+         WHERE id = ?17",
         params![
             input.kind,
             input.third_party_id,
@@ -1257,6 +1285,7 @@ pub fn update_invoice(
             vat_code,
             input.notes,
             if legal.is_empty() { None } else { Some(legal) },
+            po,
             now,
             id,
         ],
@@ -1492,6 +1521,7 @@ pub fn create_credit_note(conn: &Connection, invoice_id: i64) -> DbResult<Invoic
             src.number.as_deref().unwrap_or(&format!("#{}", src.id))
         )),
         legal_mentions: src.legal_mentions.clone(),
+        purchase_order_number: src.purchase_order_number.clone(),
         lines,
     };
     create_invoice(conn, &input)
@@ -1526,6 +1556,7 @@ pub fn create_deposit_invoice(
             parent.number.as_deref().unwrap_or(&format!("#{}", parent.id))
         )),
         legal_mentions: parent.legal_mentions.clone(),
+        purchase_order_number: parent.purchase_order_number.clone(),
         lines: vec![InvoiceLineInput {
             label: "Acompte".into(),
             description: None,
@@ -1881,19 +1912,26 @@ fn vat_pct_fr(bp: i32) -> String {
 }
 
 fn ink_color() -> Color {
-    Color::Rgb(Rgb::new(0.114, 0.114, 0.106, None))
+    // Texte courant : anthracite lisible (pas le gris des bandeaux).
+    Color::Rgb(Rgb::new(0.18, 0.18, 0.17, None))
 }
 
+/// Remplissage bandeaux (en-tête tableau, Total TTC, pied) — gris clair.
 fn header_fill() -> Color {
-    Color::Rgb(Rgb::new(0.114, 0.114, 0.106, None))
+    Color::Rgb(Rgb::new(0.91, 0.91, 0.898, None)) // ≈ #E8E8E5
 }
 
 fn rule_color() -> Color {
     Color::Rgb(Rgb::new(0.863, 0.863, 0.851, None))
 }
 
-fn white_color() -> Color {
-    Color::Rgb(Rgb::new(1.0, 1.0, 1.0, None))
+/// Texte sur bandeau clair — anthracite pour le contraste.
+fn band_text_color() -> Color {
+    ink_color()
+}
+
+fn note_box_fill() -> Color {
+    Color::Rgb(Rgb::new(0.965, 0.965, 0.961, None))
 }
 
 fn fill_rect(layer: &PdfLayerReference, x0: f32, y0: f32, x1: f32, y1: f32, color: Color) {
@@ -1901,6 +1939,22 @@ fn fill_rect(layer: &PdfLayerReference, x0: f32, y0: f32, x1: f32, y1: f32, colo
     let mut rect = Rect::new(Mm(x0), Mm(y0), Mm(x1), Mm(y1));
     rect = rect.with_mode(PaintMode::Fill);
     layer.add_rect(rect);
+}
+
+/// Cadre 1 pt via bandes remplies (évite Stroke selon versions printpdf).
+fn stroke_rect(
+    layer: &PdfLayerReference,
+    x0: f32,
+    y0: f32,
+    x1: f32,
+    y1: f32,
+    thickness: f32,
+    color: Color,
+) {
+    fill_rect(layer, x0, y0, x1, y0 + thickness, color);
+    fill_rect(layer, x0, y1 - thickness, x1, y1, color);
+    fill_rect(layer, x0, y0, x0 + thickness, y1, color);
+    fill_rect(layer, x1 - thickness, y0, x1, y1, color);
 }
 
 fn load_party(conn: &Connection, id: i64) -> DbResult<ThirdParty> {
@@ -1940,6 +1994,8 @@ struct CommercialPdf<'a> {
     number: &'a str,
     meta: Vec<(&'a str, String)>,
     org: &'a Organization,
+    /// E-mail émetteur (optionnel — affiché sous l’adresse si présent).
+    org_email: Option<&'a str>,
     client: &'a ThirdParty,
     lines: Vec<PdfLineView<'a>>,
     ht_cents: i64,
@@ -1950,9 +2006,9 @@ struct CommercialPdf<'a> {
     footer_left: String,
 }
 
-/// Layout calqué sur le modèle devis/facture 3PSI (sans bandeau « Détails du paiement » / RIB).
+/// Layout calqué sur le modèle devis/facture 3PSI (A4 exact, métriques référence).
 fn render_commercial_pdf(doc_title: &str, spec: &CommercialPdf<'_>, path: &Path) -> DbResult<()> {
-    let (doc, page1, layer1) = PdfDocument::new(doc_title, Mm(210.0), Mm(297.0), "L1");
+    let (doc, page1, layer1) = PdfDocument::new(doc_title, Mm(210.0), Mm(PAGE_H_MM), "L1");
     let font = doc
         .add_builtin_font(BuiltinFont::Helvetica)
         .map_err(|e| format!("PDF font: {e}"))?;
@@ -1965,23 +2021,24 @@ fn render_commercial_pdf(doc_title: &str, spec: &CommercialPdf<'_>, path: &Path)
     let page_w = 210.0_f32;
     let content_r = page_w - margin_r;
     // Colonnes tableau (mm) — bords droits calés sur la référence 3PSI
-    let col_desc_r = 103.2_f32;
+    let col_desc_r = 103.19_f32;
     let col_qty_right = 118.0_f32;
     let col_unit_right = 145.0_f32;
     let col_vat_right = 164.0_f32;
     let col_ht_right = 195.3_f32;
-    let meta_value_x = 52.0_f32;
-    let mid_x = 108.7_f32;
+    let meta_value_x = 52.02_f32;
+    let mid_x = 108.74_f32;
     let totals_label_x = 123.3_f32;
     let line_leading = 4.76_f32;
-    let footer_band_h = 23.2_f32;
+    // Pied identité seul — pas de bandeau « Détails du paiement ».
+    let footer_band_h = 23.28_f32;
 
     let mut layer = doc.get_page(page1).get_layer(layer1);
     let mut page_idx = 1usize;
-    // Marge haute type référence (~24 mm sous le bord)
+    // Baseline titre : ~24 mm sous le bord haut (réf. glyph-top ≈ 17,6 mm)
     let mut y = 273.0_f32;
 
-    let draw_logo = |layer: &PdfLayerReference| {
+    let draw_logo = |layer: &PdfLayerReference, title_baseline: f32| {
         let Ok(decoder) =
             image_crate::codecs::png::PngDecoder::new(Cursor::new(COMMERCIAL_LOGO_PNG))
         else {
@@ -1993,8 +2050,8 @@ fn render_commercial_pdf(doc_title: &str, spec: &CommercialPdf<'_>, path: &Path)
         let px_w = image.image.width.0.max(1) as f32;
         // dpi tel que largeur image = COMMERCIAL_LOGO_MM.
         let dpi = px_w * 25.4 / COMMERCIAL_LOGO_MM;
-        // Coin haut-droit : translate = coin bas-gauche de l'image (origine PDF).
-        let logo_top = 285.0_f32;
+        // Aligné sur le haut du titre (ascent Helvetica Bold 24 pt ≈ 6,1 mm).
+        let logo_top = title_baseline + 6.1;
         let translate_x = content_r - COMMERCIAL_LOGO_MM;
         let translate_y = logo_top - COMMERCIAL_LOGO_MM;
         image.add_to_layer(
@@ -2014,20 +2071,20 @@ fn render_commercial_pdf(doc_title: &str, spec: &CommercialPdf<'_>, path: &Path)
         let edges = [
             margin_l,
             col_desc_r,
-            119.6_f32,
-            146.6_f32,
-            165.6_f32,
+            119.59_f32,
+            146.58_f32,
+            165.63_f32,
             content_r,
         ];
         for win in edges.windows(2) {
             fill_rect(layer, win[0], header_bot, win[1], y_top, header_fill());
         }
-        layer.set_fill_color(white_color());
+        layer.set_fill_color(band_text_color());
         let head_y = header_bot + 2.0;
         layer.use_text(
             "Description",
             7.5,
-            Mm(margin_l + 3.0),
+            Mm(margin_l + 3.18),
             Mm(head_y),
             &font_bold,
         );
@@ -2038,18 +2095,18 @@ fn render_commercial_pdf(doc_title: &str, spec: &CommercialPdf<'_>, path: &Path)
     };
 
     let draw_footer = |layer: &PdfLayerReference, page_idx: usize, total_pages: &str| {
-        // Bandeau bas sombre (identité) — distinct du bandeau RIB volontairement omis
         fill_rect(layer, 0.0, 0.0, page_w, footer_band_h, header_fill());
-        layer.set_fill_color(white_color());
+        layer.set_fill_color(band_text_color());
+        // Identité plus haute que le folio (réf. devis/facture).
         layer.use_text(
             ascii_safe(&spec.footer_left),
             7.5,
             Mm(margin_l),
-            Mm(16.2),
+            Mm(15.8),
             &font,
         );
         let right = format!("{} · {}", spec.number, total_pages);
-        draw_text_right(layer, &right, 7.5, content_r, 9.8, &font);
+        draw_text_right(layer, &right, 7.5, content_r, 9.5, &font);
         let _ = page_idx;
     };
 
@@ -2060,7 +2117,7 @@ fn render_commercial_pdf(doc_title: &str, spec: &CommercialPdf<'_>, path: &Path)
                       full_header: bool|
      -> DbResult<()> {
         if !full_header {
-            let (p, l) = doc.add_page(Mm(210.0), Mm(297.0), "L");
+            let (p, l) = doc.add_page(Mm(210.0), Mm(PAGE_H_MM), "L");
             *layer = doc.get_page(p).get_layer(l);
             *page_idx += 1;
             *y = 280.0;
@@ -2078,7 +2135,8 @@ fn render_commercial_pdf(doc_title: &str, spec: &CommercialPdf<'_>, path: &Path)
     };
 
     // ——— En-tête titre + logo haut-droite + méta ———
-    draw_logo(&layer);
+    let title_baseline = y;
+    draw_logo(&layer, title_baseline);
     layer.set_fill_color(ink_color());
     layer.use_text(ascii_safe(spec.title), 24.0, Mm(margin_l), Mm(y), &font_bold);
     y -= 16.2;
@@ -2127,6 +2185,10 @@ fn render_commercial_pdf(doc_title: &str, spec: &CommercialPdf<'_>, path: &Path)
             layer.use_text(ascii_safe(line), 7.5, Mm(mid_x), Mm(y_right), &font);
             y_right -= line_leading;
         }
+    }
+    if let Some(email) = spec.org_email {
+        layer.use_text(ascii_safe(email), 7.5, Mm(margin_l), Mm(y_left), &font);
+        y_left -= line_leading;
     }
     if let Some(email) = &spec.client.email {
         layer.use_text(ascii_safe(email), 7.5, Mm(mid_x), Mm(y_right), &font);
@@ -2226,9 +2288,9 @@ fn render_commercial_pdf(doc_title: &str, spec: &CommercialPdf<'_>, path: &Path)
     let edges = [
         margin_l,
         col_desc_r,
-        119.6_f32,
-        146.6_f32,
-        165.6_f32,
+        119.59_f32,
+        146.58_f32,
+        165.63_f32,
         content_r,
     ];
     for win in edges.windows(2) {
@@ -2247,7 +2309,7 @@ fn render_commercial_pdf(doc_title: &str, spec: &CommercialPdf<'_>, path: &Path)
         y,
         &font,
     );
-    y -= 8.5;
+    y -= 8.47;
     layer.use_text(
         "Montant total de la TVA",
         7.5,
@@ -2263,23 +2325,37 @@ fn render_commercial_pdf(doc_title: &str, spec: &CommercialPdf<'_>, path: &Path)
         y,
         &font,
     );
-    y -= 10.0;
+    y -= 8.47;
 
-    // Barre sombre Total TTC (sans RIB)
-    let ttc_h = 8.5_f32;
+    // Total TTC : deux cellules sombres adjacentes (réf. 3PSI), pas une barre unique.
+    let ttc_h = 8.47_f32;
+    let ttc_str = money_fr(spec.ttc_cents);
+    let ttc_value_pad = 6.0_f32;
+    let ttc_split = (content_r - approx_width_mm(&ttc_str, 7.5) - ttc_value_pad)
+        .max(totals_label_x + 40.0)
+        .min(content_r - 18.0);
+    let ttc_bot = y - 2.0;
     fill_rect(
         &layer,
-        totals_label_x - 2.0,
-        y - 2.0,
-        content_r,
-        y - 2.0 + ttc_h,
+        totals_label_x - 3.18,
+        ttc_bot,
+        ttc_split,
+        ttc_bot + ttc_h,
         header_fill(),
     );
-    layer.set_fill_color(white_color());
+    fill_rect(
+        &layer,
+        ttc_split,
+        ttc_bot,
+        content_r,
+        ttc_bot + ttc_h,
+        header_fill(),
+    );
+    layer.set_fill_color(band_text_color());
     layer.use_text("Total TTC", 7.5, Mm(totals_label_x), Mm(y), &font_bold);
     draw_text_right(
         &layer,
-        &money_fr(spec.ttc_cents),
+        &ttc_str,
         7.5,
         col_ht_right,
         y,
@@ -2287,17 +2363,54 @@ fn render_commercial_pdf(doc_title: &str, spec: &CommercialPdf<'_>, path: &Path)
     );
     y -= 14.0;
 
-    layer.set_fill_color(ink_color());
+    // Carré « conditions de facturation » sous les totaux (masqué si vide).
     if let Some(notes) = spec.notes {
-        for chunk in wrap_text(notes, 95) {
-            if y < footer_band_h + 8.0 {
-                break;
+        let title = "Conditions de facturation";
+        let body_chunks = wrap_text(notes, 92);
+        let pad_x = 3.0_f32;
+        let pad_top = 4.2_f32;
+        let pad_bot = 3.2_f32;
+        let title_h = 4.8_f32;
+        let body_h = (body_chunks.len().max(1) as f32) * line_leading;
+        let box_h = pad_top + title_h + body_h + pad_bot;
+        let box_top = y + 2.0;
+        let box_bot = box_top - box_h;
+        if box_bot >= footer_band_h + 6.0 {
+            fill_rect(
+                &layer,
+                margin_l,
+                box_bot,
+                content_r,
+                box_top,
+                note_box_fill(),
+            );
+            stroke_rect(
+                &layer,
+                margin_l,
+                box_bot,
+                content_r,
+                box_top,
+                0.35,
+                rule_color(),
+            );
+            layer.set_fill_color(ink_color());
+            let mut ty = box_top - pad_top - 1.5;
+            layer.use_text(title, 7.5, Mm(margin_l + pad_x), Mm(ty), &font_bold);
+            ty -= title_h;
+            for chunk in &body_chunks {
+                layer.use_text(
+                    ascii_safe(chunk),
+                    7.5,
+                    Mm(margin_l + pad_x),
+                    Mm(ty),
+                    &font,
+                );
+                ty -= line_leading;
             }
-            layer.use_text(ascii_safe(&chunk), 7.5, Mm(margin_l), Mm(y), &font);
-            y -= line_leading;
+            y = box_bot - 4.0;
         }
-        y -= 2.0;
     }
+    layer.set_fill_color(ink_color());
     if let Some(legal) = spec.legal_mentions {
         for chunk in wrap_text(legal, 95) {
             if y < footer_band_h + 8.0 {
@@ -2309,7 +2422,7 @@ fn render_commercial_pdf(doc_title: &str, spec: &CommercialPdf<'_>, path: &Path)
     }
 
     let _ = y;
-    // Pied de page — PAS de bandeau « Détails du paiement » / RIB
+    // Pied de page identité uniquement (pas de bandeau paiement / RIB).
     draw_footer(
         &layer,
         page_idx,
@@ -2355,12 +2468,14 @@ pub fn export_quote_pdf(
         .collect();
 
     let footer_left = commercial_footer_left(&org);
+    let org_email = org.email.as_deref().map(str::trim).filter(|s| !s.is_empty());
 
     let spec = CommercialPdf {
         title: "Devis",
         number: &quote.number,
         meta,
         org: &org,
+        org_email,
         client: &client,
         lines,
         ht_cents: quote.ht_cents,
@@ -2399,6 +2514,14 @@ pub fn export_invoice_pdf(
     if let Some(due) = &inv.due_date {
         meta.push(("Date d'échéance", format_date_fr(due)));
     }
+    if let Some(po) = inv
+        .purchase_order_number
+        .as_ref()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+    {
+        meta.push(("Numéro de bon de commande", po.to_string()));
+    }
     if let Some(qid) = inv.quote_id {
         if let Ok(q) = get_quote_header(conn, qid) {
             meta.push(("Numéro du devis associé", q.number));
@@ -2422,12 +2545,14 @@ pub fn export_invoice_pdf(
         .collect();
 
     let footer_left = commercial_footer_left(&org);
+    let org_email = org.email.as_deref().map(str::trim).filter(|s| !s.is_empty());
 
     let spec = CommercialPdf {
         title,
         number: &number,
         meta,
         org: &org,
+        org_email,
         client: &client,
         lines,
         ht_cents: inv.ht_cents,
@@ -2471,6 +2596,15 @@ pub fn seed_demo_quotes(conn: &Connection) -> DbResult<()> {
         [],
         |r| r.get(0),
     )?;
+    // Coordonnées émetteur pour PDF (e-mail + bandeau paiement facture).
+    let _ = conn.execute(
+        "UPDATE organization SET
+            email = COALESCE(NULLIF(TRIM(email), ''), 'contact@demo-sas.fr'),
+            iban = COALESCE(NULLIF(TRIM(iban), ''), 'FR7616958000014398156414622'),
+            bic = COALESCE(NULLIF(TRIM(bic), ''), 'QNTOFRP1XXX')
+         WHERE id = 1",
+        [],
+    );
     // Adresse émetteur pour pied de page / bloc parties (aperçu PDF)
     let _ = conn.execute(
         "UPDATE organization SET address = '12 rue de la Démo\n75001 Paris, FR',
@@ -2534,6 +2668,7 @@ pub fn seed_demo_quotes(conn: &Connection) -> DbResult<()> {
         vat_mode: "normale".into(),
         notes: Some("Maintenance annuelle détection".into()),
         legal_mentions: None,
+        purchase_order_number: Some("BC-DEMO-2026".into()),
         lines: vec![InvoiceLineInput {
             label: "Contrat maintenance annuelle".into(),
             description: Some("Visites périodiques + rapport".into()),
@@ -3130,6 +3265,7 @@ mod tests {
                 vat_mode: "normale".into(),
                 notes: None,
                 legal_mentions: None,
+                purchase_order_number: None,
                 lines: vec![InvoiceLineInput {
                     label: "Prestation".into(),
                     description: None,
@@ -3275,6 +3411,7 @@ mod tests {
                 vat_mode: "normale".into(),
                 notes: None,
                 legal_mentions: None,
+                purchase_order_number: None,
                 lines: vec![line.clone()],
             },
         )
@@ -3295,6 +3432,7 @@ mod tests {
                 vat_mode: "normale".into(),
                 notes: None,
                 legal_mentions: None,
+                purchase_order_number: None,
                 lines: vec![line.clone()],
             },
         )
@@ -3400,6 +3538,7 @@ mod tests {
                 vat_mode: "normale".into(),
                 notes: None,
                 legal_mentions: None,
+                purchase_order_number: None,
                 lines: vec![InvoiceLineInput {
                     label: "Suite".into(),
                     description: None,
@@ -3458,6 +3597,7 @@ mod tests {
                 vat_mode: "normale".into(),
                 notes: None,
                 legal_mentions: None,
+                purchase_order_number: None,
                 lines: vec![InvoiceLineInput {
                     label: "Suite".into(),
                     description: None,

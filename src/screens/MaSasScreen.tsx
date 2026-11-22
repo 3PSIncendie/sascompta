@@ -89,6 +89,9 @@ function buildPayload(form: {
   legalForm: string;
   vatRegime: string;
   address: string;
+  email: string;
+  iban: string;
+  bic: string;
   capital: string;
   displayName: string;
   label: string;
@@ -102,6 +105,9 @@ function buildPayload(form: {
     legalForm: form.legalForm,
     vatRegime: form.vatRegime,
     address: form.address.trim() || null,
+    email: form.email.trim() || null,
+    iban: form.iban.replace(/\s/g, "") || null,
+    bic: form.bic.replace(/\s/g, "") || null,
     capitalCents: parseEurosToCents(form.capital),
     displayName: form.displayName.trim(),
     fiscalYearLabel: form.label.trim(),
@@ -128,6 +134,9 @@ export function MaSasScreen({
   const [legalForm, setLegalForm] = useState(org.legalForm || "SAS");
   const [vatRegime, setVatRegime] = useState(normalizeVat(org.vatRegime));
   const [address, setAddress] = useState(org.address ?? "");
+  const [email, setEmail] = useState(org.email ?? "");
+  const [iban, setIban] = useState(org.iban ?? "");
+  const [bic, setBic] = useState(org.bic ?? "");
   const [capital, setCapital] = useState(centsToEuroInput(org.capitalCents));
   const [displayName, setDisplayName] = useState(profile.displayName);
   const [label, setLabel] = useState(fy.label);
@@ -150,6 +159,15 @@ export function MaSasScreen({
   const [seqDrafts, setSeqDrafts] = useState<Record<string, string>>({});
   const [seqStatus, setSeqStatus] = useState<string | null>(null);
   const [seqError, setSeqError] = useState<string | null>(null);
+  const [billingNotes, setBillingNotes] = useState(
+    org.invoiceBillingNotes ?? "",
+  );
+  const [billingNotesStatus, setBillingNotesStatus] = useState<string | null>(
+    null,
+  );
+  const [billingNotesError, setBillingNotesError] = useState<string | null>(
+    null,
+  );
 
   useEffect(() => {
     if (editing) return;
@@ -159,11 +177,15 @@ export function MaSasScreen({
     setLegalForm(org.legalForm || "SAS");
     setVatRegime(normalizeVat(org.vatRegime));
     setAddress(org.address ?? "");
+    setEmail(org.email ?? "");
+    setIban(org.iban ?? "");
+    setBic(org.bic ?? "");
     setCapital(centsToEuroInput(org.capitalCents));
     setDisplayName(profile.displayName);
     setLabel(fy.label);
     setStartDate(fy.startDate);
     setEndDate(fy.endDate);
+    setBillingNotes(org.invoiceBillingNotes ?? "");
   }, [org, fy, profile, editing]);
 
   function applySequences(rows: DocumentSequenceInfo[]) {
@@ -365,6 +387,9 @@ export function MaSasScreen({
       legalForm,
       vatRegime,
       address,
+      email,
+      iban,
+      bic,
       capital,
       displayName,
       label,
@@ -384,6 +409,9 @@ export function MaSasScreen({
             legalForm: payload.legalForm,
             vatRegime: payload.vatRegime,
             address: payload.address ?? null,
+            email: payload.email ?? null,
+            iban: payload.iban ?? null,
+            bic: payload.bic ?? null,
             capitalCents: payload.capitalCents,
           },
           fiscalYear: fyOpen
@@ -484,6 +512,20 @@ export function MaSasScreen({
               <strong style={{ whiteSpace: "pre-wrap" }}>
                 {org.address || "—"}
               </strong>
+            </div>
+            <div className="meta-item">
+              <span>E-mail société</span>
+              <strong>{org.email || "—"}</strong>
+            </div>
+            <div className="meta-item">
+              <span>IBAN</span>
+              <strong style={{ fontSize: "0.85rem", wordBreak: "break-all" }}>
+                {org.iban || "—"}
+              </strong>
+            </div>
+            <div className="meta-item">
+              <span>BIC</span>
+              <strong>{org.bic || "—"}</strong>
             </div>
             <div className="meta-item">
               <span>
@@ -593,6 +635,34 @@ export function MaSasScreen({
                     placeholder={"12 rue des Lilas\n75011 Paris"}
                   />
                 </label>
+                <label>
+                  E-mail société
+                  <input
+                    type="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="contact@exemple.fr"
+                    autoComplete="email"
+                  />
+                </label>
+                <label>
+                  BIC
+                  <input
+                    value={bic}
+                    onChange={(e) => setBic(e.target.value)}
+                    placeholder="QNTOFRP1XXX"
+                    autoComplete="off"
+                  />
+                </label>
+                <label style={{ gridColumn: "1 / -1" }}>
+                  IBAN
+                  <input
+                    value={iban}
+                    onChange={(e) => setIban(e.target.value)}
+                    placeholder="FR76…"
+                    autoComplete="off"
+                  />
+                </label>
               </div>
             </section>
 
@@ -683,6 +753,75 @@ export function MaSasScreen({
             </div>
           </form>
         )}
+      </div>
+
+      <div className="panel nested-panel" style={{ marginTop: "1.25rem" }}>
+        <header className="panel-head">
+          <div>
+            <h2>Conditions de facturation (permanente)</h2>
+            <p className="muted">
+              Texte réutilisé par défaut sur chaque nouvelle facture. Une note
+              « une seule fois » sur une facture ne modifie pas ce modèle.
+            </p>
+          </div>
+        </header>
+        {billingNotesStatus && (
+          <div className="ok-banner">{billingNotesStatus}</div>
+        )}
+        {billingNotesError && (
+          <div className="error">{billingNotesError}</div>
+        )}
+        <label className="field">
+          Note permanente
+          <textarea
+            rows={4}
+            value={billingNotes}
+            onChange={(e) => setBillingNotes(e.target.value)}
+            placeholder="Ex. Paiement à 30 jours nets…"
+          />
+        </label>
+        <div className="btn-row" style={{ marginTop: "0.75rem" }}>
+          <button
+            type="button"
+            className="primary"
+            disabled={busy}
+            onClick={() => {
+              void (async () => {
+                setBillingNotesError(null);
+                setBillingNotesStatus(null);
+                setBusy(true);
+                try {
+                  const next = billingNotes.trim() || null;
+                  if (isPreview || !isTauriRuntime()) {
+                    onWorkspaceChange({
+                      ...workspace,
+                      organization: {
+                        ...org,
+                        invoiceBillingNotes: next,
+                      },
+                    });
+                    setBillingNotesStatus(
+                      "Note permanente enregistrée (aperçu).",
+                    );
+                    return;
+                  }
+                  const updated = await api.setInvoiceBillingNotes(next);
+                  onWorkspaceChange({
+                    ...workspace,
+                    organization: updated,
+                  });
+                  setBillingNotesStatus("Note permanente enregistrée.");
+                } catch (e) {
+                  setBillingNotesError(String(e));
+                } finally {
+                  setBusy(false);
+                }
+              })();
+            }}
+          >
+            Enregistrer la note permanente
+          </button>
+        </div>
       </div>
 
       <div className="panel nested-panel" style={{ marginTop: "1.25rem" }}>

@@ -113,7 +113,7 @@ function partyFromOrg(org: Organization): PreviewParty {
       .split("\n")
       .map((l) => l.trim())
       .filter(Boolean),
-    email: null,
+    email: org.email?.trim() || null,
     idLine: org.siret?.trim() || spacedSiren(org.siren) || null,
   };
 }
