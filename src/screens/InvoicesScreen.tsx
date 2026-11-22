@@ -38,7 +38,10 @@ import {
   type InvoiceNotesMode,
 } from "../modules/billing/invoiceNotes";
 import { previewNumber } from "../modules/billing/sequences";
-import { PAYMENT_METHODS } from "../modules/billing/payments";
+import {
+  normalizeBankRef,
+  PAYMENT_METHODS,
+} from "../modules/billing/payments";
 import type {
   BillingVatMode,
   Invoice,
@@ -511,10 +514,11 @@ export function InvoicesScreen({
         paidOn: payDate,
         amountCents: amount,
         method: payMethod,
-        bankRef: payRef.trim() || null,
+        bankRef: normalizeBankRef(payRef),
       });
+      const refBit = p.bankRef ? ` · réf. ${p.bankRef}` : "";
       setStatus(
-        `Encaissement #${p.id} — BQ postée #${p.entryId ?? "?"} · lettrage ${p.lettre ?? "—"} (Grand livre / FEC à jour).`,
+        `Encaissement #${p.id} — BQ postée #${p.entryId ?? "?"}${refBit} · lettrage ${p.lettre ?? "—"} (Grand livre / FEC à jour).`,
       );
       setPayInvoiceId(null);
       await refresh();
@@ -1014,11 +1018,15 @@ export function InvoicesScreen({
             </select>
           </label>
           <label>
-            Réf. banque
+            Réf. banque{" "}
+            <span className="muted" title="Numéro de virement — pas obligatoire">
+              (optionnel)
+            </span>
             <input
               value={payRef}
               onChange={(e) => setPayRef(e.target.value)}
-              placeholder="VIR-…"
+              placeholder="laisser vide si inconnu"
+              aria-required="false"
             />
           </label>
           <button

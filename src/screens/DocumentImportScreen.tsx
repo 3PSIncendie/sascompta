@@ -608,13 +608,18 @@ export function DocumentImportScreen({ onNavigate }: Props) {
                 )}
 
                 <label>
-                  <LabelWithHelp topic="piece">N° pièce</LabelWithHelp>
+                  <LabelWithHelp topic="piece">
+                    N° pièce{" "}
+                    <span className="muted">(optionnel)</span>
+                  </LabelWithHelp>
                   <input
                     value={form.pieceRef}
                     disabled={selected.status !== "pending_review"}
                     onChange={(e) =>
                       setForm({ ...form, pieceRef: e.target.value })
                     }
+                    placeholder="ex. FA-2026-0042 — vide → IMP-…"
+                    aria-required="false"
                   />
                 </label>
 

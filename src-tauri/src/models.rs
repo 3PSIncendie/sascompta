@@ -815,6 +815,8 @@ pub struct CreatePaymentInput {
     pub paid_on: String,
     pub amount_cents: i64,
     pub method: String,
+    /// Numéro / réf. de virement bancaire — **optionnel** (import historique sans VIR).
+    #[serde(default)]
     pub bank_ref: Option<String>,
 }
 
