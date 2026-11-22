@@ -1573,6 +1573,36 @@ label {
     overflow: visible;
   }
 
+  /* Import revue : garder containment plein viewport même sous 900px */
+  html:has(.document-import-screen) {
+    overflow: hidden;
+    height: 100%;
+  }
+
+  .app-shell:has(.document-import-screen) {
+    height: 100%;
+    max-height: 100%;
+    min-height: 0;
+    overflow: hidden;
+    display: grid;
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(0, 28vh) minmax(0, 1fr);
+  }
+
+  .app-shell:has(.document-import-screen) .sidebar {
+    height: 100%;
+    max-height: 100%;
+    min-height: 0;
+    overflow: auto;
+  }
+
+  .main:has(.document-import-screen) {
+    height: 100%;
+    max-height: 100%;
+    min-height: 0;
+    overflow: hidden;
+  }
+
   .welcome-viewport {
     padding: 1.25rem 1.25rem 1rem;
   }
@@ -1805,12 +1835,12 @@ label {
   max-width: 52rem;
 }
 
-/* Import docs : viewport fixe — file scrollable + revue toujours visible */
+/* Import docs : plein viewport — pas de scroll page ; scroll interne file / revue */
 .main:has(.document-import-screen) {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  padding-bottom: 1.15rem;
+  padding: 1.15rem 1.35rem 1rem;
 }
 
 .main:has(.document-import-screen) > .update-banner,
@@ -1823,13 +1853,28 @@ label {
   flex-direction: column;
   flex: 1 1 auto;
   min-height: 0;
-  gap: 0.75rem;
+  height: 100%;
+  max-height: 100%;
+  gap: 0.65rem;
+  padding: 1rem 1.15rem;
   /* Contredit .panel { overflow: visible } — nécessaire pour colonnes internes */
   overflow: hidden;
 }
 
 .document-import-screen > .panel-head {
   flex: 0 0 auto;
+}
+
+.document-import-screen > .panel-head p {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  margin-bottom: 0;
+}
+
+.document-import-screen.is-reviewing > .panel-head p {
+  display: none;
 }
 
 .document-import-screen > .error,
@@ -1840,13 +1885,18 @@ label {
 
 .document-import-ingest {
   flex: 0 1 auto;
-  max-height: min(28vh, 14.5rem);
+  max-height: min(22vh, 11.5rem);
   min-height: 0;
   overflow: auto;
   padding-right: 0.2rem;
   display: flex;
   flex-direction: column;
-  gap: 0.85rem;
+  gap: 0.75rem;
+}
+
+/* Revue active : compresser l’ingest pour laisser la place à la revue plein écran */
+.document-import-screen.is-reviewing .document-import-ingest {
+  max-height: min(10vh, 5.25rem);
 }
 
 .document-import-ingest .companion-import-slot {
@@ -1985,19 +2035,58 @@ label {
 }
 
 .document-import-review {
-  position: sticky;
-  top: 0;
   align-self: stretch;
-  overflow: auto;
+  overflow: hidden;
   background:
     linear-gradient(150deg, rgba(255, 122, 46, 0.1), transparent 40%),
     linear-gradient(320deg, rgba(31, 201, 112, 0.1), transparent 48%),
     var(--surface);
-  padding: 1rem 1.15rem 1.15rem;
+  padding: 0;
 }
 
-.document-import-review > h2 {
+.document-import-review-empty {
+  margin: 1rem 1.15rem;
+}
+
+.document-import-review-head {
+  flex: 0 0 auto;
+  padding: 0.85rem 1.15rem 0.55rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.document-import-review-head h2 {
+  margin: 0 0 0.25rem;
+}
+
+.document-import-review-head .muted {
+  margin-bottom: 0.45rem;
+}
+
+.document-import-review-head .hint-banner {
+  margin: 0;
+}
+
+.document-import-review-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 0.85rem 1.15rem 1rem;
+}
+
+.document-import-review-actions {
+  flex: 0 0 auto;
+  padding: 0.7rem 1.15rem 0.85rem;
+  border-top: 1px solid var(--line);
+  background:
+    linear-gradient(180deg, rgba(244, 252, 248, 0.92), var(--surface));
+}
+
+.document-import-review-actions .btn-row {
   margin-top: 0;
+}
+
+.document-import-review-actions .ok {
+  margin: 0;
 }
 
 .document-import-review .hint-banner {
@@ -2041,7 +2130,7 @@ label {
   /* 2 colonnes stables : auto-fit + inputs sans width:100% provoquaient des chevauchements. */
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0.85rem 1.1rem;
-  margin: 1rem 0;
+  margin: 0 0 1rem;
   align-items: start;
 }
 
@@ -2076,7 +2165,7 @@ label {
 }
 
 .proposed-lines {
-  margin: 1rem 0;
+  margin: 0 0 1rem;
   overflow-x: auto;
 }
 
@@ -2094,11 +2183,11 @@ label {
 }
 
 .raw-extract {
-  margin-top: 1rem;
+  margin-top: 0.25rem;
 }
 
 .raw-extract pre {
-  max-height: 180px;
+  max-height: min(28vh, 180px);
   overflow: auto;
   background: var(--surface-tint);
   border-radius: 8px;
@@ -2118,32 +2207,62 @@ button.linkish {
 }
 
 @media (max-width: 860px) {
+  /* Mobile : pile verticale mais toujours sans scroll page — panes internes */
   .main:has(.document-import-screen) {
-    overflow: auto;
+    overflow: hidden;
+    padding: 0.85rem 0.85rem 0.75rem;
   }
 
   .panel.document-import-screen {
-    overflow: visible;
+    overflow: hidden;
+    padding: 0.75rem 0.85rem;
+    gap: 0.45rem;
+  }
+
+  .document-import-screen.is-reviewing > .panel-head {
+    display: none;
   }
 
   .document-import-ingest {
-    max-height: none;
-    overflow: visible;
+    max-height: min(16vh, 7.5rem);
+    overflow: auto;
+  }
+
+  .document-import-screen.is-reviewing .document-import-ingest {
+    display: none;
   }
 
   .document-import-layout {
     grid-template-columns: 1fr;
-    flex: 0 0 auto;
-    min-height: auto;
+    grid-template-rows: minmax(0, 28%) minmax(0, 1fr);
+    flex: 1 1 auto;
+    min-height: 0;
   }
 
   .document-import-list {
-    max-height: min(42vh, 22rem);
+    max-height: none;
   }
 
   .document-import-review {
-    position: relative;
-    max-height: none;
+    min-height: 0;
+    height: 100%;
+  }
+
+  .document-import-review-head {
+    padding: 0.55rem 0.85rem 0.4rem;
+  }
+
+  .document-import-review-head .muted,
+  .document-import-review-head .hint-banner {
+    display: none;
+  }
+
+  .document-import-review-body {
+    padding: 0.55rem 0.85rem 0.65rem;
+  }
+
+  .document-import-review-actions {
+    padding: 0.55rem 0.85rem 0.65rem;
   }
 }
 

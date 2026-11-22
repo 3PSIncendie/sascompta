@@ -353,8 +353,12 @@ export function DocumentImportScreen({ onNavigate }: Props) {
   const others = imports.filter((d) => d.status === "confirmed");
   const journalLabel = form?.journalCode || meta?.defaultJournal || "…";
 
+  const isReviewing = Boolean(form && selected);
+
   return (
-    <div className="panel document-import-screen">
+    <div
+      className={`panel document-import-screen${isReviewing ? " is-reviewing" : ""}`}
+    >
       <header className="panel-head">
         <div>
           <h1>Import documents</h1>
@@ -488,41 +492,45 @@ export function DocumentImportScreen({ onNavigate }: Props) {
           aria-label="Revue avant écriture"
         >
           {!form || !selected ? (
-            <p className="muted">
+            <p className="muted document-import-review-empty">
               Importez un document pour ouvrir l’écran de revue guidée.
             </p>
           ) : (
             <>
-              <h2>
-                {createsOrder
-                  ? "Revue avant commande"
-                  : createsQuote
-                    ? "Revue avant devis"
-                    : "Revue avant écriture"}
-              </h2>
-              <p className="muted">
-                Méthode : <strong>{selected.extractionMethod}</strong> · confiance{" "}
-                <strong>{confidenceLabel(selected.confidence)}</strong> (
-                {Math.round(selected.confidence * 100)} %) · statut{" "}
-                <strong>{selected.status}</strong>
-                {selected.status === "confirmed" && selected.quoteId
-                  ? " · déjà importé en devis"
-                  : ""}
-              </p>
-              {selected.extraction.notes && (
-                <p className="hint-banner">{selected.extraction.notes}</p>
-              )}
-              {selected.status === "pending_review" &&
-                selected.extraction.creditNoteHint &&
-                creditNoteApplicable(form.docType) &&
-                !form.isAvoir && (
-                  <p className="hint-banner warn">
-                    Indice PDF : ce document ressemble à un avoir (note de crédit).
-                    Cochez « Avoir » ci-dessous pour inverser l’écriture — la
-                    sélection manuelle est obligatoire.
-                  </p>
+              <header className="document-import-review-head">
+                <h2>
+                  {createsOrder
+                    ? "Revue avant commande"
+                    : createsQuote
+                      ? "Revue avant devis"
+                      : "Revue avant écriture"}
+                </h2>
+                <p className="muted">
+                  Méthode : <strong>{selected.extractionMethod}</strong> ·
+                  confiance{" "}
+                  <strong>{confidenceLabel(selected.confidence)}</strong> (
+                  {Math.round(selected.confidence * 100)} %) · statut{" "}
+                  <strong>{selected.status}</strong>
+                  {selected.status === "confirmed" && selected.quoteId
+                    ? " · déjà importé en devis"
+                    : ""}
+                </p>
+                {selected.extraction.notes && (
+                  <p className="hint-banner">{selected.extraction.notes}</p>
                 )}
+                {selected.status === "pending_review" &&
+                  selected.extraction.creditNoteHint &&
+                  creditNoteApplicable(form.docType) &&
+                  !form.isAvoir && (
+                    <p className="hint-banner warn">
+                      Indice PDF : ce document ressemble à un avoir (note de
+                      crédit). Cochez « Avoir » ci-dessous pour inverser
+                      l’écriture — la sélection manuelle est obligatoire.
+                    </p>
+                  )}
+              </header>
 
+              <div className="document-import-review-body">
               <div className="form-grid">
                 <label>
                   <LabelWithHelp topic="importDocType">Type détecté</LabelWithHelp>
@@ -940,107 +948,116 @@ export function DocumentImportScreen({ onNavigate }: Props) {
                 </div>
               )}
 
-              {selected.status === "pending_review" && (
-                <div className="btn-row">
-                  <button
-                    type="button"
-                    className="primary"
-                    disabled={busy || !canConfirm}
-                    onClick={() => void onConfirm()}
-                  >
-                    {createsOrder
-                      ? "Confirmer → créer la commande"
-                      : createsQuote
-                        ? "Confirmer → créer le devis"
-                        : `Confirmer → poster ${journalLabel}`}
-                  </button>
-                  <button
-                    type="button"
-                    className="ghost"
-                    disabled={busy}
-                    onClick={() => void onDiscard()}
-                  >
-                    Supprimer
-                  </button>
-                </div>
-              )}
-
-              {selected.status === "confirmed" && selected.quoteId && (
-                <p className="ok">
-                  Lié au devis #{selected.quoteId}
-                  {selected.extraction.confirmedQuoteNumber
-                    ? ` (${selected.extraction.confirmedQuoteNumber})`
-                    : ""}
-                  {onNavigate && (
-                    <>
-                      {" "}
-                      —{" "}
-                      <button
-                        type="button"
-                        className="linkish"
-                        onClick={() => onNavigate("devis")}
-                      >
-                        Ouvrir Devis
-                      </button>
-                    </>
-                  )}
-                </p>
-              )}
-
-              {selected.status === "confirmed" && selected.orderId && (
-                <p className="ok">
-                  Liée à la commande #{selected.orderId}
-                  {selected.extraction.confirmedOrderNumber
-                    ? ` (${selected.extraction.confirmedOrderNumber})`
-                    : ""}
-                  {onNavigate && (
-                    <>
-                      {" "}
-                      —{" "}
-                      <button
-                        type="button"
-                        className="linkish"
-                        onClick={() => onNavigate("commandes")}
-                      >
-                        Ouvrir Commandes
-                      </button>
-                    </>
-                  )}
-                </p>
-              )}
-
-              {selected.status === "confirmed" && selected.entryId && (
-                <p className="ok">
-                  Lié à l’écriture postée #{selected.entryId}
-                  {onNavigate && (
-                    <>
-                      {" "}
-                      —{" "}
-                      <button
-                        type="button"
-                        className="linkish"
-                        onClick={() => onNavigate("ecritures")}
-                      >
-                        Ouvrir Écritures
-                      </button>
-                      {" · "}
-                      <button
-                        type="button"
-                        className="linkish"
-                        onClick={() => onNavigate("grand-livre")}
-                      >
-                        Grand livre
-                      </button>
-                    </>
-                  )}
-                </p>
-              )}
-
               {selected.extraction.rawTextPreview && (
                 <details className="raw-extract">
                   <summary>Texte extrait (aperçu)</summary>
                   <pre>{selected.extraction.rawTextPreview}</pre>
                 </details>
+              )}
+              </div>
+
+              {(selected.status === "pending_review" ||
+                (selected.status === "confirmed" &&
+                  (selected.quoteId ||
+                    selected.orderId ||
+                    selected.entryId))) && (
+                <footer className="document-import-review-actions">
+                  {selected.status === "pending_review" && (
+                    <div className="btn-row">
+                      <button
+                        type="button"
+                        className="primary"
+                        disabled={busy || !canConfirm}
+                        onClick={() => void onConfirm()}
+                      >
+                        {createsOrder
+                          ? "Confirmer → créer la commande"
+                          : createsQuote
+                            ? "Confirmer → créer le devis"
+                            : `Confirmer → poster ${journalLabel}`}
+                      </button>
+                      <button
+                        type="button"
+                        className="ghost"
+                        disabled={busy}
+                        onClick={() => void onDiscard()}
+                      >
+                        Supprimer
+                      </button>
+                    </div>
+                  )}
+
+                  {selected.status === "confirmed" && selected.quoteId && (
+                    <p className="ok">
+                      Lié au devis #{selected.quoteId}
+                      {selected.extraction.confirmedQuoteNumber
+                        ? ` (${selected.extraction.confirmedQuoteNumber})`
+                        : ""}
+                      {onNavigate && (
+                        <>
+                          {" "}
+                          —{" "}
+                          <button
+                            type="button"
+                            className="linkish"
+                            onClick={() => onNavigate("devis")}
+                          >
+                            Ouvrir Devis
+                          </button>
+                        </>
+                      )}
+                    </p>
+                  )}
+
+                  {selected.status === "confirmed" && selected.orderId && (
+                    <p className="ok">
+                      Liée à la commande #{selected.orderId}
+                      {selected.extraction.confirmedOrderNumber
+                        ? ` (${selected.extraction.confirmedOrderNumber})`
+                        : ""}
+                      {onNavigate && (
+                        <>
+                          {" "}
+                          —{" "}
+                          <button
+                            type="button"
+                            className="linkish"
+                            onClick={() => onNavigate("commandes")}
+                          >
+                            Ouvrir Commandes
+                          </button>
+                        </>
+                      )}
+                    </p>
+                  )}
+
+                  {selected.status === "confirmed" && selected.entryId && (
+                    <p className="ok">
+                      Lié à l’écriture postée #{selected.entryId}
+                      {onNavigate && (
+                        <>
+                          {" "}
+                          —{" "}
+                          <button
+                            type="button"
+                            className="linkish"
+                            onClick={() => onNavigate("ecritures")}
+                          >
+                            Ouvrir Écritures
+                          </button>
+                          {" · "}
+                          <button
+                            type="button"
+                            className="linkish"
+                            onClick={() => onNavigate("grand-livre")}
+                          >
+                            Grand livre
+                          </button>
+                        </>
+                      )}
+                    </p>
+                  )}
+                </footer>
               )}
             </>
           )}
