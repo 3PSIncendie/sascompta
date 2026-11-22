@@ -45,6 +45,8 @@ import type {
   Payslip,
   PublicationPackMeta,
   Quote,
+  CustomerOrder,
+  CreateCustomerOrderInput,
   Reminder,
   SocialRateTable,
   ThirdParty,
@@ -215,6 +217,19 @@ export const api = {
   setQuoteStatus: (id: number, status: string) =>
     invoke<Quote>("set_quote_status", { id, status }),
   deleteQuote: (id: number) => invoke<void>("delete_quote", { id }),
+  listCustomerOrders: () => invoke<CustomerOrder[]>("list_customer_orders"),
+  getCustomerOrder: (id: number) =>
+    invoke<CustomerOrder>("get_customer_order", { id }),
+  createCustomerOrder: (input: CreateCustomerOrderInput) =>
+    invoke<CustomerOrder>("create_customer_order", { input }),
+  updateCustomerOrder: (id: number, input: CreateCustomerOrderInput) =>
+    invoke<CustomerOrder>("update_customer_order", { id, input }),
+  setCustomerOrderStatus: (id: number, status: string) =>
+    invoke<CustomerOrder>("set_customer_order_status", { id, status }),
+  deleteCustomerOrder: (id: number) =>
+    invoke<void>("delete_customer_order", { id }),
+  exportCustomerOrderPdf: (id: number, path: string) =>
+    invoke<void>("export_customer_order_pdf", { id, path }),
   exportQuotePdf: (id: number, path: string) =>
     invoke<void>("export_quote_pdf", { id, path }),
 

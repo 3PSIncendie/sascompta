@@ -47,8 +47,9 @@ pub const SCHEMA_BILLING_VERSION: i32 = 12;
 
 /// Séries documentaires configurables (compteur annuel calendaire).
 /// Les factures (standard / acompte / solde / avoir) partagent la série FACT
-/// (`F` + `AAAA-MMNN`) ; les devis utilisent la série DEV (`D` + `AAAA-MMNN`).
-pub const DOCUMENT_SEQUENCE_KINDS: &[&str] = &["FACT", "DEV"];
+/// (`F` + `AAAA-MMNN`) ; les devis utilisent la série DEV (`D` + `AAAA-MMNN`) ;
+/// les commandes clients utilisent la série CMD (`C` + `AAAA-MMNN`).
+pub const DOCUMENT_SEQUENCE_KINDS: &[&str] = &["FACT", "DEV", "CMD"];
 
 const QUOTE_STATUSES: &[&str] = &[
     "draft",
@@ -58,6 +59,11 @@ const QUOTE_STATUSES: &[&str] = &[
     "expired",
     "invoiced",
 ];
+
+/// Statuts commande client (Commercial → Commandes).
+/// Choix distinct des devis (accepted/refused/expired) : cycle commercial
+/// draft → sent → confirmed, avec cancelled terminal.
+const ORDER_STATUSES: &[&str] = &["draft", "sent", "confirmed", "cancelled"];
 
 const INVOICE_KINDS: &[&str] = &["standard", "deposit", "balance", "credit_note"];
 const INVOICE_STATUSES: &[&str] = &[
@@ -200,6 +206,53 @@ pub fn migrate_billing(conn: &Connection) -> DbResult<()> {
     enrich_invoice_import_link(conn)?;
     enrich_invoice_purchase_order(conn)?;
     enrich_quote_import_link(conn)?;
+    // v20 — commandes clients (Commercial → Commandes).
+    migrate_customer_orders(conn)?;
+    Ok(())
+}
+
+/// v20 — tables commande client + lignes (workspaces antérieurs inclus).
+fn migrate_customer_orders(conn: &Connection) -> DbResult<()> {
+    conn.execute_batch(
+        r#"
+        CREATE TABLE IF NOT EXISTS customer_order (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            number TEXT NOT NULL UNIQUE,
+            third_party_id INTEGER NOT NULL REFERENCES third_party(id),
+            status TEXT NOT NULL DEFAULT 'draft'
+                CHECK (status IN ('draft','sent','confirmed','cancelled')),
+            issue_date TEXT NOT NULL,
+            currency TEXT NOT NULL DEFAULT 'EUR',
+            ht_cents INTEGER NOT NULL DEFAULT 0,
+            vat_cents INTEGER NOT NULL DEFAULT 0,
+            ttc_cents INTEGER NOT NULL DEFAULT 0,
+            vat_mode TEXT NOT NULL DEFAULT 'normale',
+            notes TEXT,
+            legal_mentions TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            source TEXT NOT NULL DEFAULT 'native'
+                CHECK (source IN ('native','import')),
+            document_import_id INTEGER,
+            pdf_path TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS customer_order_line (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            order_id INTEGER NOT NULL REFERENCES customer_order(id) ON DELETE CASCADE,
+            line_no INTEGER NOT NULL,
+            label TEXT NOT NULL,
+            description TEXT,
+            quantity_milli INTEGER NOT NULL DEFAULT 1000 CHECK (quantity_milli > 0),
+            unit TEXT NOT NULL DEFAULT 'u',
+            unit_price_cents INTEGER NOT NULL DEFAULT 0,
+            ht_cents INTEGER NOT NULL DEFAULT 0,
+            vat_rate_bp INTEGER NOT NULL DEFAULT 0,
+            vat_code TEXT,
+            account_number TEXT NOT NULL DEFAULT '706'
+        );
+        "#,
+    )?;
     Ok(())
 }
 
@@ -350,6 +403,7 @@ fn sequence_label_fr(kind: &str) -> String {
     match kind {
         "FACT" => "Factures (standard, acompte, solde, avoir)".into(),
         "DEV" => "Devis".into(),
+        "CMD" => "Commandes clients".into(),
         other => other.to_string(),
     }
 }
@@ -367,12 +421,12 @@ fn validate_sequence_kind(kind: &str) -> DbResult<()> {
     }
 }
 
-/// Préfixe de série : `F` factures (y compris acomptes / avoirs), `D` devis.
+/// Préfixe de série : `F` factures (y compris acomptes / avoirs), `D` devis, `C` commandes.
 fn document_number_letter(kind: &str) -> &'static str {
-    if kind == "DEV" {
-        "D"
-    } else {
-        "F"
+    match kind {
+        "DEV" => "D",
+        "CMD" => "C",
+        _ => "F",
     }
 }
 
@@ -450,11 +504,11 @@ fn parse_sequence_num_for_year(number: &str, kind: &str, calendar_year: &str) ->
         }
     }
 
-    // Legacy : FACT-2026-0042 / DEV-2026-0001 / ACMP-… / AVO-…
-    let legacy_kinds: &[&str] = if kind == "DEV" {
-        &["DEV"]
-    } else {
-        &["FACT", "ACMP", "AVO"]
+    // Legacy : FACT-2026-0042 / DEV-2026-0001 / CMD-… / ACMP-… / AVO-…
+    let legacy_kinds: &[&str] = match kind {
+        "DEV" => &["DEV"],
+        "CMD" => &["CMD"],
+        _ => &["FACT", "ACMP", "AVO"],
     };
     for lk in legacy_kinds {
         let prefix = format!("{lk}-{calendar_year}-");
@@ -468,10 +522,10 @@ fn parse_sequence_num_for_year(number: &str, kind: &str, calendar_year: &str) ->
 }
 
 fn numbers_table_for_kind(kind: &str) -> &'static str {
-    if kind == "DEV" {
-        "quote"
-    } else {
-        "invoice"
+    match kind {
+        "DEV" => "quote",
+        "CMD" => "customer_order",
+        _ => "invoice",
     }
 }
 
@@ -643,7 +697,7 @@ fn sequence_info_for(
     })
 }
 
-/// Compteurs de l’année civile de l’exercice ouvert (FACT / DEV).
+/// Compteurs de l’année civile de l’exercice ouvert (FACT / DEV / CMD).
 pub fn list_document_sequences(conn: &Connection) -> DbResult<Vec<DocumentSequenceInfo>> {
     let fy_id = open_fy_id(conn)?;
     let year = calendar_year_for_open_fy(conn, fy_id)?;
@@ -1586,6 +1640,511 @@ pub fn create_imported_quote(
     insert_quote_lines(conn, id, &[(line, ht_cents)])?;
     get_quote(conn, id)
 }
+
+
+/* ——— Commandes clients (Commercial → Commandes) ——— */
+
+fn order_line_from_quote_input(line: &CustomerOrderLineInput) -> QuoteLineInput {
+    QuoteLineInput {
+        label: line.label.clone(),
+        description: line.description.clone(),
+        quantity_milli: line.quantity_milli,
+        unit: line.unit.clone(),
+        unit_price_cents: line.unit_price_cents,
+        ht_cents: line.ht_cents,
+        vat_rate_bp: line.vat_rate_bp,
+        vat_code: line.vat_code.clone(),
+        account_number: line.account_number.clone(),
+    }
+}
+
+fn recompute_order_totals(
+    lines: &[CustomerOrderLineInput],
+    vat_mode: &str,
+) -> (i64, i64, i64, Vec<(CustomerOrderLineInput, i64)>) {
+    let quote_lines: Vec<QuoteLineInput> = lines.iter().map(order_line_from_quote_input).collect();
+    let (ht, vat, ttc, computed) = recompute_quote_totals(&quote_lines, vat_mode);
+    let mapped = computed
+        .into_iter()
+        .map(|(ql, v)| {
+            (
+                CustomerOrderLineInput {
+                    label: ql.label,
+                    description: ql.description,
+                    quantity_milli: ql.quantity_milli,
+                    unit: ql.unit,
+                    unit_price_cents: ql.unit_price_cents,
+                    ht_cents: ql.ht_cents,
+                    vat_rate_bp: ql.vat_rate_bp,
+                    vat_code: ql.vat_code,
+                    account_number: ql.account_number,
+                },
+                v,
+            )
+        })
+        .collect();
+    (ht, vat, ttc, mapped)
+}
+
+fn map_order_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<CustomerOrder> {
+    Ok(CustomerOrder {
+        id: r.get(0)?,
+        number: r.get(1)?,
+        third_party_id: r.get(2)?,
+        third_party_code: r.get(3)?,
+        third_party_name: r.get(4)?,
+        status: r.get(5)?,
+        issue_date: r.get(6)?,
+        currency: r.get(7)?,
+        ht_cents: r.get(8)?,
+        vat_cents: r.get(9)?,
+        ttc_cents: r.get(10)?,
+        vat_mode: r.get(11)?,
+        notes: r.get(12)?,
+        legal_mentions: r.get(13)?,
+        created_at: r.get(14)?,
+        updated_at: r.get(15)?,
+        source: r
+            .get::<_, Option<String>>(16)?
+            .unwrap_or_else(|| "native".into()),
+        document_import_id: r.get(17)?,
+        pdf_path: r.get(18)?,
+        lines: Vec::new(),
+    })
+}
+
+fn load_order_lines(conn: &Connection, order_id: i64) -> DbResult<Vec<CustomerOrderLine>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, order_id, line_no, label, description, quantity_milli, unit, unit_price_cents,
+                ht_cents, vat_rate_bp, vat_code, account_number
+         FROM customer_order_line WHERE order_id = ?1 ORDER BY line_no",
+    )?;
+    let rows = stmt.query_map(params![order_id], |r| {
+        Ok(CustomerOrderLine {
+            id: r.get(0)?,
+            order_id: r.get(1)?,
+            line_no: r.get(2)?,
+            label: r.get(3)?,
+            description: r.get(4)?,
+            quantity_milli: r.get(5)?,
+            unit: r.get(6)?,
+            unit_price_cents: r.get(7)?,
+            ht_cents: r.get(8)?,
+            vat_rate_bp: r.get(9)?,
+            vat_code: r.get(10)?,
+            account_number: r.get(11)?,
+        })
+    })?;
+    Ok(rows.filter_map(|r| r.ok()).collect())
+}
+
+fn get_order_header(conn: &Connection, id: i64) -> DbResult<CustomerOrder> {
+    conn.query_row(
+        "SELECT o.id, o.number, o.third_party_id, tp.code, tp.name, o.status,
+                o.issue_date, o.currency, o.ht_cents, o.vat_cents, o.ttc_cents,
+                o.vat_mode, o.notes, o.legal_mentions, o.created_at, o.updated_at,
+                o.source, o.document_import_id, o.pdf_path
+         FROM customer_order o
+         JOIN third_party tp ON tp.id = o.third_party_id
+         WHERE o.id = ?1",
+        params![id],
+        map_order_row,
+    )
+    .map_err(|_| "Commande introuvable".into())
+}
+
+pub fn get_customer_order(conn: &Connection, id: i64) -> DbResult<CustomerOrder> {
+    let mut o = get_order_header(conn, id)?;
+    o.lines = load_order_lines(conn, id)?;
+    Ok(o)
+}
+
+pub fn list_customer_orders(conn: &Connection) -> DbResult<Vec<CustomerOrder>> {
+    let mut stmt = conn.prepare(
+        "SELECT o.id, o.number, o.third_party_id, tp.code, tp.name, o.status,
+                o.issue_date, o.currency, o.ht_cents, o.vat_cents, o.ttc_cents,
+                o.vat_mode, o.notes, o.legal_mentions, o.created_at, o.updated_at,
+                o.source, o.document_import_id, o.pdf_path
+         FROM customer_order o
+         JOIN third_party tp ON tp.id = o.third_party_id
+         ORDER BY o.issue_date DESC, o.id DESC",
+    )?;
+    let rows = stmt.query_map([], map_order_row)?;
+    let mut out = Vec::new();
+    for row in rows {
+        let mut o = row?;
+        o.lines = load_order_lines(conn, o.id)?;
+        out.push(o);
+    }
+    Ok(out)
+}
+
+fn insert_order_lines(
+    conn: &Connection,
+    order_id: i64,
+    lines: &[(CustomerOrderLineInput, i64)],
+) -> DbResult<()> {
+    for (i, (line, _)) in lines.iter().enumerate() {
+        let label = line.label.trim();
+        if label.is_empty() {
+            return Err("Titre de ligne requis".into());
+        }
+        if line.quantity_milli <= 0 {
+            return Err("Quantité invalide".into());
+        }
+        let account = if line.account_number.trim().is_empty() {
+            "706"
+        } else {
+            line.account_number.trim()
+        };
+        let description = normalize_description(&line.description);
+        conn.execute(
+            "INSERT INTO customer_order_line(
+                order_id, line_no, label, description, quantity_milli, unit, unit_price_cents,
+                ht_cents, vat_rate_bp, vat_code, account_number
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            params![
+                order_id,
+                (i + 1) as i32,
+                label,
+                description,
+                line.quantity_milli,
+                if line.unit.trim().is_empty() {
+                    "u"
+                } else {
+                    line.unit.trim()
+                },
+                line.unit_price_cents,
+                line.ht_cents,
+                line.vat_rate_bp,
+                line.vat_code,
+                account,
+            ],
+        )?;
+    }
+    Ok(())
+}
+
+pub fn create_customer_order(
+    conn: &Connection,
+    input: &CreateCustomerOrderInput,
+) -> DbResult<CustomerOrder> {
+    ensure_customer(conn, input.third_party_id)?;
+    validate_vat_mode(&input.vat_mode)?;
+    if input.lines.is_empty() {
+        return Err("Ajoutez au moins une ligne à la commande".into());
+    }
+    let number = allocate_document_number(conn, "CMD", &input.issue_date)?;
+    let (ht, vat, ttc, lines) = recompute_order_totals(&input.lines, &input.vat_mode);
+    let now = now_iso();
+    let legal = input
+        .legal_mentions
+        .clone()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| legal_mentions_for(&input.vat_mode));
+    conn.execute(
+        "INSERT INTO customer_order(
+            number, third_party_id, status, issue_date, currency,
+            ht_cents, vat_cents, ttc_cents, vat_mode, notes, legal_mentions,
+            created_at, updated_at
+         ) VALUES (?1, ?2, 'draft', ?3, 'EUR', ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10)",
+        params![
+            number,
+            input.third_party_id,
+            input.issue_date,
+            ht,
+            vat,
+            ttc,
+            input.vat_mode,
+            input.notes,
+            if legal.is_empty() { None } else { Some(legal) },
+            now,
+        ],
+    )?;
+    let id = conn.last_insert_rowid();
+    insert_order_lines(conn, id, &lines)?;
+    get_customer_order(conn, id)
+}
+
+pub fn update_customer_order(
+    conn: &Connection,
+    id: i64,
+    input: &CreateCustomerOrderInput,
+) -> DbResult<CustomerOrder> {
+    let existing = get_order_header(conn, id)?;
+    if existing.status != "draft" && existing.status != "sent" {
+        return Err(
+            "Seules les commandes brouillon ou envoyées restent modifiables (lignes / montants)"
+                .into(),
+        );
+    }
+    ensure_customer(conn, input.third_party_id)?;
+    validate_vat_mode(&input.vat_mode)?;
+    if input.lines.is_empty() {
+        return Err("Ajoutez au moins une ligne à la commande".into());
+    }
+    let (ht, vat, ttc, lines) = recompute_order_totals(&input.lines, &input.vat_mode);
+    let now = now_iso();
+    let legal = input
+        .legal_mentions
+        .clone()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| legal_mentions_for(&input.vat_mode));
+    conn.execute(
+        "UPDATE customer_order SET third_party_id = ?1, issue_date = ?2,
+            ht_cents = ?3, vat_cents = ?4, ttc_cents = ?5, vat_mode = ?6,
+            notes = ?7, legal_mentions = ?8, updated_at = ?9
+         WHERE id = ?10",
+        params![
+            input.third_party_id,
+            input.issue_date,
+            ht,
+            vat,
+            ttc,
+            input.vat_mode,
+            input.notes,
+            if legal.is_empty() { None } else { Some(legal) },
+            now,
+            id,
+        ],
+    )?;
+    conn.execute(
+        "DELETE FROM customer_order_line WHERE order_id = ?1",
+        params![id],
+    )?;
+    insert_order_lines(conn, id, &lines)?;
+    get_customer_order(conn, id)
+}
+
+pub fn set_customer_order_status(
+    conn: &Connection,
+    id: i64,
+    status: &str,
+) -> DbResult<CustomerOrder> {
+    if !ORDER_STATUSES.contains(&status) {
+        return Err("Statut de commande invalide".into());
+    }
+    let existing = get_order_header(conn, id)?;
+    let allowed = match existing.status.as_str() {
+        "draft" => matches!(status, "sent" | "confirmed" | "cancelled"),
+        "sent" => matches!(status, "confirmed" | "cancelled" | "draft"),
+        "confirmed" => matches!(status, "cancelled"),
+        "cancelled" => false,
+        _ => false,
+    };
+    if !allowed {
+        return Err(format!(
+            "Transition de statut interdite : {} → {}",
+            existing.status, status
+        )
+        .into());
+    }
+    conn.execute(
+        "UPDATE customer_order SET status = ?1, updated_at = ?2 WHERE id = ?3",
+        params![status, now_iso(), id],
+    )?;
+    get_customer_order(conn, id)
+}
+
+pub fn delete_customer_order(conn: &Connection, id: i64) -> DbResult<()> {
+    let existing = get_order_header(conn, id)?;
+    if existing.status != "draft" {
+        return Err("Seules les commandes brouillon peuvent être supprimées".into());
+    }
+    let n = conn.execute("DELETE FROM customer_order WHERE id = ?1", params![id])?;
+    if n == 0 {
+        return Err("Commande introuvable".into());
+    }
+    Ok(())
+}
+
+fn resolve_external_order_number(
+    conn: &Connection,
+    piece_ref: &str,
+    document_import_id: i64,
+) -> DbResult<String> {
+    let base = piece_ref.trim();
+    let candidate = if base.is_empty() {
+        format!("IMP-C-{document_import_id}")
+    } else {
+        base.to_string()
+    };
+    let taken: bool = conn
+        .query_row(
+            "SELECT 1 FROM customer_order WHERE number = ?1 LIMIT 1",
+            params![candidate],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some();
+    if !taken {
+        return Ok(candidate);
+    }
+    let alt = format!("{candidate}·imp{document_import_id}");
+    let alt_taken: bool = conn
+        .query_row(
+            "SELECT 1 FROM customer_order WHERE number = ?1 LIMIT 1",
+            params![alt],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some();
+    if alt_taken {
+        return Err(format!(
+            "Numéro de commande « {candidate} » déjà utilisé — renommez la pièce"
+        )
+        .into());
+    }
+    Ok(alt)
+}
+
+/// Crée une commande **confirmée** depuis un import document (pas d’écriture).
+/// Conserve le numéro externe (`piece_ref`) — pas d’allocation série CMD.
+pub fn create_imported_order(
+    conn: &Connection,
+    document_import_id: i64,
+    third_party_id: i64,
+    issue_date: &str,
+    piece_ref: &str,
+    label: &str,
+    ht_cents: i64,
+    vat_cents: i64,
+    rate_bp: i32,
+    vat_mode: &str,
+    vat_code: &str,
+    ht_account: &str,
+    pdf_path: Option<&str>,
+) -> DbResult<CustomerOrder> {
+    ensure_customer(conn, third_party_id)?;
+    validate_vat_mode(vat_mode)?;
+    if ht_cents <= 0 {
+        return Err("Montant HT invalide pour la commande importée".into());
+    }
+    if let Some(existing_id) = conn
+        .query_row(
+            "SELECT id FROM customer_order WHERE document_import_id = ?1 LIMIT 1",
+            params![document_import_id],
+            |r| r.get::<_, i64>(0),
+        )
+        .optional()?
+    {
+        return get_customer_order(conn, existing_id);
+    }
+    let vat = if vat_mode == "normale" {
+        vat_cents.max(0)
+    } else {
+        0
+    };
+    let ttc = ht_cents + vat;
+    let number = resolve_external_order_number(conn, piece_ref, document_import_id)?;
+    let account = if ht_account.trim().is_empty() {
+        "706".to_string()
+    } else {
+        ht_account.trim().to_string()
+    };
+    let line_label = {
+        let t = label.trim();
+        if t.is_empty() {
+            format!("Import {number}")
+        } else {
+            t.to_string()
+        }
+    };
+    let notes = format!("Import document #{document_import_id}");
+    let legal = legal_mentions_for(vat_mode);
+    let now = now_iso();
+    let vat_code_opt = if vat_code.trim().is_empty() {
+        None
+    } else {
+        Some(vat_code.trim().to_string())
+    };
+    let line_vat_code = vat_code_opt.clone();
+    conn.execute(
+        "INSERT INTO customer_order(
+            number, third_party_id, status, issue_date, currency,
+            ht_cents, vat_cents, ttc_cents, vat_mode, notes, legal_mentions,
+            created_at, updated_at, source, document_import_id, pdf_path
+         ) VALUES (?1, ?2, 'confirmed', ?3, 'EUR', ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10,
+            'import', ?11, ?12)",
+        params![
+            number,
+            third_party_id,
+            issue_date,
+            ht_cents,
+            vat,
+            ttc,
+            vat_mode,
+            notes,
+            if legal.is_empty() { None } else { Some(legal) },
+            now,
+            document_import_id,
+            pdf_path,
+        ],
+    )?;
+    let id = conn.last_insert_rowid();
+    let line = CustomerOrderLineInput {
+        label: line_label,
+        description: Some("Commande client importée (autre logiciel)".into()),
+        quantity_milli: 1000,
+        unit: "u".into(),
+        unit_price_cents: ht_cents,
+        ht_cents,
+        vat_rate_bp: rate_bp.max(0),
+        vat_code: line_vat_code,
+        account_number: account,
+    };
+    insert_order_lines(conn, id, &[(line, ht_cents)])?;
+    get_customer_order(conn, id)
+}
+
+pub fn export_customer_order_pdf(
+    conn: &Connection,
+    order_id: i64,
+    path: &Path,
+) -> DbResult<()> {
+    let order = get_customer_order(conn, order_id)?;
+    let org = crate::db::load_organization(conn)?;
+    let client = load_party(conn, order.third_party_id)?;
+
+    let meta = vec![
+        ("Numéro de commande", order.number.clone()),
+        ("Date d'émission", format_date_fr(&order.issue_date)),
+    ];
+
+    let lines: Vec<PdfLineView<'_>> = order
+        .lines
+        .iter()
+        .map(|l| PdfLineView {
+            label: &l.label,
+            description: l.description.as_deref(),
+            quantity_milli: l.quantity_milli,
+            unit_price_cents: l.unit_price_cents,
+            ht_cents: l.ht_cents,
+            vat_rate_bp: l.vat_rate_bp,
+        })
+        .collect();
+
+    let footer_left = commercial_footer_left(&org);
+    let org_email = org.email.as_deref().map(str::trim).filter(|s| !s.is_empty());
+
+    let spec = CommercialPdf {
+        title: "Commande",
+        number: &order.number,
+        meta,
+        org: &org,
+        org_email,
+        client: &client,
+        lines,
+        ht_cents: order.ht_cents,
+        vat_cents: order.vat_cents,
+        ttc_cents: order.ttc_cents,
+        notes: order.notes.as_deref(),
+        legal_mentions: order.legal_mentions.as_deref(),
+        footer_left,
+    };
+    render_commercial_pdf("SasCompta Commande", &spec, path)
+}
+
 
 /// Crée une facture **émise** liée à une écriture VTE déjà produite par l’import client.
 /// Conserve le numéro externe (`piece_ref`) — pas d’allocation série FACT, pas de 2ᵉ VTE.

@@ -2,6 +2,7 @@ export type DocTypeHint =
   | "supplier_invoice"
   | "customer_invoice"
   | "customer_quote"
+  | "customer_order"
   | "expense_receipt"
   | "ticket"
   | "bank_statement"
@@ -30,6 +31,7 @@ export const DOC_TYPE_OPTIONS: { value: DocTypeHint; label: string }[] = [
   { value: "supplier_invoice", label: "Facture fournisseur" },
   { value: "customer_invoice", label: "Facture client" },
   { value: "customer_quote", label: "Devis client" },
+  { value: "customer_order", label: "Commande client" },
   { value: "bank_statement", label: "Relevé bancaire" },
   { value: "unknown", label: "Je ne sais pas (PC classera)" },
 ];

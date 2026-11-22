@@ -836,16 +836,20 @@ export function MaSasScreen({
         <header className="panel-head">
           <div>
             <h2>
-              Numérotation devis &amp; factures{" "}
+              Numérotation devis, commandes &amp; factures{" "}
               <FieldHelp topic="numerotationFactures" compact />
             </h2>
             <p className="muted">
               Format <code>FAAAA-MMNN</code> (factures) /{" "}
-              <code>DAAAA-MMNN</code> (devis) : le mois vient de la date du
-              document et est collé à la séquence sur 2 chiffres ; le compteur
-              reprend chaque <strong>1<sup>er</sup> janvier</strong>. Indiquez
-              le <strong>prochain numéro</strong> pour continuer une série déjà
-              commencée hors SasCompta. Les numéros déjà émis ne changent pas.
+              <code>DAAAA-MMNN</code> (devis) / <code>CAAAA-MMNN</code>{" "}
+              (commandes) : le mois vient de la date du document et est collé à
+              la séquence sur 2 chiffres ; le compteur reprend chaque{" "}
+              <strong>
+                1<sup>er</sup> janvier
+              </strong>
+              . Indiquez le <strong>prochain numéro</strong> pour continuer une
+              série déjà commencée hors SasCompta. Les numéros déjà émis ne
+              changent pas.
             </p>
           </div>
         </header>
@@ -859,7 +863,8 @@ export function MaSasScreen({
             <code>F2026-1142</code>, puis 43, 44… jusqu’au 31/12 ; le 1
             <sup>er</sup> janvier suivant, le compteur repart à 01. Les
             acomptes et avoirs partagent la série Factures (<code>F…</code>).
-            Les devis ont leur propre compteur annuel (<code>D…</code>).
+            Les devis (<code>D…</code>) et commandes (<code>C…</code>) ont
+            chacun leur compteur annuel.
           </p>
         </div>
 

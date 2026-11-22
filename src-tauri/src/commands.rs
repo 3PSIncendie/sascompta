@@ -603,6 +603,65 @@ pub fn export_quote_pdf(
     .map_err(map_err)
 }
 
+/* ——— Commercial / commandes ——— */
+
+#[tauri::command]
+pub fn list_customer_orders(state: State<'_, AppState>) -> Result<Vec<CustomerOrder>, String> {
+    db::with_conn(&state, db::billing::list_customer_orders).map_err(map_err)
+}
+
+#[tauri::command]
+pub fn get_customer_order(state: State<'_, AppState>, id: i64) -> Result<CustomerOrder, String> {
+    db::with_conn(&state, |c| db::billing::get_customer_order(c, id)).map_err(map_err)
+}
+
+#[tauri::command]
+pub fn create_customer_order(
+    state: State<'_, AppState>,
+    input: CreateCustomerOrderInput,
+) -> Result<CustomerOrder, String> {
+    db::with_conn(&state, |c| db::billing::create_customer_order(c, &input)).map_err(map_err)
+}
+
+#[tauri::command]
+pub fn update_customer_order(
+    state: State<'_, AppState>,
+    id: i64,
+    input: CreateCustomerOrderInput,
+) -> Result<CustomerOrder, String> {
+    db::with_conn(&state, |c| db::billing::update_customer_order(c, id, &input))
+        .map_err(map_err)
+}
+
+#[tauri::command]
+pub fn set_customer_order_status(
+    state: State<'_, AppState>,
+    id: i64,
+    status: String,
+) -> Result<CustomerOrder, String> {
+    db::with_conn(&state, |c| {
+        db::billing::set_customer_order_status(c, id, &status)
+    })
+    .map_err(map_err)
+}
+
+#[tauri::command]
+pub fn delete_customer_order(state: State<'_, AppState>, id: i64) -> Result<(), String> {
+    db::with_conn(&state, |c| db::billing::delete_customer_order(c, id)).map_err(map_err)
+}
+
+#[tauri::command]
+pub fn export_customer_order_pdf(
+    state: State<'_, AppState>,
+    id: i64,
+    path: String,
+) -> Result<(), String> {
+    db::with_conn(&state, |c| {
+        db::billing::export_customer_order_pdf(c, id, std::path::Path::new(&path))
+    })
+    .map_err(map_err)
+}
+
 #[tauri::command]
 pub fn list_invoices(state: State<'_, AppState>) -> Result<Vec<Invoice>, String> {
     db::with_conn(&state, db::billing::list_invoices).map_err(map_err)

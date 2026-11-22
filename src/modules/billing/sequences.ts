@@ -1,8 +1,10 @@
 import type { DocumentSequenceInfo } from "../../lib/types";
 
-/** Préfixe de série : F factures, D devis. */
-export function documentNumberLetter(kind: string): "F" | "D" {
-  return kind === "DEV" || kind === "D" ? "D" : "F";
+/** Préfixe de série : F factures, D devis, C commandes. */
+export function documentNumberLetter(kind: string): "F" | "D" | "C" {
+  if (kind === "DEV" || kind === "D") return "D";
+  if (kind === "CMD" || kind === "C") return "C";
+  return "F";
 }
 
 /** Mois courant (1–12) pour l’aperçu FAAAA-MMNN / DAAAA-MMNN. */
@@ -22,6 +24,7 @@ export function previewDocumentSequences(
       next: 1,
     },
     { kind: "DEV", label: "Devis", next: 1 },
+    { kind: "CMD", label: "Commandes clients", next: 1 },
   ];
   return kinds.map((k) => ({
     kind: k.kind,

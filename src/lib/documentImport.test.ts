@@ -46,6 +46,9 @@ describe("documentImport registry", () => {
     expect(docTypeMeta("customer_quote").postingSupported).toBe(false);
     expect(docTypeMeta("customer_quote").createsQuote).toBe(true);
     expect(confirmSupported(docTypeMeta("customer_quote"))).toBe(true);
+    expect(docTypeMeta("customer_order").postingSupported).toBe(false);
+    expect(docTypeMeta("customer_order").createsOrder).toBe(true);
+    expect(confirmSupported(docTypeMeta("customer_order"))).toBe(true);
     expect(docTypeMeta("expense_receipt").postingSupported).toBe(true);
     expect(docTypeMeta("bank_statement").postingSupported).toBe(true);
     expect(docTypeMeta("ticket").postingSupported).toBe(true);
@@ -74,6 +77,31 @@ describe("documentImport registry", () => {
     expect(form.docType).toBe("customer_quote");
     expect(form.pieceRef).toBe("D-2024-0012");
     expect(form.journalCode).toBe("DEV");
+    expect(form.vatCode).toBe("T20C");
+    expect(buildProposedLines(form)).toEqual([]);
+  });
+
+  it("maps commande extraction into review form without ledger lines", () => {
+    const order: DocumentImport = {
+      ...sample,
+      docType: "customer_order",
+      extraction: {
+        issueDate: "2024-07-01",
+        invoiceNumber: "BC-2024-0088",
+        supplierName: "ACME SAS",
+        htCents: 80_000,
+        vatCents: 16_000,
+        rateBp: 2000,
+        vatMode: "normale",
+        vatCode: "T20C",
+        htAccount: "706",
+        journalCode: "CMD",
+      },
+    };
+    const form = formFromImport(order);
+    expect(form.docType).toBe("customer_order");
+    expect(form.pieceRef).toBe("BC-2024-0088");
+    expect(form.journalCode).toBe("CMD");
     expect(form.vatCode).toBe("T20C");
     expect(buildProposedLines(form)).toEqual([]);
   });

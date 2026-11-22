@@ -7,7 +7,7 @@ import {
   type DraftLine,
 } from "./quotes";
 
-export type BillingDocKind = "quote" | "invoice";
+export type BillingDocKind = "quote" | "invoice" | "order";
 
 export type PreviewMetaRow = { label: string; value: string };
 
@@ -179,7 +179,11 @@ export function buildBillingDocumentPreview(
   const meta: PreviewMetaRow[] = [
     {
       label:
-        input.docKind === "quote" ? "Numéro de devis" : "Numéro de facture",
+        input.docKind === "quote"
+          ? "Numéro de devis"
+          : input.docKind === "order"
+            ? "Numéro de commande"
+            : "Numéro de facture",
       value: input.number,
     },
     {
@@ -224,7 +228,7 @@ export function buildBillingDocumentPreview(
 
 /** Numéro provisoire pour un brouillon (émission réelle à l’enregistrement / émission). */
 export function draftPreviewNumber(
-  kind: "DEV" | "FACT",
+  kind: "DEV" | "FACT" | "CMD",
   issueDate: string,
   existing: string | null | undefined,
 ): string {
