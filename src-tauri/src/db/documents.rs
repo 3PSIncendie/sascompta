@@ -3630,6 +3630,7 @@ Total TTC                 120,00
             to_date: Some("2026-12-31".into()),
             journal_code: Some("ACH".into()),
             account_number: None,
+            fiscal_year_id: None,
         };
         let moves = crate::db::reporting::ledger_movements(&conn, &filter).unwrap();
         assert!(

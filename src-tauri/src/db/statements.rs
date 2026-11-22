@@ -401,6 +401,7 @@ pub fn year_filter(from: &str, to: &str) -> LedgerFilter {
         to_date: Some(to.to_string()),
         journal_code: None,
         account_number: None,
+        fiscal_year_id: None,
     }
 }
 
@@ -849,6 +850,7 @@ mod tests {
             to_date: Some("2026-12-31".into()),
             journal_code: None,
             account_number: None,
+            fiscal_year_id: None,
         }
     }
 

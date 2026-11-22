@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import logo3psi from "../assets/brand/3psi-logo.png";
 import { api } from "../lib/api";
 import {
-  homePeriods,
+  homeKpiFilters,
   mergeHomeKpis,
   previewHomeKpis,
   type HomeKpis,
@@ -22,8 +22,8 @@ interface Props {
 }
 
 export function HomeScreen({ workspace, onNavigate }: Props) {
-  const [period, setPeriod] = useState<HomePeriod>(() =>
-    homePeriods(workspace.fiscalYear),
+  const [period, setPeriod] = useState<HomePeriod>(
+    () => homeKpiFilters(workspace.fiscalYear).period,
   );
   const [kpis, setKpis] = useState<HomeKpis | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -31,7 +31,9 @@ export function HomeScreen({ workspace, onNavigate }: Props) {
 
   useEffect(() => {
     let cancelled = false;
-    const nextPeriod = homePeriods(workspace.fiscalYear);
+    const { period: nextPeriod, month, fyToDate } = homeKpiFilters(
+      workspace.fiscalYear,
+    );
     setPeriod(nextPeriod);
 
     async function load() {
@@ -45,19 +47,10 @@ export function HomeScreen({ workspace, onNavigate }: Props) {
         return;
       }
       try {
+        // Both packs are scoped to the current exercice id — prior years stay out.
         const [monthPack, fyPack] = await Promise.all([
-          api.annualStatements({
-            fromDate: nextPeriod.monthFrom,
-            toDate: nextPeriod.monthTo,
-            journalCode: null,
-            accountNumber: null,
-          }),
-          api.annualStatements({
-            fromDate: nextPeriod.fyFrom,
-            toDate: nextPeriod.fyTo,
-            journalCode: null,
-            accountNumber: null,
-          }),
+          api.annualStatements(month),
+          api.annualStatements(fyToDate),
         ]);
         if (!cancelled) {
           setKpis(mergeHomeKpis(monthPack, fyPack));

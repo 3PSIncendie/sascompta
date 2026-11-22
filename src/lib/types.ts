@@ -551,6 +551,8 @@ export interface LedgerFilter {
   toDate?: string | null;
   journalCode?: string | null;
   accountNumber?: string | null;
+  /** When set, only entries of this exercice (keeps prior years separate). */
+  fiscalYearId?: number | null;
 }
 
 export interface LedgerMovement {
