@@ -2423,6 +2423,29 @@ button.linkish {
   min-width: 26mm;
 }
 
+.billing-doc-note-box {
+  margin: 0 0 4mm;
+  padding: 2.2mm 3mm 2.5mm;
+  border: 0.35mm solid var(--doc-rule);
+  background: color-mix(in srgb, var(--doc-band) 8%, #fff);
+  border-radius: 0;
+  color: var(--doc-ink);
+}
+
+.billing-doc-note-box-title {
+  font-weight: 700;
+  font-size: 7.5pt;
+  margin: 0 0 1.5mm;
+}
+
+.billing-doc-note-box p {
+  margin: 0;
+  white-space: pre-wrap;
+  font-size: 7.5pt;
+  color: var(--doc-muted);
+  line-height: 1.35;
+}
+
 .billing-doc-notes {
   margin: 0 0 5mm;
   color: var(--doc-ink);
@@ -2436,6 +2459,57 @@ button.linkish {
 
 .billing-doc-legal {
   font-style: italic;
+}
+
+.invoice-notes-panel {
+  display: grid;
+  gap: 0.55rem;
+  margin: 0.35rem 0 0.75rem;
+  padding: 0.75rem 0.85rem;
+  border: 1px solid var(--border, #d8d8d2);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--surface, #fff) 88%, var(--accent, #2f9e44));
+}
+
+.invoice-notes-panel-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+}
+
+.invoice-notes-panel-head strong {
+  font-size: 0.92rem;
+}
+
+.invoice-notes-mode {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem 1rem;
+}
+
+.invoice-notes-mode label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.88rem;
+  cursor: pointer;
+}
+
+.invoice-notes-mode input {
+  margin: 0;
+}
+
+.invoice-notes-hint {
+  margin: 0;
+  font-size: 0.8rem;
+}
+
+.invoice-notes-panel textarea {
+  width: 100%;
+  min-height: 4.5rem;
+  resize: vertical;
 }
 
 .billing-doc-footer {

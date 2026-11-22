@@ -64,6 +64,8 @@ function previewWorkspace(): WorkspaceInfo | null {
       email: "contact@atelier-lumiere.fr",
       iban: "FR7616958000014398156414622",
       bic: "QNTOFRP1XXX",
+      invoiceBillingNotes:
+        "Paiement à 30 jours nets. Pénalités de retard : taux BCE + 10 points.",
     },
     fiscalYear: {
       id: 1,
@@ -164,6 +166,9 @@ export default function App() {
       {nav === "factures" && (
         <InvoicesScreen
           organization={workspace.organization}
+          onOrganizationChange={(organization) =>
+            setWorkspace((w) => (w ? { ...w, organization } : w))
+          }
           onNavigate={setNav}
         />
       )}

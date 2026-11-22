@@ -1930,11 +1930,31 @@ fn band_text_color() -> Color {
     ink_color()
 }
 
+fn note_box_fill() -> Color {
+    Color::Rgb(Rgb::new(0.965, 0.965, 0.961, None))
+}
+
 fn fill_rect(layer: &PdfLayerReference, x0: f32, y0: f32, x1: f32, y1: f32, color: Color) {
     layer.set_fill_color(color);
     let mut rect = Rect::new(Mm(x0), Mm(y0), Mm(x1), Mm(y1));
     rect = rect.with_mode(PaintMode::Fill);
     layer.add_rect(rect);
+}
+
+/// Cadre 1 pt via bandes remplies (évite Stroke selon versions printpdf).
+fn stroke_rect(
+    layer: &PdfLayerReference,
+    x0: f32,
+    y0: f32,
+    x1: f32,
+    y1: f32,
+    thickness: f32,
+    color: Color,
+) {
+    fill_rect(layer, x0, y0, x1, y0 + thickness, color);
+    fill_rect(layer, x0, y1 - thickness, x1, y1, color);
+    fill_rect(layer, x0, y0, x0 + thickness, y1, color);
+    fill_rect(layer, x1 - thickness, y0, x1, y1, color);
 }
 
 fn load_party(conn: &Connection, id: i64) -> DbResult<ThirdParty> {
@@ -2010,7 +2030,7 @@ fn render_commercial_pdf(doc_title: &str, spec: &CommercialPdf<'_>, path: &Path)
     let mid_x = 108.74_f32;
     let totals_label_x = 123.3_f32;
     let line_leading = 4.76_f32;
-    // Pied identité (sans bandeau « Détails du paiement »)
+    // Pied identité seul — pas de bandeau « Détails du paiement ».
     let footer_band_h = 23.28_f32;
 
     let mut layer = doc.get_page(page1).get_layer(layer1);
@@ -2343,17 +2363,54 @@ fn render_commercial_pdf(doc_title: &str, spec: &CommercialPdf<'_>, path: &Path)
     );
     y -= 14.0;
 
-    layer.set_fill_color(ink_color());
+    // Carré « conditions de facturation » sous les totaux (masqué si vide).
     if let Some(notes) = spec.notes {
-        for chunk in wrap_text(notes, 95) {
-            if y < footer_band_h + 8.0 {
-                break;
+        let title = "Conditions de facturation";
+        let body_chunks = wrap_text(notes, 92);
+        let pad_x = 3.0_f32;
+        let pad_top = 4.2_f32;
+        let pad_bot = 3.2_f32;
+        let title_h = 4.8_f32;
+        let body_h = (body_chunks.len().max(1) as f32) * line_leading;
+        let box_h = pad_top + title_h + body_h + pad_bot;
+        let box_top = y + 2.0;
+        let box_bot = box_top - box_h;
+        if box_bot >= footer_band_h + 6.0 {
+            fill_rect(
+                &layer,
+                margin_l,
+                box_bot,
+                content_r,
+                box_top,
+                note_box_fill(),
+            );
+            stroke_rect(
+                &layer,
+                margin_l,
+                box_bot,
+                content_r,
+                box_top,
+                0.35,
+                rule_color(),
+            );
+            layer.set_fill_color(ink_color());
+            let mut ty = box_top - pad_top - 1.5;
+            layer.use_text(title, 7.5, Mm(margin_l + pad_x), Mm(ty), &font_bold);
+            ty -= title_h;
+            for chunk in &body_chunks {
+                layer.use_text(
+                    ascii_safe(chunk),
+                    7.5,
+                    Mm(margin_l + pad_x),
+                    Mm(ty),
+                    &font,
+                );
+                ty -= line_leading;
             }
-            layer.use_text(ascii_safe(&chunk), 7.5, Mm(margin_l), Mm(y), &font);
-            y -= line_leading;
+            y = box_bot - 4.0;
         }
-        y -= 2.0;
     }
+    layer.set_fill_color(ink_color());
     if let Some(legal) = spec.legal_mentions {
         for chunk in wrap_text(legal, 95) {
             if y < footer_band_h + 8.0 {

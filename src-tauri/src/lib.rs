@@ -39,6 +39,7 @@ pub fn run() {
             commands::create_demo_workspace,
             commands::get_workspace_info,
             commands::update_organization,
+            commands::set_invoice_billing_notes,
             commands::close_workspace,
             commands::list_accounts,
             commands::create_account,

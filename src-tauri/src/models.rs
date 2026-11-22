@@ -20,6 +20,9 @@ pub struct Organization {
     /// BIC société (bandeau paiement facture).
     #[serde(default)]
     pub bic: Option<String>,
+    /// Note permanente « conditions de facturation » (préremplit les nouvelles factures).
+    #[serde(default)]
+    pub invoice_billing_notes: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

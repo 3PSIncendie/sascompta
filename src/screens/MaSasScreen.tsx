@@ -159,6 +159,15 @@ export function MaSasScreen({
   const [seqDrafts, setSeqDrafts] = useState<Record<string, string>>({});
   const [seqStatus, setSeqStatus] = useState<string | null>(null);
   const [seqError, setSeqError] = useState<string | null>(null);
+  const [billingNotes, setBillingNotes] = useState(
+    org.invoiceBillingNotes ?? "",
+  );
+  const [billingNotesStatus, setBillingNotesStatus] = useState<string | null>(
+    null,
+  );
+  const [billingNotesError, setBillingNotesError] = useState<string | null>(
+    null,
+  );
 
   useEffect(() => {
     if (editing) return;
@@ -176,6 +185,7 @@ export function MaSasScreen({
     setLabel(fy.label);
     setStartDate(fy.startDate);
     setEndDate(fy.endDate);
+    setBillingNotes(org.invoiceBillingNotes ?? "");
   }, [org, fy, profile, editing]);
 
   function applySequences(rows: DocumentSequenceInfo[]) {
@@ -636,7 +646,7 @@ export function MaSasScreen({
                   />
                 </label>
                 <label>
-                  BIC (paiement facture)
+                  BIC
                   <input
                     value={bic}
                     onChange={(e) => setBic(e.target.value)}
@@ -645,7 +655,7 @@ export function MaSasScreen({
                   />
                 </label>
                 <label style={{ gridColumn: "1 / -1" }}>
-                  IBAN (bandeau « Détails du paiement »)
+                  IBAN
                   <input
                     value={iban}
                     onChange={(e) => setIban(e.target.value)}
@@ -743,6 +753,75 @@ export function MaSasScreen({
             </div>
           </form>
         )}
+      </div>
+
+      <div className="panel nested-panel" style={{ marginTop: "1.25rem" }}>
+        <header className="panel-head">
+          <div>
+            <h2>Conditions de facturation (permanente)</h2>
+            <p className="muted">
+              Texte réutilisé par défaut sur chaque nouvelle facture. Une note
+              « une seule fois » sur une facture ne modifie pas ce modèle.
+            </p>
+          </div>
+        </header>
+        {billingNotesStatus && (
+          <div className="ok-banner">{billingNotesStatus}</div>
+        )}
+        {billingNotesError && (
+          <div className="error">{billingNotesError}</div>
+        )}
+        <label className="field">
+          Note permanente
+          <textarea
+            rows={4}
+            value={billingNotes}
+            onChange={(e) => setBillingNotes(e.target.value)}
+            placeholder="Ex. Paiement à 30 jours nets…"
+          />
+        </label>
+        <div className="btn-row" style={{ marginTop: "0.75rem" }}>
+          <button
+            type="button"
+            className="primary"
+            disabled={busy}
+            onClick={() => {
+              void (async () => {
+                setBillingNotesError(null);
+                setBillingNotesStatus(null);
+                setBusy(true);
+                try {
+                  const next = billingNotes.trim() || null;
+                  if (isPreview || !isTauriRuntime()) {
+                    onWorkspaceChange({
+                      ...workspace,
+                      organization: {
+                        ...org,
+                        invoiceBillingNotes: next,
+                      },
+                    });
+                    setBillingNotesStatus(
+                      "Note permanente enregistrée (aperçu).",
+                    );
+                    return;
+                  }
+                  const updated = await api.setInvoiceBillingNotes(next);
+                  onWorkspaceChange({
+                    ...workspace,
+                    organization: updated,
+                  });
+                  setBillingNotesStatus("Note permanente enregistrée.");
+                } catch (e) {
+                  setBillingNotesError(String(e));
+                } finally {
+                  setBusy(false);
+                }
+              })();
+            }}
+          >
+            Enregistrer la note permanente
+          </button>
+        </div>
       </div>
 
       <div className="panel nested-panel" style={{ marginTop: "1.25rem" }}>
