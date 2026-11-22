@@ -231,6 +231,12 @@ export const HELP: Record<string, HelpTopic> = {
     plain:
       "Étape obligatoire : vous vérifiez type, date, montants, tiers et lignes proposées. Rien n’est comptabilisé tant que vous n’avez pas confirmé. À la confirmation l’écriture est postée (Grand livre / TVA / FEC) ; le fichier reste en pièce jointe. Une facture client crée aussi une fiche dans Factures (numéro externe conservé) pour Encaisser. Un devis ou une commande crée une fiche dans Commercial (sans écriture).",
   },
+  affacturage: {
+    term: "Affacturage",
+    plain:
+      "Vous cédez la créance client à un factor. SasCompta poste une OD (débit 467 / crédit 411) puis une BQ (débit banque du net + débit commission, crédit 467). Le montant cédé solde la facture ; la commission est une charge (souvent 622).",
+    example: "Facture 1 200 € TTC, commission 36 € → OD 467/411 1 200 ; BQ 512 1 164 + 622 36 / 467 1 200",
+  },
   compagnonMobile: {
     term: "Compagnon mobile",
     plain:

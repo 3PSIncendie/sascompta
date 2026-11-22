@@ -39,9 +39,12 @@ import {
 } from "../modules/billing/invoiceNotes";
 import { previewNumber } from "../modules/billing/sequences";
 import {
+  DEFAULT_FACTORING_FEE_ACCOUNT,
+  factoringNetCents,
   normalizeBankRef,
   PAYMENT_METHODS,
 } from "../modules/billing/payments";
+import { LabelWithHelp } from "../components/FieldHelp";
 import type {
   BillingVatMode,
   Invoice,
@@ -101,6 +104,16 @@ export function InvoicesScreen({
     () => new Date().toISOString().slice(0, 10),
   );
   const [payRef, setPayRef] = useState("");
+  const [factorInvoiceId, setFactorInvoiceId] = useState<number | null>(null);
+  const [factorAmount, setFactorAmount] = useState("");
+  const [factorFee, setFactorFee] = useState("0.00");
+  const [factorFeeAccount, setFactorFeeAccount] = useState(
+    DEFAULT_FACTORING_FEE_ACCOUNT,
+  );
+  const [factorDate, setFactorDate] = useState(
+    () => new Date().toISOString().slice(0, 10),
+  );
+  const [factorRef, setFactorRef] = useState("");
 
   const totals = useMemo(
     () => summarizeInvoiceDraft(lines, vatMode, parseEurosToCents),
@@ -473,12 +486,84 @@ export function InvoicesScreen({
 
   function openPayment(inv: Invoice) {
     const due = Math.max(0, inv.ttcCents - inv.paidCents);
+    setFactorInvoiceId(null);
     setPayInvoiceId(inv.id);
     setPayAmount((due / 100).toFixed(2));
     setPayMethod("virement");
     setPayDate(new Date().toISOString().slice(0, 10));
     setPayRef("");
     setError(null);
+  }
+
+  function openFactoring(inv: Invoice) {
+    const due = Math.max(0, inv.ttcCents - inv.paidCents);
+    setPayInvoiceId(null);
+    setFactorInvoiceId(inv.id);
+    setFactorAmount((due / 100).toFixed(2));
+    setFactorFee("0.00");
+    setFactorFeeAccount(DEFAULT_FACTORING_FEE_ACCOUNT);
+    setFactorDate(new Date().toISOString().slice(0, 10));
+    setFactorRef("");
+    setError(null);
+  }
+
+  async function onRecordFactoring() {
+    if (factorInvoiceId == null) return;
+    const amount = parseEurosToCents(factorAmount);
+    const fee = parseEurosToCents(factorFee);
+    if (amount <= 0) {
+      setError("Montant cédé invalide.");
+      return;
+    }
+    if (fee < 0) {
+      setError("Commission invalide.");
+      return;
+    }
+    if (fee >= amount) {
+      setError("La commission doit être strictement inférieure au montant cédé.");
+      return;
+    }
+    const feeAccount = factorFeeAccount.trim() || DEFAULT_FACTORING_FEE_ACCOUNT;
+    const net = factoringNetCents(amount, fee);
+    if (PREVIEW || !isTauriRuntime()) {
+      setInvoices((prev) =>
+        prev.map((x) => {
+          if (x.id !== factorInvoiceId) return x;
+          const paid = x.paidCents + amount;
+          return {
+            ...x,
+            paidCents: paid,
+            status: paid >= x.ttcCents ? "paid" : "partially_paid",
+          };
+        }),
+      );
+      setStatus(
+        `Affacturage ${formatEuros(amount)} (net ${formatEuros(net)}, commission ${formatEuros(fee)}) — OD 467/411 + BQ (aperçu).`,
+      );
+      setFactorInvoiceId(null);
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const p = await api.recordFactoring({
+        invoiceId: factorInvoiceId,
+        paidOn: factorDate,
+        amountCents: amount,
+        feeCents: fee,
+        feeAccount,
+        bankRef: normalizeBankRef(factorRef),
+      });
+      setStatus(
+        `Affacturage ${formatEuros(amount)} — OD #${p.cessionEntryId ?? "?"} (467/411) + BQ #${p.entryId ?? "?"} (512/${feeAccount}/467), lettrage ${p.lettre ?? "—"}.`,
+      );
+      setFactorInvoiceId(null);
+      await refresh();
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function onRecordPayment() {
@@ -953,6 +1038,9 @@ export function InvoicesScreen({
         <li>
           <strong>Encaisser</strong> — BQ postée (512/411) + lettrage soft
         </li>
+        <li>
+          <strong>Affacturage</strong> — OD 467/411 + BQ (512 / frais / 467)
+        </li>
       </ol>
 
       {error ? <p className="error">{error}</p> : null}
@@ -1041,6 +1129,79 @@ export function InvoicesScreen({
             type="button"
             className="ghost"
             onClick={() => setPayInvoiceId(null)}
+          >
+            Annuler
+          </button>
+        </div>
+      ) : null}
+
+      {factorInvoiceId != null ? (
+        <div className="toolbar payment-bar">
+          <LabelWithHelp topic="affacturage">
+            <strong>Affacturage facture #{factorInvoiceId}</strong>
+          </LabelWithHelp>
+          <label>
+            Date
+            <input
+              type="date"
+              value={factorDate}
+              onChange={(e) => setFactorDate(e.target.value)}
+            />
+          </label>
+          <label>
+            Montant cédé
+            <input
+              value={factorAmount}
+              onChange={(e) => setFactorAmount(e.target.value)}
+              style={{ maxWidth: "8rem" }}
+            />
+          </label>
+          <label>
+            Commission
+            <input
+              value={factorFee}
+              onChange={(e) => setFactorFee(e.target.value)}
+              style={{ maxWidth: "7rem" }}
+            />
+          </label>
+          <label>
+            Compte frais
+            <input
+              value={factorFeeAccount}
+              onChange={(e) => setFactorFeeAccount(e.target.value)}
+              style={{ maxWidth: "5rem" }}
+              placeholder="622"
+            />
+          </label>
+          <label>
+            Réf. factor
+            <input
+              value={factorRef}
+              onChange={(e) => setFactorRef(e.target.value)}
+              placeholder="FAC-…"
+            />
+          </label>
+          <span className="muted small">
+            Net reçu{" "}
+            {formatEuros(
+              factoringNetCents(
+                parseEurosToCents(factorAmount),
+                parseEurosToCents(factorFee),
+              ),
+            )}
+          </span>
+          <button
+            type="button"
+            className="primary"
+            disabled={busy}
+            onClick={() => void onRecordFactoring()}
+          >
+            Enregistrer (467 / 411 / frais)
+          </button>
+          <button
+            type="button"
+            className="ghost"
+            onClick={() => setFactorInvoiceId(null)}
           >
             Annuler
           </button>
@@ -1167,14 +1328,25 @@ export function InvoicesScreen({
                             ) : null}
                             {inv.kind !== "credit_note" &&
                               inv.paidCents < inv.ttcCents && (
-                                <button
-                                  type="button"
-                                  className="primary"
-                                  disabled={busy}
-                                  onClick={() => openPayment(inv)}
-                                >
-                                  Encaisser
-                                </button>
+                                <>
+                                  <button
+                                    type="button"
+                                    className="primary"
+                                    disabled={busy}
+                                    onClick={() => openPayment(inv)}
+                                  >
+                                    Encaisser
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="secondary"
+                                    disabled={busy}
+                                    onClick={() => openFactoring(inv)}
+                                    title="Cession factor : OD 467/411 + BQ net et commission"
+                                  >
+                                    Affacturage
+                                  </button>
+                                </>
                               )}
                             {inv.status === "paid" ||
                             inv.status === "partially_paid" ? (

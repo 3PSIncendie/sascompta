@@ -432,6 +432,11 @@ export interface Payment {
   bankRef: string | null;
   entryId: number | null;
   lettre: string | null;
+  /** Commission affacturage (0 si encaissement classique). */
+  feeCents?: number;
+  feeAccount?: string | null;
+  /** Écriture OD cession 467/411. */
+  cessionEntryId?: number | null;
 }
 
 export interface CreatePaymentInput {
@@ -439,6 +444,19 @@ export interface CreatePaymentInput {
   paidOn: string;
   amountCents: number;
   method: string;
+  bankRef?: string | null;
+}
+
+/** Affacturage : cession 467/411 + règlement factor 512/frais/467. */
+export interface CreateFactoringInput {
+  invoiceId: number;
+  paidOn: string;
+  /** Montant cédé (part factor). */
+  amountCents: number;
+  /** Commission / frais. */
+  feeCents: number;
+  /** Compte de charge (défaut 622). */
+  feeAccount?: string | null;
   bankRef?: string | null;
 }
 

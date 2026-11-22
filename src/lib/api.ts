@@ -15,6 +15,7 @@ import type {
   CreateEreportingBatchInput,
   CreateInvoiceInput,
   CreateLeaveRequestInput,
+  CreateFactoringInput,
   CreatePaymentInput,
   CreateQuoteInput,
   CreateThirdPartyInput,
@@ -266,6 +267,8 @@ export const api = {
     invoke<Payment[]>("list_payments", { invoiceId: invoiceId ?? null }),
   recordPayment: (input: CreatePaymentInput) =>
     invoke<Payment>("record_payment", { input }),
+  recordFactoring: (input: CreateFactoringInput) =>
+    invoke<Payment>("record_factoring", { input }),
   listReminders: () => invoke<Reminder[]>("list_reminders"),
   generateDueReminders: () => invoke<Reminder[]>("generate_due_reminders"),
   markReminderSent: (id: number) =>
