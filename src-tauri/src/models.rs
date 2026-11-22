@@ -646,6 +646,9 @@ pub struct Invoice {
     pub facturx_path: Option<String>,
     pub notes: Option<String>,
     pub legal_mentions: Option<String>,
+    /// Numéro de bon de commande client (saisie manuelle, PDF / aperçu).
+    #[serde(default)]
+    pub purchase_order_number: Option<String>,
     pub created_at: String,
     pub updated_at: String,
     /// `native` (saisie SasCompta) ou `import` (PDF client confirmé).
@@ -691,6 +694,9 @@ pub struct CreateInvoiceInput {
     pub vat_mode: String,
     pub notes: Option<String>,
     pub legal_mentions: Option<String>,
+    /// Numéro de bon de commande (saisie manuelle).
+    #[serde(default)]
+    pub purchase_order_number: Option<String>,
     pub lines: Vec<InvoiceLineInput>,
 }
 

@@ -74,6 +74,7 @@ export function buildInvoiceCreateInput(opts: {
   serviceDate: string;
   vatMode: BillingVatMode;
   notes: string;
+  purchaseOrderNumber?: string;
   lines: DraftLine[];
   parseEuros: (s: string) => number;
 }): CreateInvoiceInput {
@@ -94,6 +95,7 @@ export function buildInvoiceCreateInput(opts: {
     vatMode: opts.vatMode,
     notes: opts.notes.trim() || null,
     legalMentions: legalMentionsFor(opts.vatMode) || null,
+    purchaseOrderNumber: opts.purchaseOrderNumber?.trim() || null,
     lines,
   };
 }
@@ -138,6 +140,7 @@ export function previewInvoices(): Invoice[] {
       facturxPath: null,
       notes: "Maintenance annuelle détection",
       legalMentions: null,
+      purchaseOrderNumber: "BC-DEMO-2026",
       createdAt: now,
       updatedAt: now,
       source: "native",
@@ -186,6 +189,7 @@ export function previewInvoices(): Invoice[] {
       facturxPath: null,
       notes: "Depuis devis 2026-03-0001",
       legalMentions: null,
+      purchaseOrderNumber: null,
       createdAt: now,
       updatedAt: now,
       source: "native",
@@ -250,6 +254,7 @@ export function previewInvoices(): Invoice[] {
       facturxPath: null,
       notes: "Import document #12",
       legalMentions: null,
+      purchaseOrderNumber: null,
       createdAt: now,
       updatedAt: now,
       source: "import",

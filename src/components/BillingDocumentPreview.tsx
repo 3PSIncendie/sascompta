@@ -127,38 +127,7 @@ export function BillingDocumentPreview({
             </div>
           ) : null}
 
-          <footer
-            className={
-              model.payment
-                ? "billing-doc-footer billing-doc-footer-payment"
-                : "billing-doc-footer"
-            }
-          >
-            {model.payment ? (
-              <div className="billing-doc-payment">
-                <div className="billing-doc-payment-title">
-                  Détails du paiement
-                </div>
-                <dl className="billing-doc-payment-rows">
-                  <div>
-                    <dt>Nom du bénéficiaire</dt>
-                    <dd>{model.payment.beneficiary}</dd>
-                  </div>
-                  <div>
-                    <dt>BIC</dt>
-                    <dd>{model.payment.bic}</dd>
-                  </div>
-                  <div>
-                    <dt>IBAN</dt>
-                    <dd>{model.payment.iban}</dd>
-                  </div>
-                  <div>
-                    <dt>Référence</dt>
-                    <dd>{model.payment.reference}</dd>
-                  </div>
-                </dl>
-              </div>
-            ) : null}
+          <footer className="billing-doc-footer">
             <div className="billing-doc-footer-identity">
               <span>{model.footerLeft}</span>
               <span>

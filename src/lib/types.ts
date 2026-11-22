@@ -320,6 +320,8 @@ export interface Invoice {
   facturxPath: string | null;
   notes: string | null;
   legalMentions: string | null;
+  /** Numéro de bon de commande client (saisie manuelle). */
+  purchaseOrderNumber?: string | null;
   createdAt: string;
   updatedAt: string;
   /** `native` (saisie) ou `import` (PDF client confirmé). */
@@ -339,6 +341,7 @@ export interface CreateInvoiceInput {
   vatMode: BillingVatMode | string;
   notes?: string | null;
   legalMentions?: string | null;
+  purchaseOrderNumber?: string | null;
   lines: InvoiceLineInput[];
 }
 

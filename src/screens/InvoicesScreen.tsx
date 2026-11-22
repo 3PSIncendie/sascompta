@@ -73,6 +73,7 @@ export function InvoicesScreen({
   const [serviceDate, setServiceDate] = useState("");
   const [vatMode, setVatMode] = useState<BillingVatMode>("normale");
   const [notes, setNotes] = useState("");
+  const [purchaseOrderNumber, setPurchaseOrderNumber] = useState("");
   const [lines, setLines] = useState<DraftLine[]>([
     emptyDraftLine(2000, "T20C"),
   ]);
@@ -202,6 +203,7 @@ export function InvoicesScreen({
     setServiceDate("");
     setVatMode("normale");
     setNotes("");
+    setPurchaseOrderNumber("");
     setLines([
       {
         ...emptyDraftLine(2000, "T20C"),
@@ -227,6 +229,7 @@ export function InvoicesScreen({
     setServiceDate(inv.serviceDate ?? "");
     setVatMode((inv.vatMode as BillingVatMode) || "normale");
     setNotes(inv.notes ?? "");
+    setPurchaseOrderNumber(inv.purchaseOrderNumber ?? "");
     setLines(
       invoiceToDraftLines(inv).length
         ? invoiceToDraftLines(inv)
@@ -252,6 +255,7 @@ export function InvoicesScreen({
       serviceDate,
       vatMode,
       notes,
+      purchaseOrderNumber,
       lines,
       parseEuros: parseEurosToCents,
     });
@@ -288,6 +292,7 @@ export function InvoicesScreen({
         facturxPath: null,
         notes: notes || null,
         legalMentions: input.legalMentions ?? null,
+        purchaseOrderNumber: purchaseOrderNumber.trim() || null,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
         lines: input.lines.map((l, i) => ({
@@ -568,10 +573,16 @@ export function InvoicesScreen({
   }, [editingId, invoices]);
 
   const livePreview = useMemo(() => {
-    const extraMeta =
-      parentInvoiceId != null
-        ? [{ label: "Document lié", value: `#${parentInvoiceId}` }]
-        : undefined;
+    const extraMeta: { label: string; value: string }[] = [];
+    if (purchaseOrderNumber.trim()) {
+      extraMeta.push({
+        label: "Numéro de bon de commande",
+        value: purchaseOrderNumber.trim(),
+      });
+    }
+    if (parentInvoiceId != null) {
+      extraMeta.push({ label: "Document lié", value: `#${parentInvoiceId}` });
+    }
     return buildBillingDocumentPreview({
       docKind: "invoice",
       title: invoiceTitleForKind(kind),
@@ -584,7 +595,7 @@ export function InvoicesScreen({
       vatMode,
       notes,
       lines,
-      extraMeta,
+      extraMeta: extraMeta.length ? extraMeta : undefined,
     });
   }, [
     dueDate,
@@ -595,6 +606,7 @@ export function InvoicesScreen({
     notes,
     organization,
     parentInvoiceId,
+    purchaseOrderNumber,
     selectedCustomer,
     vatMode,
   ]);
@@ -747,6 +759,16 @@ export function InvoicesScreen({
                   type="date"
                   value={dueDate}
                   onChange={(e) => setDueDate(e.target.value)}
+                />
+              </label>
+              <label>
+                Numéro de bon de commande
+                <input
+                  type="text"
+                  value={purchaseOrderNumber}
+                  onChange={(e) => setPurchaseOrderNumber(e.target.value)}
+                  placeholder="Ex. 4500418456"
+                  autoComplete="off"
                 />
               </label>
             </div>

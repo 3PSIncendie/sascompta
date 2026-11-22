@@ -27,13 +27,6 @@ export type PreviewParty = {
   idLine: string | null;
 };
 
-export type PreviewPaymentDetails = {
-  beneficiary: string;
-  bic: string;
-  iban: string;
-  reference: string;
-};
-
 export type BillingDocumentPreviewModel = {
   title: string;
   number: string;
@@ -47,8 +40,6 @@ export type BillingDocumentPreviewModel = {
   notes: string | null;
   legalMentions: string | null;
   footerLeft: string;
-  /** Bandeau « Détails du paiement » (facture, si IBAN/BIC renseignés). */
-  payment: PreviewPaymentDetails | null;
 };
 
 /** YYYY-MM-DD → DD/MM/YYYY (miroir PDF Rust). */
@@ -215,18 +206,6 @@ export function buildBillingDocumentPreview(
     htLabel: formatEuros(l.htCents ?? 0),
   }));
 
-  const iban = input.org.iban?.trim() || "";
-  const bic = input.org.bic?.trim() || "";
-  const payment =
-    input.docKind === "invoice" && iban && bic
-      ? {
-          beneficiary: input.org.name,
-          bic,
-          iban,
-          reference: input.number,
-        }
-      : null;
-
   return {
     title: input.title,
     number: input.number,
@@ -240,7 +219,6 @@ export function buildBillingDocumentPreview(
     notes: input.notes.trim() || null,
     legalMentions: legal,
     footerLeft: commercialFooterLeft(input.org),
-    payment,
   };
 }
 

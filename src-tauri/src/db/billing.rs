@@ -18,7 +18,7 @@ const COMMERCIAL_LOGO_MM: f32 = 33.34;
 /// Hauteur page A4 (mm) — origine PDF en bas à gauche.
 const PAGE_H_MM: f32 = 297.0;
 
-pub const SCHEMA_BILLING_VERSION: i32 = 11;
+pub const SCHEMA_BILLING_VERSION: i32 = 12;
 
 /// Séries documentaires configurables (compteur annuel calendaire).
 /// Les factures (standard / acompte / solde / avoir) partagent la série FACT
@@ -124,6 +124,7 @@ pub fn migrate_billing(conn: &Connection) -> DbResult<()> {
             facturx_path TEXT,
             notes TEXT,
             legal_mentions TEXT,
+            purchase_order_number TEXT,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
             source TEXT NOT NULL DEFAULT 'native'
@@ -172,6 +173,19 @@ pub fn migrate_billing(conn: &Connection) -> DbResult<()> {
     )?;
     enrich_billing_line_description(conn)?;
     enrich_invoice_import_link(conn)?;
+    enrich_invoice_purchase_order(conn)?;
+    Ok(())
+}
+
+/// v12 billing — numéro de bon de commande (saisie manuelle facture).
+fn enrich_invoice_purchase_order(conn: &Connection) -> DbResult<()> {
+    let cols = table_columns(conn, "invoice")?;
+    if !cols.iter().any(|c| c == "purchase_order_number") {
+        conn.execute(
+            "ALTER TABLE invoice ADD COLUMN purchase_order_number TEXT",
+            [],
+        )?;
+    }
     Ok(())
 }
 
@@ -1008,10 +1022,11 @@ fn map_invoice_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Invoice> {
         facturx_path: r.get(22)?,
         notes: r.get(23)?,
         legal_mentions: r.get(24)?,
-        created_at: r.get(25)?,
-        updated_at: r.get(26)?,
-        source: r.get::<_, Option<String>>(27)?.unwrap_or_else(|| "native".into()),
-        document_import_id: r.get(28)?,
+        purchase_order_number: r.get(25)?,
+        created_at: r.get(26)?,
+        updated_at: r.get(27)?,
+        source: r.get::<_, Option<String>>(28)?.unwrap_or_else(|| "native".into()),
+        document_import_id: r.get(29)?,
         lines: Vec::new(),
     })
 }
@@ -1047,7 +1062,7 @@ const INVOICE_SELECT: &str = "SELECT i.id, i.number, i.kind, i.third_party_id, t
                 i.service_date, i.ht_cents, i.vat_cents, i.ttc_cents, i.paid_cents,
                 i.vat_mode, i.vat_code, i.einvoice_profile, i.einvoice_status,
                 i.entry_id, i.pdf_path, i.facturx_path, i.notes, i.legal_mentions,
-                i.created_at, i.updated_at, i.source, i.document_import_id
+                i.purchase_order_number, i.created_at, i.updated_at, i.source, i.document_import_id
          FROM invoice i
          JOIN third_party tp ON tp.id = i.third_party_id";
 
@@ -1186,12 +1201,17 @@ pub fn create_invoice(conn: &Connection, input: &CreateInvoiceInput) -> DbResult
         .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(|| legal_mentions_for(&input.vat_mode));
     let vat_code = lines.iter().find_map(|l| l.vat_code.clone());
+    let po = input
+        .purchase_order_number
+        .as_ref()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
     conn.execute(
         "INSERT INTO invoice(
             number, kind, third_party_id, quote_id, parent_invoice_id, status,
             issue_date, due_date, service_date, ht_cents, vat_cents, ttc_cents, paid_cents,
-            vat_mode, vat_code, notes, legal_mentions, created_at, updated_at
-         ) VALUES (NULL, ?1, ?2, ?3, ?4, 'draft', ?5, ?6, ?7, ?8, ?9, ?10, 0, ?11, ?12, ?13, ?14, ?15, ?15)",
+            vat_mode, vat_code, notes, legal_mentions, purchase_order_number, created_at, updated_at
+         ) VALUES (NULL, ?1, ?2, ?3, ?4, 'draft', ?5, ?6, ?7, ?8, ?9, ?10, 0, ?11, ?12, ?13, ?14, ?15, ?16, ?16)",
         params![
             input.kind,
             input.third_party_id,
@@ -1207,6 +1227,7 @@ pub fn create_invoice(conn: &Connection, input: &CreateInvoiceInput) -> DbResult
             vat_code,
             input.notes,
             if legal.is_empty() { None } else { Some(legal) },
+            po,
             now,
         ],
     )?;
@@ -1238,12 +1259,17 @@ pub fn update_invoice(
         .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(|| legal_mentions_for(&input.vat_mode));
     let vat_code = lines.iter().find_map(|l| l.vat_code.clone());
+    let po = input
+        .purchase_order_number
+        .as_ref()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
     conn.execute(
         "UPDATE invoice SET kind = ?1, third_party_id = ?2, quote_id = ?3, parent_invoice_id = ?4,
             issue_date = ?5, due_date = ?6, service_date = ?7,
             ht_cents = ?8, vat_cents = ?9, ttc_cents = ?10, vat_mode = ?11, vat_code = ?12,
-            notes = ?13, legal_mentions = ?14, updated_at = ?15
-         WHERE id = ?16",
+            notes = ?13, legal_mentions = ?14, purchase_order_number = ?15, updated_at = ?16
+         WHERE id = ?17",
         params![
             input.kind,
             input.third_party_id,
@@ -1259,6 +1285,7 @@ pub fn update_invoice(
             vat_code,
             input.notes,
             if legal.is_empty() { None } else { Some(legal) },
+            po,
             now,
             id,
         ],
@@ -1494,6 +1521,7 @@ pub fn create_credit_note(conn: &Connection, invoice_id: i64) -> DbResult<Invoic
             src.number.as_deref().unwrap_or(&format!("#{}", src.id))
         )),
         legal_mentions: src.legal_mentions.clone(),
+        purchase_order_number: src.purchase_order_number.clone(),
         lines,
     };
     create_invoice(conn, &input)
@@ -1528,6 +1556,7 @@ pub fn create_deposit_invoice(
             parent.number.as_deref().unwrap_or(&format!("#{}", parent.id))
         )),
         legal_mentions: parent.legal_mentions.clone(),
+        purchase_order_number: parent.purchase_order_number.clone(),
         lines: vec![InvoiceLineInput {
             label: "Acompte".into(),
             description: None,
@@ -1883,11 +1912,13 @@ fn vat_pct_fr(bp: i32) -> String {
 }
 
 fn ink_color() -> Color {
-    Color::Rgb(Rgb::new(0.114, 0.114, 0.106, None))
+    // Texte courant : anthracite lisible (pas le gris des bandeaux).
+    Color::Rgb(Rgb::new(0.18, 0.18, 0.17, None))
 }
 
+/// Remplissage bandeaux (en-tête tableau, Total TTC, pied) — gris moyen, plus soft que noir.
 fn header_fill() -> Color {
-    Color::Rgb(Rgb::new(0.114, 0.114, 0.106, None))
+    Color::Rgb(Rgb::new(0.38, 0.38, 0.36, None)) // ≈ #61615C
 }
 
 fn rule_color() -> Color {
@@ -1938,14 +1969,6 @@ struct PdfLineView<'a> {
     vat_rate_bp: i32,
 }
 
-/// Bloc « Détails du paiement » (facture) — calqué sur la référence 3PSI.
-struct PaymentDetailsPdf<'a> {
-    beneficiary: &'a str,
-    bic: &'a str,
-    iban: &'a str,
-    reference: &'a str,
-}
-
 struct CommercialPdf<'a> {
     title: &'a str,
     number: &'a str,
@@ -1961,8 +1984,6 @@ struct CommercialPdf<'a> {
     notes: Option<&'a str>,
     legal_mentions: Option<&'a str>,
     footer_left: String,
-    /// Présent sur les factures lorsque IBAN société renseigné.
-    payment: Option<PaymentDetailsPdf<'a>>,
 }
 
 /// Layout calqué sur le modèle devis/facture 3PSI (A4 exact, métriques référence).
@@ -1989,14 +2010,8 @@ fn render_commercial_pdf(doc_title: &str, spec: &CommercialPdf<'_>, path: &Path)
     let mid_x = 108.74_f32;
     let totals_label_x = 123.3_f32;
     let line_leading = 4.76_f32;
-    // Pied identité seul (devis) vs bandeau paiement + identité (facture)
-    let identity_band_h = 23.28_f32;
-    let payment_band_h = 54.77_f32;
-    let footer_band_h = if spec.payment.is_some() {
-        payment_band_h
-    } else {
-        identity_band_h
-    };
+    // Pied identité (sans bandeau « Détails du paiement »)
+    let footer_band_h = 23.28_f32;
 
     let mut layer = doc.get_page(page1).get_layer(layer1);
     let mut page_idx = 1usize;
@@ -2061,41 +2076,6 @@ fn render_commercial_pdf(doc_title: &str, spec: &CommercialPdf<'_>, path: &Path)
 
     let draw_footer = |layer: &PdfLayerReference, page_idx: usize, total_pages: &str| {
         fill_rect(layer, 0.0, 0.0, page_w, footer_band_h, header_fill());
-        if let Some(pay) = &spec.payment {
-            // Bloc « Détails du paiement » dans le bandeau sombre (réf. facture).
-            let pay_top = footer_band_h - 6.5;
-            layer.set_fill_color(band_text_color());
-            layer.use_text(
-                "Détails du paiement",
-                9.0,
-                Mm(margin_l),
-                Mm(pay_top),
-                &font_bold,
-            );
-            let pay_meta_x = 60.4_f32;
-            let mut py = pay_top - 6.5;
-            let rows = [
-                ("Nom du bénéficiaire", pay.beneficiary),
-                ("BIC", pay.bic),
-                ("IBAN", pay.iban),
-                ("Référence", pay.reference),
-            ];
-            for (label, value) in rows {
-                layer.set_fill_color(band_text_color());
-                layer.use_text(ascii_safe(label), 7.5, Mm(margin_l), Mm(py), &font);
-                layer.use_text(ascii_safe(value), 7.5, Mm(pay_meta_x), Mm(py), &font);
-                py -= 4.76;
-            }
-            // Règle claire au-dessus de la ligne d'identité
-            fill_rect(
-                layer,
-                margin_l,
-                18.9,
-                content_r,
-                18.9 + 0.26,
-                rule_color(),
-            );
-        }
         layer.set_fill_color(band_text_color());
         // Identité plus haute que le folio (réf. devis/facture).
         layer.use_text(
@@ -2385,7 +2365,7 @@ fn render_commercial_pdf(doc_title: &str, spec: &CommercialPdf<'_>, path: &Path)
     }
 
     let _ = y;
-    // Pied de page — PAS de bandeau « Détails du paiement » / RIB
+    // Pied de page identité uniquement (pas de bandeau paiement / RIB).
     draw_footer(
         &layer,
         page_idx,
@@ -2447,7 +2427,6 @@ pub fn export_quote_pdf(
         notes: quote.notes.as_deref(),
         legal_mentions: quote.legal_mentions.as_deref(),
         footer_left,
-        payment: None,
     };
     render_commercial_pdf("SasCompta Devis", &spec, path)
 }
@@ -2478,6 +2457,14 @@ pub fn export_invoice_pdf(
     if let Some(due) = &inv.due_date {
         meta.push(("Date d'échéance", format_date_fr(due)));
     }
+    if let Some(po) = inv
+        .purchase_order_number
+        .as_ref()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+    {
+        meta.push(("Numéro de bon de commande", po.to_string()));
+    }
     if let Some(qid) = inv.quote_id {
         if let Ok(q) = get_quote_header(conn, qid) {
             meta.push(("Numéro du devis associé", q.number));
@@ -2502,17 +2489,6 @@ pub fn export_invoice_pdf(
 
     let footer_left = commercial_footer_left(&org);
     let org_email = org.email.as_deref().map(str::trim).filter(|s| !s.is_empty());
-    let iban = org.iban.as_deref().map(str::trim).filter(|s| !s.is_empty());
-    let bic = org.bic.as_deref().map(str::trim).filter(|s| !s.is_empty());
-    let payment = match (iban, bic) {
-        (Some(iban), Some(bic)) => Some(PaymentDetailsPdf {
-            beneficiary: org.name.as_str(),
-            bic,
-            iban,
-            reference: number.as_str(),
-        }),
-        _ => None,
-    };
 
     let spec = CommercialPdf {
         title,
@@ -2528,7 +2504,6 @@ pub fn export_invoice_pdf(
         notes: inv.notes.as_deref(),
         legal_mentions: inv.legal_mentions.as_deref(),
         footer_left,
-        payment,
     };
     render_commercial_pdf("SasCompta Facture", &spec, path)?;
     conn.execute(
@@ -2636,6 +2611,7 @@ pub fn seed_demo_quotes(conn: &Connection) -> DbResult<()> {
         vat_mode: "normale".into(),
         notes: Some("Maintenance annuelle détection".into()),
         legal_mentions: None,
+        purchase_order_number: Some("BC-DEMO-2026".into()),
         lines: vec![InvoiceLineInput {
             label: "Contrat maintenance annuelle".into(),
             description: Some("Visites périodiques + rapport".into()),
@@ -3232,6 +3208,7 @@ mod tests {
                 vat_mode: "normale".into(),
                 notes: None,
                 legal_mentions: None,
+                purchase_order_number: None,
                 lines: vec![InvoiceLineInput {
                     label: "Prestation".into(),
                     description: None,
@@ -3377,6 +3354,7 @@ mod tests {
                 vat_mode: "normale".into(),
                 notes: None,
                 legal_mentions: None,
+                purchase_order_number: None,
                 lines: vec![line.clone()],
             },
         )
@@ -3397,6 +3375,7 @@ mod tests {
                 vat_mode: "normale".into(),
                 notes: None,
                 legal_mentions: None,
+                purchase_order_number: None,
                 lines: vec![line.clone()],
             },
         )
@@ -3502,6 +3481,7 @@ mod tests {
                 vat_mode: "normale".into(),
                 notes: None,
                 legal_mentions: None,
+                purchase_order_number: None,
                 lines: vec![InvoiceLineInput {
                     label: "Suite".into(),
                     description: None,
@@ -3560,6 +3540,7 @@ mod tests {
                 vat_mode: "normale".into(),
                 notes: None,
                 legal_mentions: None,
+                purchase_order_number: None,
                 lines: vec![InvoiceLineInput {
                     label: "Suite".into(),
                     description: None,
