@@ -16,6 +16,7 @@ import {
   emptyDraftLine,
   previewQuotes,
   QUOTE_STATUS_LABELS,
+  quoteSourceHint,
   quoteToDraftLines,
   summarizeQuoteLines,
   type DraftLine,
@@ -645,6 +646,12 @@ export function QuotesScreen({
                     >
                       {q.number}
                     </button>
+                    {quoteSourceHint(q.source) ? (
+                      <span className="muted" title="Devis importé depuis Import docs">
+                        {" "}
+                        · {quoteSourceHint(q.source)}
+                      </span>
+                    ) : null}
                   </td>
                   <td>{q.issueDate}</td>
                   <td>

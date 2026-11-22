@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use thiserror::Error;
 
-pub const SCHEMA_VERSION: i32 = 16;
+pub const SCHEMA_VERSION: i32 = 17;
 pub const DEMO_PASSWORD: &str = "SecretPass1";
 
 #[derive(Debug, Error)]
@@ -213,6 +213,7 @@ pub fn migrate(conn: &Connection) -> DbResult<()> {
     // v14 = empreinte source (idempotence import / dossier surveillé)
     // v15 = facture client importée → fiche Factures (Encaisser) + liens import↔invoice
     // v16 = backfill Factures pour customer_invoice confirmés avant #52 (sans invoice_id)
+    // v17 = devis client importé → fiche Commercial / Devis + liens import↔quote
 
     // Idempotent : à chaque ouverture, recrée les fiches manquantes (no-op si déjà liées).
     documents::backfill_imported_customer_invoices(conn)?;

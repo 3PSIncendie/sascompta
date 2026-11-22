@@ -1,9 +1,10 @@
 /**
- * Import documents — registre extensible (facture fournisseur, client, frais,
- * tickets, relevés → écriture journal postée après revue humaine).
+ * Import documents — registre extensible (facture fournisseur, client, devis,
+ * frais, tickets, relevés → écriture journal postée après revue humaine ;
+ * devis → fiche Commercial sans écriture).
  *
  * Pour ajouter un type : 1) classifier Rust, 2) entrée DOC_TYPE_REGISTRY,
- * 3) template de lignes (buildProposedLines + Rust), 4) `postingSupported`.
+ * 3) template de lignes (buildProposedLines + Rust) si posting, 4) flags.
  */
 
 import {
@@ -17,6 +18,7 @@ import type { EntryLineInput } from "./types";
 export type DocumentDocType =
   | "supplier_invoice"
   | "customer_invoice"
+  | "customer_quote"
   | "expense_receipt"
   | "bank_statement"
   | "ticket"
@@ -60,6 +62,8 @@ export type DocumentExtraction = {
   confirmedEntryId?: number;
   confirmedEcritureNum?: string;
   confirmedInvoiceId?: number;
+  confirmedQuoteId?: number;
+  confirmedQuoteNumber?: string;
 };
 
 export type DocumentImport = {
@@ -75,6 +79,8 @@ export type DocumentImport = {
   entryId: number | null;
   /** Facture client créée à la confirmation (Encaisser). */
   invoiceId?: number | null;
+  /** Devis client créé à la confirmation (Commercial → Devis). */
+  quoteId?: number | null;
   createdAt: string;
   confirmedAt: string | null;
   sourceFingerprint?: string | null;
@@ -105,7 +111,10 @@ export type DocTypeMeta = {
   id: DocumentDocType;
   label: string;
   shortHelp: string;
+  /** Crée une écriture journal à la confirmation. */
   postingSupported: boolean;
+  /** Crée une fiche Commercial → Devis (sans écriture). */
+  createsQuote?: boolean;
   defaultJournal: string;
   /** Compte HT / produit / contrepartie mouvement (relevé). */
   defaultHtAccount: string;
@@ -114,6 +123,11 @@ export type DocTypeMeta = {
   partyRequired: boolean;
   comingSoonHint?: string;
 };
+
+/** Confirmable = écriture journal ou fiche devis commerciale. */
+export function confirmSupported(meta: DocTypeMeta): boolean {
+  return meta.postingSupported || meta.createsQuote === true;
+}
 
 /** Registre typé — extension = ajouter une entrée + template. */
 export const DOC_TYPE_REGISTRY: DocTypeMeta[] = [
@@ -135,6 +149,19 @@ export const DOC_TYPE_REGISTRY: DocTypeMeta[] = [
     shortHelp: "Vente : produit + TVA collectée + client 411 → journal VTE.",
     postingSupported: true,
     defaultJournal: "VTE",
+    defaultHtAccount: "706",
+    defaultCounterpart: "411",
+    partyKind: "customer",
+    partyRequired: true,
+  },
+  {
+    id: "customer_quote",
+    label: "Devis client",
+    shortHelp:
+      "Ancien devis PDF → fiche Commercial / Devis (numéro externe). Aucune écriture comptable.",
+    postingSupported: false,
+    createsQuote: true,
+    defaultJournal: "DEV",
     defaultHtAccount: "706",
     defaultCounterpart: "411",
     partyKind: "customer",
@@ -243,6 +270,8 @@ export function formFromImport(doc: DocumentImport): ReviewFormState {
   const party = x.matchedThirdPartyName || x.supplierName || "";
   const counterpart =
     x.counterpartAccount || meta.defaultCounterpart || "401";
+  const saleDoc =
+    doc.docType === "customer_invoice" || doc.docType === "customer_quote";
   return {
     docType: doc.docType || "supplier_invoice",
     entryDate: x.issueDate || new Date().toISOString().slice(0, 10),
@@ -255,7 +284,7 @@ export function formFromImport(doc: DocumentImport): ReviewFormState {
     vatMode,
     vatCode:
       x.vatCode ||
-      (doc.docType === "customer_invoice"
+      (saleDoc
         ? "T20C"
         : doc.docType === "bank_statement"
           ? "TEX"
@@ -273,10 +302,11 @@ export function formFromImport(doc: DocumentImport): ReviewFormState {
 /** Applique les défauts compte / journal quand l’utilisateur change de type. */
 export function applyDocTypeDefaults(form: ReviewFormState, docType: string): ReviewFormState {
   const meta = docTypeMeta(docType);
+  const saleDoc = docType === "customer_invoice" || docType === "customer_quote";
   const vatMode: GuidedVatMode =
     docType === "bank_statement"
       ? "sans"
-      : docType === "customer_invoice" && form.vatMode === "autoliquidation_sous_traitance"
+      : saleDoc && form.vatMode === "autoliquidation_sous_traitance"
         ? "normale"
         : docType === "supplier_invoice" && form.vatMode === "autoliquidation_chantier"
           ? "normale"
@@ -285,7 +315,7 @@ export function applyDocTypeDefaults(form: ReviewFormState, docType: string): Re
             ? "normale"
             : form.vatMode;
   const vatCode =
-    docType === "customer_invoice"
+    saleDoc
       ? vatMode === "sans" || vatMode === "autoliquidation_chantier"
         ? vatMode === "sans"
           ? "TEX"
@@ -549,6 +579,39 @@ export function previewDocumentImports(): DocumentImport[] {
       status: "pending_review",
       entryId: null,
       createdAt: "2026-03-31T10:00:00Z",
+      confirmedAt: null,
+    },
+    {
+      id: 4,
+      docType: "customer_quote",
+      sourceFileName: "devis-D-2024-0012.pdf",
+      storedPath: "/preview/imports/devis-D-2024-0012.pdf",
+      mimeType: "application/pdf",
+      extractionMethod: "pdf_text",
+      extraction: {
+        issueDate: "2024-06-01",
+        invoiceNumber: "D-2024-0012",
+        supplierName: "ACME SAS",
+        htCents: 120_000,
+        vatCents: 24_000,
+        ttcCents: 144_000,
+        rateBp: 2000,
+        vatMode: "normale",
+        vatCode: "T20C",
+        htAccount: "706",
+        counterpartAccount: "411",
+        journalCode: "DEV",
+        postingSupported: false,
+        notes:
+          "Devis détecté : à la confirmation, une fiche Commercial → Devis sera créée (numéro externe conservé). Aucune écriture comptable.",
+        rawTextPreview:
+          "DEVIS N° D-2024-0012\nProposition commerciale\nTotal TTC 1 440,00",
+      },
+      confidence: 0.8,
+      status: "pending_review",
+      entryId: null,
+      quoteId: null,
+      createdAt: "2024-06-01T10:00:00Z",
       confirmedAt: null,
     },
   ];

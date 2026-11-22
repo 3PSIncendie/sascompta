@@ -2,9 +2,11 @@ import { describe, expect, it } from "vitest";
 import {
   buildCreateInput,
   emptyDraftLine,
+  isImportedQuote,
   legalMentionsFor,
   lineHtCents,
   quoteLineVatCents,
+  quoteSourceHint,
   summarizeQuoteLines,
 } from "./quotes";
 
@@ -74,5 +76,12 @@ describe("billing quotes helpers", () => {
     expect(input.lines[0].htCents).toBe(20_000);
     expect(input.lines[0].description).toBe("Détail A\nDétail B");
     expect(input.notes).toBe("note");
+  });
+
+  it("signale les devis issus de l’import", () => {
+    expect(quoteSourceHint("import")).toBe("Import");
+    expect(quoteSourceHint("native")).toBeNull();
+    expect(isImportedQuote({ source: "import" })).toBe(true);
+    expect(isImportedQuote({ source: "native" })).toBe(false);
   });
 });

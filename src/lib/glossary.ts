@@ -217,13 +217,13 @@ export const HELP: Record<string, HelpTopic> = {
   importDocType: {
     term: "Type de document",
     plain:
-      "Ce que SasCompta croit reconnaître : facture fournisseur (ACH), facture client (VTE), note de frais / reçu (ACH ou OD), ticket de caisse (OD), relevé bancaire (BQ). Vous pouvez corriger le type avant de confirmer l’écriture.",
-    example: "PDF « FA-2026-0042 » → Facture fournisseur → journal ACH",
+      "Ce que SasCompta croit reconnaître : facture fournisseur (ACH), facture client (VTE), devis client (Commercial), note de frais / reçu (ACH ou OD), ticket de caisse (OD), relevé bancaire (BQ). Vous pouvez corriger le type avant de confirmer.",
+    example: "PDF « D-2024-0012 » → Devis client → Commercial / Devis",
   },
   importRevue: {
     term: "Revue avant écriture",
     plain:
-      "Étape obligatoire : vous vérifiez type, date, montants, tiers et lignes proposées. Rien n’est comptabilisé tant que vous n’avez pas confirmé. À la confirmation l’écriture est postée (Grand livre / TVA / FEC) ; le fichier reste en pièce jointe. Une facture client crée aussi une fiche dans Factures (numéro externe conservé) pour Encaisser.",
+      "Étape obligatoire : vous vérifiez type, date, montants, tiers et lignes proposées. Rien n’est comptabilisé tant que vous n’avez pas confirmé. À la confirmation l’écriture est postée (Grand livre / TVA / FEC) ; le fichier reste en pièce jointe. Une facture client crée aussi une fiche dans Factures (numéro externe conservé) pour Encaisser. Un devis crée une fiche dans Commercial → Devis (sans écriture).",
   },
   compagnonMobile: {
     term: "Compagnon mobile",
