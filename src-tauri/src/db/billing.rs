@@ -2121,9 +2121,9 @@ fn stroke_rect(
     thickness: f32,
     color: Color,
 ) {
-    fill_rect(layer, x0, y0, x1, y0 + thickness, color);
-    fill_rect(layer, x0, y1 - thickness, x1, y1, color);
-    fill_rect(layer, x0, y0, x0 + thickness, y1, color);
+    fill_rect(layer, x0, y0, x1, y0 + thickness, color.clone());
+    fill_rect(layer, x0, y1 - thickness, x1, y1, color.clone());
+    fill_rect(layer, x0, y0, x0 + thickness, y1, color.clone());
     fill_rect(layer, x1 - thickness, y0, x1, y1, color);
 }
 
