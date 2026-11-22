@@ -86,8 +86,8 @@ export const HELP: Record<string, HelpTopic> = {
   piece: {
     term: "Référence pièce",
     plain:
-      "Le numéro du document justificatif (facture, relevé). Utile pour retrouver la preuve en cas de contrôle.",
-    example: "Ex. : FA-2026-0042",
+      "Le numéro du document justificatif (facture, relevé). Utile pour retrouver la preuve en cas de contrôle. À l’import, le champ est optionnel : vide → numéro IMP-… ; à l’encaissement, la réf. banque / n° de virement est aussi optionnelle.",
+    example: "Ex. : FA-2026-0042 — ou laisser vide si inconnu",
   },
   libelle: {
     term: "Libellé",

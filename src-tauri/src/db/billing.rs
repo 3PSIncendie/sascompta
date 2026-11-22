@@ -3596,11 +3596,24 @@ pub fn record_payment(conn: &Connection, input: &CreatePaymentInput) -> DbResult
     } else {
         input.method.trim().to_string()
     };
-    let piece = inv
+    // Numéro de facture (commercial ou externe import) — toujours connu.
+    let invoice_piece = inv
         .number
         .clone()
         .unwrap_or_else(|| format!("FAC-{}", inv.id));
-    let label = format!("Encaissement {piece}");
+    // Numéro de virement / réf. banque : optionnel. S’il est fourni, il devient
+    // la pièce BQ (comme VIR-01/VIR-02 du seed) pour apparaître au livre journal ;
+    // sinon on retombe sur le n° de facture — Encaisser ne bloque jamais sans VIR.
+    let bank_ref = input
+        .bank_ref
+        .as_ref()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
+    let piece = bank_ref
+        .clone()
+        .unwrap_or_else(|| invoice_piece.clone());
+    let label = format!("Encaissement {invoice_piece}");
     let lines = vec![
         EntryLineInput {
             account_number: "512".into(),
@@ -3654,7 +3667,7 @@ pub fn record_payment(conn: &Connection, input: &CreatePaymentInput) -> DbResult
             input.paid_on,
             input.amount_cents,
             method,
-            input.bank_ref,
+            bank_ref,
             entry.id,
         ],
     )?;
@@ -4064,9 +4077,12 @@ mod tests {
             "encaissement doit poster la BQ pour aligner paid et Grand livre"
         );
         assert!(bq.ecriture_num.as_deref().unwrap_or("").starts_with("BQ-"));
+        // N° de virement fourni → pièce BQ visible au livre journal.
+        assert_eq!(bq.piece_ref, "VIR-1");
+        assert_eq!(pay.bank_ref.as_deref(), Some("VIR-1"));
 
         let rest = get_invoice(&conn, issued.id).unwrap();
-        let _ = record_payment(
+        let pay2 = record_payment(
             &conn,
             &CreatePaymentInput {
                 invoice_id: issued.id,
@@ -4077,6 +4093,10 @@ mod tests {
             },
         )
         .unwrap();
+        assert!(pay2.bank_ref.is_none());
+        // Sans n° de virement : pièce BQ = n° facture (pas de blocage).
+        let bq2 = ledger::get_entry(&conn, pay2.entry_id.unwrap()).unwrap();
+        assert_eq!(bq2.piece_ref, issued.number.as_ref().unwrap().as_str());
         assert_eq!(get_invoice(&conn, issued.id).unwrap().status, "paid");
 
         // Relances : facture soldée → pas de nouvelle ; créer une autre échue

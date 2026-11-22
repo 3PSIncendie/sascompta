@@ -12,6 +12,14 @@ export function methodLabel(method: string): string {
   return PAYMENT_METHODS.find((m) => m.id === method)?.label ?? method;
 }
 
+/** Réf. banque / n° de virement — toujours optionnelle (vide → null). */
+export function normalizeBankRef(
+  raw: string | null | undefined,
+): string | null {
+  const t = (raw ?? "").trim();
+  return t.length > 0 ? t : null;
+}
+
 export function reminderLevelLabel(level: number): string {
   return `J+${level}`;
 }

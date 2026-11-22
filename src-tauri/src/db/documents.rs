@@ -3711,6 +3711,9 @@ Total TTC                 120,00
         let bq = ledger::get_entry(&conn, bq_id).unwrap();
         assert_eq!(bq.status, "posted");
         assert_eq!(bq.journal_code, "BQ");
+        // Réf. virement fournie → pièce BQ = n° de virement (visible livre journal).
+        assert_eq!(bq.piece_ref, "VIR-IMP");
+        assert_eq!(pay.bank_ref.as_deref(), Some("VIR-IMP"));
         let partial = billing::get_invoice(&conn, inv.id).unwrap();
         assert_eq!(partial.status, "partially_paid");
         assert_eq!(partial.paid_cents, 5_000);
@@ -3724,6 +3727,23 @@ Total TTC                 120,00
             )
             .unwrap();
         assert_eq!(vte_lettre, expected_lettre);
+
+        // Suite sans n° de virement : Encaisser reste possible (réf. optionnelle).
+        let pay2 = billing::record_payment(
+            &conn,
+            &crate::models::CreatePaymentInput {
+                invoice_id: inv.id,
+                paid_on: "2026-03-21".into(),
+                amount_cents: 7_000,
+                method: "virement".into(),
+                bank_ref: None,
+            },
+        )
+        .unwrap();
+        assert!(pay2.bank_ref.is_none());
+        let bq2 = ledger::get_entry(&conn, pay2.entry_id.expect("BQ2")).unwrap();
+        assert_eq!(bq2.piece_ref, "FAC-1");
+        assert_eq!(billing::get_invoice(&conn, inv.id).unwrap().status, "paid");
     }
 
     #[test]
