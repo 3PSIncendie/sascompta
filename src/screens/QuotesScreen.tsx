@@ -13,12 +13,16 @@ import {
 import {
   BILLING_VAT_MODE_OPTIONS,
   buildCreateInput,
+  defaultBillingVatModeForOrg,
   emptyDraftLine,
+  emptyDraftLineForVatMode,
   previewQuotes,
   QUOTE_STATUS_LABELS,
   quoteSourceHint,
   quoteToDraftLines,
   summarizeQuoteLines,
+  syncDraftLinesToVatMode,
+  vatCodesForBillingMode,
   type DraftLine,
 } from "../modules/billing/quotes";
 import { previewNumber } from "../modules/billing/sequences";
@@ -89,14 +93,7 @@ export function QuotesScreen({
   );
 
   const collectedCodes = useMemo(
-    () =>
-      vatCodes.filter((c) =>
-        vatMode === "sans"
-          ? c.direction === "exempt"
-          : vatMode === "autoliquidation_chantier"
-            ? c.direction === "reverse"
-            : c.direction === "collected",
-      ),
+    () => vatCodesForBillingMode(vatMode, vatCodes),
     [vatCodes, vatMode],
   );
 
@@ -174,6 +171,19 @@ export function QuotesScreen({
     void refresh();
   }, []);
 
+  /** Quand le catalogue TVA arrive, aligne les codes hors régime (création précoce). */
+  useEffect(() => {
+    if (mode !== "edit" || !vatCodes.length) return;
+    setLines((prev) => {
+      const next = syncDraftLinesToVatMode(prev, vatMode, vatCodes);
+      const unchanged = next.every(
+        (l, i) =>
+          l.vatCode === prev[i]?.vatCode && l.vatRateBp === prev[i]?.vatRateBp,
+      );
+      return unchanged ? prev : next;
+    });
+  }, [vatCodes, mode, vatMode]);
+
   /** Mode `?quoteEdit=1` : préremplit client + ligne démo pour l’aperçu live. */
   useEffect(() => {
     if (!PREVIEW_EDIT || customers.length === 0) return;
@@ -194,29 +204,41 @@ export function QuotesScreen({
   }, [customers, thirdPartyId]);
 
   function startCreate() {
+    const mode = defaultBillingVatModeForOrg(organization.vatRegime);
     setEditingId(null);
     setThirdPartyId(customers[0]?.id ?? 0);
     setIssueDate(new Date().toISOString().slice(0, 10));
     setValidUntil("");
-    setVatMode("normale");
+    setVatMode(mode);
     setNotes("");
-    setLines([emptyDraftLine()]);
+    setLines([emptyDraftLineForVatMode(mode, vatCodes)]);
     setMode("edit");
     setStatus(null);
     setError(null);
   }
 
   function startEdit(q: Quote) {
+    const mode = (q.vatMode as BillingVatMode) || "normale";
+    const draft = quoteToDraftLines(q);
     setEditingId(q.id);
     setThirdPartyId(q.thirdPartyId);
     setIssueDate(q.issueDate);
     setValidUntil(q.validUntil ?? "");
-    setVatMode((q.vatMode as BillingVatMode) || "normale");
+    setVatMode(mode);
     setNotes(q.notes ?? "");
-    setLines(quoteToDraftLines(q).length ? quoteToDraftLines(q) : [emptyDraftLine()]);
+    setLines(
+      draft.length
+        ? syncDraftLinesToVatMode(draft, mode, vatCodes)
+        : [emptyDraftLineForVatMode(mode, vatCodes)],
+    );
     setMode("edit");
     setStatus(null);
     setError(null);
+  }
+
+  function onVatModeChange(mode: BillingVatMode) {
+    setVatMode(mode);
+    setLines((prev) => syncDraftLinesToVatMode(prev, mode, vatCodes));
   }
 
   async function onSave(e: React.FormEvent) {
@@ -487,26 +509,9 @@ export function QuotesScreen({
                 Régime TVA
                 <select
                   value={vatMode}
-                  onChange={(e) => {
-                    const mode = e.target.value as BillingVatMode;
-                    setVatMode(mode);
-                    const first = vatCodes.find((c) =>
-                      mode === "sans"
-                        ? c.direction === "exempt"
-                        : mode === "autoliquidation_chantier"
-                          ? c.direction === "reverse"
-                          : c.direction === "collected",
-                    );
-                    if (first) {
-                      setLines((prev) =>
-                        prev.map((l) => ({
-                          ...l,
-                          vatCode: first.code,
-                          vatRateBp: first.rateBp,
-                        })),
-                      );
-                    }
-                  }}
+                  onChange={(e) =>
+                    onVatModeChange(e.target.value as BillingVatMode)
+                  }
                 >
                   {BILLING_VAT_MODE_OPTIONS.map((o) => (
                     <option key={o.id} value={o.id}>
