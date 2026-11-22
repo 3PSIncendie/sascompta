@@ -11,12 +11,37 @@ use std::fs::File;
 use std::io::{BufWriter, Cursor};
 use std::path::Path;
 
-/// Logo 3PSI embarqué (PNG) — rendu PDF offline (Tauri desktop).
+/// Logo 3PSI embarqué (PNG RGBA) — rendu PDF offline (Tauri desktop).
+/// L’alpha est aplati sur blanc avant embedding : printpdf 0.7 sérialise un SoftMask
+/// inline invalide pour Adobe Reader (« erreur 135 » / page blanche).
 const COMMERCIAL_LOGO_PNG: &[u8] = include_bytes!("../../../src/assets/brand/3psi-logo.png");
 /// Largeur/hauteur logo sur A4 — calé sur la référence 3PSI (~94,5 pt ≈ 33,34 mm).
 const COMMERCIAL_LOGO_MM: f32 = 33.34;
 /// Hauteur page A4 (mm) — origine PDF en bas à gauche.
 const PAGE_H_MM: f32 = 297.0;
+
+/// Décode le PNG logo et aplatit l’alpha sur fond blanc → DeviceRGB sans SoftMask.
+fn commercial_logo_image() -> Option<Image> {
+    let decoder =
+        image_crate::codecs::png::PngDecoder::new(Cursor::new(COMMERCIAL_LOGO_PNG)).ok()?;
+    let dyn_img = image_crate::DynamicImage::from_decoder(decoder).ok()?;
+    let rgba = dyn_img.to_rgba8();
+    let (w, h) = (rgba.width(), rgba.height());
+    let mut rgb = image_crate::RgbImage::new(w, h);
+    for (x, y, px) in rgba.enumerate_pixels() {
+        let a = f32::from(px[3]) / 255.0;
+        let blend = |c: u8| ((f32::from(c) * a) + 255.0 * (1.0 - a)).round() as u8;
+        rgb.put_pixel(
+            x,
+            y,
+            image_crate::Rgb([blend(px[0]), blend(px[1]), blend(px[2])]),
+        );
+    }
+    let image = Image::from_dynamic_image(&image_crate::DynamicImage::ImageRgb8(rgb));
+    // Ceinture : aucune SoftMask ne doit partir dans le PDF commercial.
+    debug_assert!(image.image.smask.is_none());
+    Some(image)
+}
 
 pub const SCHEMA_BILLING_VERSION: i32 = 12;
 
@@ -2209,12 +2234,7 @@ fn render_commercial_pdf(doc_title: &str, spec: &CommercialPdf<'_>, path: &Path)
     let mut y = 273.0_f32;
 
     let draw_logo = |layer: &PdfLayerReference, title_baseline: f32| {
-        let Ok(decoder) =
-            image_crate::codecs::png::PngDecoder::new(Cursor::new(COMMERCIAL_LOGO_PNG))
-        else {
-            return;
-        };
-        let Ok(image) = Image::try_from(decoder) else {
+        let Some(image) = commercial_logo_image() else {
             return;
         };
         let px_w = image.image.width.0.max(1) as f32;
@@ -2604,7 +2624,37 @@ fn render_commercial_pdf(doc_title: &str, spec: &CommercialPdf<'_>, path: &Path)
     }
     doc.save(&mut BufWriter::new(File::create(path)?))
         .map_err(|e| format!("PDF save: {e}"))?;
+    // printpdf 0.7 pose `/SMask null` + `/BBox` sur chaque Image XObject (invalide pour
+    // Subtype/Image). Adobe Reader peut alors afficher une page blanche + erreur 135.
+    sanitize_printpdf_image_dict(path)?;
     Ok(())
+}
+
+/// Neutralise `/SMask null` + `/BBox` émis par printpdf 0.7 sur les Image XObject.
+/// Remplacement à longueur égale (espaces) pour ne pas invalider la table xref.
+fn sanitize_printpdf_image_dict(path: &Path) -> DbResult<()> {
+    let mut bytes = std::fs::read(path).map_err(|e| format!("PDF read: {e}"))?;
+    // Artefact exact produit par `From<ImageXObject> for lopdf::Stream` (printpdf 0.7).
+    const ARTIFACT: &[u8] = b"/SMask null/BBox[1 0 0 1 0 0]";
+    let blank = vec![b' '; ARTIFACT.len()];
+    let mut changed = false;
+    let mut start = 0usize;
+    while let Some(rel) = find_bytes(&bytes[start..], ARTIFACT) {
+        let pos = start + rel;
+        bytes[pos..pos + ARTIFACT.len()].copy_from_slice(&blank);
+        changed = true;
+        start = pos + ARTIFACT.len();
+    }
+    if changed {
+        std::fs::write(path, &bytes).map_err(|e| format!("PDF rewrite: {e}"))?;
+    }
+    Ok(())
+}
+
+fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
 }
 
 pub fn export_quote_pdf(
@@ -3187,6 +3237,35 @@ mod tests {
     use crate::db::{create_demo_workspace, open_connection};
     use tempfile::tempdir;
 
+    /// Adobe Reader « erreur 135 » = SoftMask / BBox Image XObject mal formés (printpdf).
+    fn assert_commercial_pdf_adobe_safe(path: &Path) {
+        let bytes = std::fs::read(path).expect("read pdf");
+        assert!(
+            !contains_bytes(&bytes, b"/SMask"),
+            "PDF {} must not contain /SMask (Adobe error 135 / blank page)",
+            path.display()
+        );
+        assert!(
+            !contains_bytes(&bytes, b"/BBox["),
+            "PDF {} must not put /BBox on Image XObject",
+            path.display()
+        );
+        assert!(
+            contains_bytes(&bytes, b"/ColorSpace/DeviceRGB"),
+            "PDF {} should embed logo as DeviceRGB",
+            path.display()
+        );
+        let logo = commercial_logo_image().expect("logo loads");
+        assert!(
+            logo.image.smask.is_none(),
+            "commercial logo must be DeviceRGB without SoftMask"
+        );
+    }
+
+    fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
+        find_bytes(haystack, needle).is_some()
+    }
+
     #[test]
     fn line_ht_and_vat() {
         assert_eq!(compute_line_ht(1000, 2500), 2500);
@@ -3248,6 +3327,7 @@ mod tests {
         export_quote_pdf(&conn, q.id, &pdf).unwrap();
         assert!(pdf.exists());
         assert!(pdf.metadata().unwrap().len() > 100);
+        assert_commercial_pdf_adobe_safe(&pdf);
         // Helpers calés sur la référence 3PSI
         assert_eq!(money_fr(350_000), "3 500,00 €");
         assert_eq!(spaced_siren("933627960"), "933 627 960");
@@ -3342,6 +3422,7 @@ mod tests {
         let pdf = dir.path().join("facture.pdf");
         export_invoice_pdf(&conn, issued.id, &pdf).unwrap();
         assert!(pdf.exists());
+        assert_commercial_pdf_adobe_safe(&pdf);
 
         // Pas de double post silencieux
         ledger::post_entry(&conn, entry_id).unwrap();
