@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { FieldHelp, LabelWithHelp } from "../components/FieldHelp";
 import { api } from "../lib/api";
@@ -398,7 +398,14 @@ export function WelcomeScreen({ onOpened }: Props) {
               </div>
             </div>
           ) : (
-            <div className="form-grid">
+            <form
+              className="form-grid"
+              onSubmit={(e: FormEvent) => {
+                e.preventDefault();
+                if (busy || !selectedPath || !openPassword) return;
+                void handleOpenSelected();
+              }}
+            >
               {knownLoaded && known.length === 0 && !selectedIsImported ? (
                 <p className="hint welcome-live-hint">
                   Aucune société mémorisée pour l’instant. Créez-en une, lancez
@@ -442,10 +449,9 @@ export function WelcomeScreen({ onOpened }: Props) {
               )}
               <div className="btn-row welcome-open-actions">
                 <button
-                  type="button"
+                  type="submit"
                   className="primary"
                   disabled={busy || !selectedPath || !openPassword}
-                  onClick={() => void handleOpenSelected()}
                 >
                   Ouvrir
                 </button>
@@ -458,7 +464,7 @@ export function WelcomeScreen({ onOpened }: Props) {
                   Importer un fichier…
                 </button>
               </div>
-            </div>
+            </form>
           )}
 
           {error && <div className="error">{error}</div>}
