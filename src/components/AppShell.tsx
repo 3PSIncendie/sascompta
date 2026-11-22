@@ -13,6 +13,7 @@ const NAV_GROUPS: NavGroup[] = [
     id: "societe",
     label: "Société",
     items: [
+      { id: "accueil", label: "Accueil" },
       { id: "guide", label: "Parcours guidé" },
       { id: "ma-sas", label: "Ma SAS" },
     ],

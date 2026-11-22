@@ -3,6 +3,7 @@ import { AppShell } from "./components/AppShell";
 import { DeadlineReminders } from "./components/DeadlineReminders";
 import { UpdateChecker } from "./components/UpdateChecker";
 import { WelcomeScreen } from "./screens/WelcomeScreen";
+import { HomeScreen } from "./screens/HomeScreen";
 import { GuideScreen } from "./screens/GuideScreen";
 import { MaSasScreen } from "./screens/MaSasScreen";
 import { ChartScreen } from "./screens/ChartScreen";
@@ -23,10 +24,10 @@ import { EmployeesScreen } from "./screens/EmployeesScreen";
 import { LeaveScreen } from "./screens/LeaveScreen";
 import { PayrollScreen } from "./screens/PayrollScreen";
 import { api } from "./lib/api";
-import { loadGuideProgress } from "./lib/guideProgress";
 import type { NavId, WorkspaceInfo } from "./lib/types";
 
 const PREVIEW_NAV_IDS: NavId[] = [
+  "accueil",
   "guide",
   "ma-sas",
   "plan",
@@ -81,10 +82,10 @@ function previewWorkspace(): WorkspaceInfo | null {
 }
 
 function previewNav(): NavId {
-  if (typeof window === "undefined") return "guide";
+  if (typeof window === "undefined") return "accueil";
   const raw = new URLSearchParams(window.location.search).get("preview");
   if (raw && PREVIEW_NAV_IDS.includes(raw as NavId)) return raw as NavId;
-  return "guide";
+  return "accueil";
 }
 
 export default function App() {
@@ -92,13 +93,13 @@ export default function App() {
     () => previewWorkspace(),
   );
   const [nav, setNav] = useState<NavId>(() =>
-    previewWorkspace() ? previewNav() : "guide",
+    previewWorkspace() ? previewNav() : "accueil",
   );
 
   async function handleClose() {
     if (previewWorkspace()) {
       setWorkspace(null);
-      setNav("guide");
+      setNav("accueil");
       return;
     }
     try {
@@ -107,13 +108,12 @@ export default function App() {
       /* ignore */
     }
     setWorkspace(null);
-    setNav("guide");
+    setNav("accueil");
   }
 
   function handleOpened(info: WorkspaceInfo) {
     setWorkspace(info);
-    const progress = loadGuideProgress(info.path);
-    setNav(progress.completed.length >= 5 ? "ma-sas" : "guide");
+    setNav("accueil");
   }
 
   if (!workspace) {
@@ -134,6 +134,9 @@ export default function App() {
     >
       <UpdateChecker checkOnStartup variant="banner" />
       {nav !== "guide" && <DeadlineReminders workspace={workspace} variant="banner" />}
+      {nav === "accueil" && (
+        <HomeScreen workspace={workspace} onNavigate={setNav} />
+      )}
       {nav === "guide" && (
         <GuideScreen workspace={workspace} onNavigate={setNav} />
       )}
