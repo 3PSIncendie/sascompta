@@ -646,7 +646,7 @@ export function MaSasScreen({
                   />
                 </label>
                 <label>
-                  BIC (paiement facture)
+                  BIC
                   <input
                     value={bic}
                     onChange={(e) => setBic(e.target.value)}
@@ -655,7 +655,7 @@ export function MaSasScreen({
                   />
                 </label>
                 <label style={{ gridColumn: "1 / -1" }}>
-                  IBAN (bandeau « Détails du paiement »)
+                  IBAN
                   <input
                     value={iban}
                     onChange={(e) => setIban(e.target.value)}

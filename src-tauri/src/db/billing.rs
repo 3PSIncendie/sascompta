@@ -2030,7 +2030,7 @@ fn render_commercial_pdf(doc_title: &str, spec: &CommercialPdf<'_>, path: &Path)
     let mid_x = 108.74_f32;
     let totals_label_x = 123.3_f32;
     let line_leading = 4.76_f32;
-    // Pied identité (sans bandeau « Détails du paiement »)
+    // Pied identité seul — pas de bandeau « Détails du paiement ».
     let footer_band_h = 23.28_f32;
 
     let mut layer = doc.get_page(page1).get_layer(layer1);

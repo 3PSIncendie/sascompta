@@ -108,7 +108,7 @@ describe("documentPreview helpers", () => {
     expect(model.org.email).toBe("contact@demo-sas.fr");
   });
 
-  it("injecte les mentions légales BTP", () => {
+  it("injecte les mentions légales BTP (sans bandeau paiement)", () => {
     const line = emptyDraftLine(2000, "T20R");
     line.label = "Travaux";
     line.unitPriceEuros = "100";
@@ -122,11 +122,12 @@ describe("documentPreview helpers", () => {
       org,
       client: null,
       vatMode: "autoliquidation_chantier",
-      notes: "",
+      notes: "Paiement à 30 jours",
       lines: [line],
     });
     expect(model.client.name).toMatch(/choisir/);
     expect(model.legalMentions).toMatch(/283/);
     expect(model.vatLabel).toMatch(/0,00/);
+    expect(model.notes).toBe("Paiement à 30 jours");
   });
 });
