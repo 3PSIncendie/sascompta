@@ -55,6 +55,8 @@ export type DocumentExtraction = {
   journalCode?: string | null;
   bankDirection?: BankDirection | string | null;
   reverseCharge?: boolean;
+  /** Indice OCR/PDF : le document ressemble à un avoir (sélection manuelle en revue). */
+  creditNoteHint?: boolean;
   postingSupported?: boolean;
   notes?: string;
   confirmedDocType?: string;
@@ -67,6 +69,7 @@ export type DocumentExtraction = {
   confirmedQuoteNumber?: string;
   confirmedOrderId?: number;
   confirmedOrderNumber?: string;
+  confirmedIsCreditNote?: boolean;
 };
 
 export type DocumentImport = {
@@ -110,6 +113,8 @@ export type ConfirmDocumentImportInput = {
   createSupplierName?: string | null;
   createSupplierCode?: string | null;
   createSupplierSiret?: string | null;
+  /** Avoir / credit note — inverse les lignes ACH/VTE. */
+  isCreditNote?: boolean;
 };
 
 export type DocTypeMeta = {
@@ -276,13 +281,32 @@ export type ReviewFormState = {
   createSupplierName: string;
   createSupplierCode: string;
   createSupplierSiret: string;
+  /** Avoir (note de crédit) — factures fournisseur / client uniquement. */
+  isAvoir: boolean;
 };
 
-function defaultLabel(docType: string, piece: string, party: string): string {
+/** Types sur lesquels le bascule Avoir a un sens comptable. */
+export function creditNoteApplicable(docType: string): boolean {
+  return docType === "supplier_invoice" || docType === "customer_invoice";
+}
+
+function defaultLabel(
+  docType: string,
+  piece: string,
+  party: string,
+  isAvoir = false,
+): string {
   const meta = docTypeMeta(docType);
-  if (piece) return `Import ${meta.label.toLowerCase()} ${piece}`;
-  if (party) return `Import ${meta.label.toLowerCase()} ${party}`;
-  return `Import ${meta.label.toLowerCase()}`;
+  const kind = isAvoir
+    ? docType === "customer_invoice"
+      ? "avoir client"
+      : docType === "supplier_invoice"
+        ? "avoir fournisseur"
+        : "avoir"
+    : meta.label.toLowerCase();
+  if (piece) return `Import ${kind} ${piece}`;
+  if (party) return `Import ${kind} ${party}`;
+  return `Import ${kind}`;
 }
 
 export function formFromImport(doc: DocumentImport): ReviewFormState {
@@ -298,11 +322,19 @@ export function formFromImport(doc: DocumentImport): ReviewFormState {
     doc.docType === "customer_invoice" ||
     doc.docType === "customer_quote" ||
     doc.docType === "customer_order";
+  const applicable = creditNoteApplicable(doc.docType);
+  // Sélection manuelle obligatoire : l’indice PDF (`creditNoteHint`) n’auto-coche pas.
+  // Après confirmation, on restaure l’état confirmé pour l’affichage.
+  const isAvoir =
+    applicable &&
+    (doc.status === "confirmed"
+      ? x.confirmedIsCreditNote === true
+      : false);
   return {
     docType: doc.docType || "supplier_invoice",
     entryDate: x.issueDate || new Date().toISOString().slice(0, 10),
     pieceRef: x.invoiceNumber || "",
-    label: defaultLabel(doc.docType, x.invoiceNumber || "", party),
+    label: defaultLabel(doc.docType, x.invoiceNumber || "", party, isAvoir),
     journalCode: x.journalCode || meta.defaultJournal || "ACH",
     htStr: centsToEuroInput(ht),
     vatStr: centsToEuroInput(vat),
@@ -322,6 +354,7 @@ export function formFromImport(doc: DocumentImport): ReviewFormState {
     createSupplierName: x.matchedThirdPartyId ? "" : x.supplierName || "",
     createSupplierCode: "",
     createSupplierSiret: x.supplierSiret || "",
+    isAvoir,
   };
 }
 
@@ -357,6 +390,7 @@ export function applyDocTypeDefaults(form: ReviewFormState, docType: string): Re
           : vatMode === "sans"
             ? "TEX"
             : "T20D";
+  const isAvoir = creditNoteApplicable(docType) ? form.isAvoir : false;
   return {
     ...form,
     docType,
@@ -369,7 +403,16 @@ export function applyDocTypeDefaults(form: ReviewFormState, docType: string): Re
     vatMode,
     vatCode,
     bankDirection: form.bankDirection || "debit",
+    isAvoir,
   };
+}
+
+function reverseProposedLines(lines: EntryLineInput[]): EntryLineInput[] {
+  return lines.map((l) => ({
+    ...l,
+    debitCents: l.creditCents,
+    creditCents: l.debitCents,
+  }));
 }
 
 function parseHtCents(htStr: string): number {
@@ -385,8 +428,11 @@ export function buildProposedLines(form: ReviewFormState): EntryLineInput[] {
   const htCents = parseHtCents(form.htStr);
   if (!Number.isFinite(htCents) || htCents <= 0) return [];
 
+  const asAvoir =
+    form.isAvoir && creditNoteApplicable(form.docType);
+
   if (form.docType === "supplier_invoice") {
-    return buildGuidedLines({
+    const lines = buildGuidedLines({
       kind: "achat",
       htAccount: form.htAccount || "606",
       htCents,
@@ -396,12 +442,13 @@ export function buildProposedLines(form: ReviewFormState): EntryLineInput[] {
       counterpartAccount: "401",
       thirdPartyId: form.thirdPartyId,
     }).lines;
+    return asAvoir ? reverseProposedLines(lines) : lines;
   }
 
   if (form.docType === "customer_invoice") {
     const mode =
       form.vatMode === "autoliquidation_chantier" ? form.vatMode : form.vatMode;
-    return buildGuidedLines({
+    const lines = buildGuidedLines({
       kind: "vente",
       htAccount: form.htAccount || "706",
       htCents,
@@ -414,6 +461,7 @@ export function buildProposedLines(form: ReviewFormState): EntryLineInput[] {
       counterpartAccount: "411",
       thirdPartyId: form.thirdPartyId,
     }).lines;
+    return asAvoir ? reverseProposedLines(lines) : lines;
   }
 
   if (form.docType === "expense_receipt" || form.docType === "ticket") {
@@ -514,6 +562,8 @@ export function toConfirmInput(
     createSupplierSiret: form.thirdPartyId
       ? null
       : form.createSupplierSiret || null,
+    isCreditNote:
+      form.isAvoir && creditNoteApplicable(form.docType) ? true : false,
   };
 }
 

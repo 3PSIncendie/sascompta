@@ -1166,4 +1166,7 @@ pub struct ConfirmDocumentImportInput {
     pub create_supplier_code: Option<String>,
     #[serde(default)]
     pub create_supplier_siret: Option<String>,
+    /// Avoir / credit note — inverse le sens des lignes ACH/VTE (sélection manuelle en revue).
+    #[serde(default)]
+    pub is_credit_note: bool,
 }

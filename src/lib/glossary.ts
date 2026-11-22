@@ -217,8 +217,14 @@ export const HELP: Record<string, HelpTopic> = {
   importDocType: {
     term: "Type de document",
     plain:
-      "Ce que SasCompta croit reconnaître : facture fournisseur (ACH), facture client (VTE), devis client (Commercial), commande client (Commercial), note de frais / reçu (ACH ou OD), ticket de caisse (OD), relevé bancaire (BQ). Vous pouvez corriger le type avant de confirmer.",
+      "Ce que SasCompta croit reconnaître : facture fournisseur (ACH), facture client (VTE), devis client (Commercial), commande client (Commercial), note de frais / reçu (ACH ou OD), ticket de caisse (OD), relevé bancaire (BQ). Vous pouvez corriger le type avant de confirmer. Pour un avoir, gardez le type facture et cochez « Avoir ».",
     example: "PDF « BC-2024-0088 » → Commande client → Commercial / Commandes",
+  },
+  importAvoir: {
+    term: "Avoir",
+    plain:
+      "Note de crédit (facture d’avoir) : inverse le sens de l’écriture (ACH ou VTE). Montants saisis en positif ; SasCompta inverse débit/crédit à la confirmation. Pour une facture client, crée une fiche Factures de type avoir. Le lien vers la facture d’origine n’est pas encore proposé dans Import.",
+    example: "PDF « AVOIR N° AV-42 » → Facture client + case Avoir cochée → VTE inversée",
   },
   importRevue: {
     term: "Revue avant écriture",

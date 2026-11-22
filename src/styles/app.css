@@ -2008,6 +2008,34 @@ label {
   font-size: 0.9rem;
 }
 
+.document-import-review .hint-banner.warn {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+.document-import-review .import-avoir-field {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  padding: 0.55rem 0.7rem;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--brand) 8%, transparent);
+}
+
+.document-import-review .import-avoir-field .field.checkbox {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0;
+}
+
+.document-import-review .import-avoir-field input[type="checkbox"] {
+  width: auto;
+  max-width: none;
+}
+
 .document-import-review .form-grid {
   display: grid;
   /* 2 colonnes stables : auto-fit + inputs sans width:100% provoquaient des chevauchements. */

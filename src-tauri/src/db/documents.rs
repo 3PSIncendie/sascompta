@@ -3,6 +3,8 @@
 //! Types pris en charge : facture fournisseur (ACH), facture client (VTE),
 //! devis client (Commercial, sans écriture), commande client (Commercial, sans écriture),
 //! note de frais / reçu (ACH ou OD), ticket de caisse (OD/ACH), relevé bancaire (BQ).
+//! Avoir (note de crédit) : case manuelle en revue sur facture ACH/VTE → inverse
+//! débit/crédit ; facture client → fiche Factures `kind = credit_note`.
 //! Flux commun : analyse locale → revue → confirmation → `create_draft` + pièce
 //! jointe → `post_entry` (écriture immédiatement visible au Grand livre / TVA / FEC).
 //! Facture client : crée aussi une fiche Factures émise (numéro externe) pour Encaisser.
@@ -536,6 +538,17 @@ fn backfill_one_imported_customer_invoice(conn: &Connection, import_id: i64) -> 
     };
 
     let tx = conn.unchecked_transaction()?;
+    let is_credit = doc
+        .extraction
+        .get("confirmedIsCreditNote")
+        .and_then(|v| v.as_bool())
+        .unwrap_or_else(|| {
+            // Heuristique : 411 crédité = avoir (sens inverse d’une vente).
+            entry
+                .lines
+                .iter()
+                .any(|l| l.account_number.starts_with("411") && l.credit_cents > 0)
+        });
     let inv = billing::create_imported_customer_invoice(
         &tx,
         import_id,
@@ -551,6 +564,7 @@ fn backfill_one_imported_customer_invoice(conn: &Connection, import_id: i64) -> 
         &vat_code,
         &ht_account,
         pdf_path,
+        is_credit,
     )?;
     link_import_to_invoice(&tx, &doc, inv.id)?;
     tx.commit()?;
@@ -1144,6 +1158,38 @@ fn is_franchise_vat_mention(lower: &str) -> bool {
         || lower.contains("art. 293")
 }
 
+/// Mentions d’avoir / note de crédit / credit note (indice revue — pas de forçage auto).
+pub fn detect_credit_note(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    // Patterns explicites uniquement — évite « ne devez pas avoir de retard ».
+    lower.contains("facture d'avoir")
+        || lower.contains("facture d’avoir")
+        || lower.contains("facture avoir")
+        || lower.contains("avoir n°")
+        || lower.contains("avoir nº")
+        || lower.contains("avoir no ")
+        || lower.contains("avoir no.")
+        || lower.contains("avoir:")
+        || lower.contains("avoir n:")
+        || lower.contains("avoir client")
+        || lower.contains("avoir fournisseur")
+        || lower.contains("note de crédit")
+        || lower.contains("note de credit")
+        || lower.contains("credit note")
+        || lower.contains("crédit note")
+        // « AVOIR N° … » / « AVOIR 12 » en tête (titre OCR)
+        || {
+            let head: String = lower.chars().take(120).collect();
+            let trimmed = head.trim_start();
+            trimmed.starts_with("avoir n")
+                || trimmed.starts_with("avoir\n")
+                || trimmed.starts_with("avoir ")
+                    && (trimmed.contains("n°")
+                        || trimmed.contains("nº")
+                        || trimmed.chars().skip(6).take(8).any(|c| c.is_ascii_digit()))
+        }
+}
+
 /// Mentions explicites d’autoliquidation / reverse charge (art. 283).
 pub fn detect_reverse_charge(text: &str) -> bool {
     let lower = text.to_lowercase();
@@ -1728,6 +1774,8 @@ fn build_extraction_payload(
     let counterpart = default_counterpart_for(doc_type);
     let journal = default_journal_for(doc_type);
     let bank_direction = if is_bank { Some("debit") } else { None };
+    let credit_note_hint = detect_credit_note(text)
+        && matches!(doc_type, "supplier_invoice" | "customer_invoice");
     let notes = if method == "image_pending_ocr" {
         "Texte peu lisible ou image scannée : OCR local non activé (pas d’API cloud). Vérifiez / saisissez les montants."
     } else if is_quote {
@@ -1736,6 +1784,8 @@ fn build_extraction_payload(
         "Commande client détectée : à la confirmation, une fiche Commercial → Commandes sera créée (numéro externe conservé). Aucune écriture comptable."
     } else if is_bank {
         "Relevé : une écriture BQ brouillon par mouvement saisi (pièce jointe = le relevé). Vérifiez sens, montant et contrepartie (souvent 471 en attente)."
+    } else if credit_note_hint {
+        "Le PDF semble être un avoir (note de crédit). Cochez « Avoir » en revue pour inverser l’écriture — la sélection manuelle prime."
     } else {
         "Vérifiez les champs avant de créer le brouillon d’écriture."
     };
@@ -1763,6 +1813,7 @@ fn build_extraction_payload(
         "journalCode": journal,
         "bankDirection": bank_direction,
         "reverseCharge": reverse,
+        "creditNoteHint": credit_note_hint,
         "postingSupported": posting_supported(doc_type),
         "notes": notes
     })
@@ -2144,6 +2195,20 @@ fn compute_vat_cents(ht: i64, rate_bp: i32) -> i64 {
         0
     } else {
         ((ht as i128) * (rate_bp as i128) / 10_000) as i64
+    }
+}
+
+/// Inverse débit ↔ crédit (avoir fournisseur / client).
+fn reverse_entry_lines(lines: &mut [EntryLineInput]) {
+    for l in lines.iter_mut() {
+        std::mem::swap(&mut l.debit_cents, &mut l.credit_cents);
+        if let Some(ref mut lab) = l.label {
+            if lab.contains("TVA collectée") && !lab.contains("avoir") {
+                *lab = "TVA collectée (avoir)".into();
+            } else if lab.contains("TVA déductible") && !lab.contains("avoir") {
+                *lab = "TVA déductible (avoir)".into();
+            }
+        }
     }
 }
 
@@ -2702,8 +2767,16 @@ pub fn confirm_document_import(
         input.ht_account.trim().to_string()
     };
 
+    let is_credit_note = input.is_credit_note
+        && matches!(doc_type.as_str(), "supplier_invoice" | "customer_invoice");
+    if input.is_credit_note && !is_credit_note {
+        return Err(
+            "L’avoir ne s’applique qu’aux factures fournisseur ou client (pas devis / frais / relevé)."
+                .into(),
+        );
+    }
     let mut customer_party_id: Option<i64> = None;
-    let (lines, journal) = match doc_type.as_str() {
+    let (mut lines, journal) = match doc_type.as_str() {
         "supplier_invoice" => {
             if !matches!(
                 vat_mode,
@@ -2895,9 +2968,17 @@ pub fn confirm_document_import(
         _ => return Err("Type de document non supporté pour le posting".into()),
     };
 
+    if is_credit_note {
+        reverse_entry_lines(&mut lines);
+    }
+
     let label = if input.label.trim().is_empty() {
         let piece = input.piece_ref.trim().to_string().if_empty("document");
-        format!("Import {piece}")
+        if is_credit_note {
+            format!("Import avoir {piece}")
+        } else {
+            format!("Import {piece}")
+        }
     } else {
         input.label.trim().to_string()
     };
@@ -2962,6 +3043,7 @@ pub fn confirm_document_import(
             &vat_code,
             &ht_account,
             Some(doc.stored_path.as_str()),
+            is_credit_note,
         ) {
             Ok(inv) => invoice_id = Some(inv.id),
             Err(e) => {
@@ -2978,6 +3060,7 @@ pub fn confirm_document_import(
         obj.insert("confirmedVatMode".into(), json!(vat_mode));
         obj.insert("confirmedJournal".into(), json!(journal));
         obj.insert("confirmedEntryId".into(), json!(entry.id));
+        obj.insert("confirmedIsCreditNote".into(), json!(is_credit_note));
         if let Some(ref num) = entry.ecriture_num {
             obj.insert("confirmedEcritureNum".into(), json!(num));
         }
@@ -3521,6 +3604,7 @@ Total TTC                 120,00
                 create_supplier_name: Some("FOURNITURES DELTA SAS".into()),
                 create_supplier_code: Some("F900".into()),
                 create_supplier_siret: Some("12345678900012".into()),
+                is_credit_note: false,
             },
         )
         .unwrap();
@@ -3583,6 +3667,7 @@ Total TTC                 120,00
                 create_supplier_name: Some("ACME SAS".into()),
                 create_supplier_code: Some("C900".into()),
                 create_supplier_siret: None,
+                is_credit_note: false,
             },
         )
         .unwrap();
@@ -3633,6 +3718,155 @@ Total TTC                 120,00
             )
             .unwrap();
         assert_eq!(vte_lettre, expected_lettre);
+    }
+
+    #[test]
+    fn detect_credit_note_from_pdf_text() {
+        assert!(detect_credit_note(
+            "AVOIR N° AV-12\nFacture d'avoir\nTotal HT 100,00\nTVA 20,00\nTotal TTC 120,00"
+        ));
+        assert!(detect_credit_note("CREDIT NOTE CN-9\nTotal HT 50,00"));
+        assert!(detect_credit_note("Note de crédit N° NC-1\nClient ACME"));
+        assert!(detect_credit_note("Avoir 42\nClient ACME\nTotal HT 10,00"));
+        assert!(!detect_credit_note(
+            "FACTURE N° F-1\nTotal HT 100,00\nVous ne devez pas avoir de retard"
+        ));
+        assert!(!detect_credit_note(
+            "FACTURE N° F-2\nNous devons avoir votre accord\nTotal HT 50,00"
+        ));
+    }
+
+    #[test]
+    fn confirm_customer_credit_note_reverses_vte_and_creates_avoir_invoice() {
+        let dir = tempdir().unwrap();
+        let ws = dir.path().join("demo.sascompta");
+        let info = db::create_demo_workspace(&ws).unwrap();
+        let (conn, _) = db::open_workspace(&info.path, db::DEMO_PASSWORD).unwrap();
+
+        let pdf = dir.path().join("avoir-client.pdf");
+        write_simple_pdf(
+            &pdf,
+            "AVOIR N° AV-42\nFacture d'avoir\nÀ votre attention\nClient ACME\n\
+             Total HT 100,00\nTVA 20,00\nTotal TTC 120,00\nConditions de règlement",
+        );
+        let doc = analyze_document(&conn, Path::new(&info.path), &pdf).unwrap();
+        assert_eq!(
+            doc.extraction
+                .get("creditNoteHint")
+                .and_then(|v| v.as_bool()),
+            Some(true)
+        );
+        let confirmed = confirm_document_import(
+            &conn,
+            doc.id,
+            &ConfirmDocumentImportInput {
+                doc_type: "customer_invoice".into(),
+                entry_date: "2026-03-15".into(),
+                piece_ref: "AV-42".into(),
+                label: "Import avoir AV-42".into(),
+                journal_code: "VTE".into(),
+                ht_cents: 10_000,
+                vat_cents: Some(2_000),
+                rate_bp: 2000,
+                vat_mode: "normale".into(),
+                vat_code: "T20C".into(),
+                ht_account: "706".into(),
+                counterpart_account: Some("411".into()),
+                bank_direction: None,
+                third_party_id: None,
+                create_supplier_name: Some("ACME SAS".into()),
+                create_supplier_code: Some("C901".into()),
+                create_supplier_siret: None,
+                is_credit_note: true,
+            },
+        )
+        .unwrap();
+        let entry = ledger::get_entry(&conn, confirmed.entry_id.unwrap()).unwrap();
+        assert_eq!(entry.journal_code, "VTE");
+        let d: i64 = entry.lines.iter().map(|l| l.debit_cents).sum();
+        let c: i64 = entry.lines.iter().map(|l| l.credit_cents).sum();
+        assert_eq!(d, c);
+        assert_eq!(d, 12_000);
+        // Avoir : produit au débit, 411 au crédit
+        let prod = entry
+            .lines
+            .iter()
+            .find(|l| l.account_number == "706")
+            .expect("706");
+        assert_eq!(prod.debit_cents, 10_000);
+        assert_eq!(prod.credit_cents, 0);
+        let client = entry
+            .lines
+            .iter()
+            .find(|l| l.account_number == "411")
+            .expect("411");
+        assert_eq!(client.credit_cents, 12_000);
+        assert_eq!(client.debit_cents, 0);
+
+        let inv = billing::get_invoice(&conn, confirmed.invoice_id.unwrap()).unwrap();
+        assert_eq!(inv.kind, "credit_note");
+        assert_eq!(inv.parent_invoice_id, None);
+        assert_eq!(
+            confirmed
+                .extraction
+                .get("confirmedIsCreditNote")
+                .and_then(|v| v.as_bool()),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn confirm_supplier_credit_note_reverses_ach() {
+        let dir = tempdir().unwrap();
+        let ws = dir.path().join("demo.sascompta");
+        let info = db::create_demo_workspace(&ws).unwrap();
+        let (conn, _) = db::open_workspace(&info.path, db::DEMO_PASSWORD).unwrap();
+
+        let pdf = dir.path().join("avoir-four.pdf");
+        write_simple_pdf(&pdf, sample_invoice_text());
+        let doc = analyze_document(&conn, Path::new(&info.path), &pdf).unwrap();
+        let confirmed = confirm_document_import(
+            &conn,
+            doc.id,
+            &ConfirmDocumentImportInput {
+                doc_type: "supplier_invoice".into(),
+                entry_date: "2026-03-15".into(),
+                piece_ref: "AV-F-1".into(),
+                label: "Import avoir fournisseur".into(),
+                journal_code: "ACH".into(),
+                ht_cents: 10_000,
+                vat_cents: Some(2_000),
+                rate_bp: 2000,
+                vat_mode: "normale".into(),
+                vat_code: "T20D".into(),
+                ht_account: "606".into(),
+                third_party_id: None,
+                counterpart_account: None,
+                bank_direction: None,
+                create_supplier_name: Some("FOURNITURES DELTA SAS".into()),
+                create_supplier_code: Some("F902".into()),
+                create_supplier_siret: Some("12345678900012".into()),
+                is_credit_note: true,
+            },
+        )
+        .unwrap();
+        let entry = ledger::get_entry(&conn, confirmed.entry_id.unwrap()).unwrap();
+        assert_eq!(entry.journal_code, "ACH");
+        let charge = entry
+            .lines
+            .iter()
+            .find(|l| l.account_number == "606")
+            .expect("606");
+        assert_eq!(charge.credit_cents, 10_000);
+        assert_eq!(charge.debit_cents, 0);
+        let four = entry
+            .lines
+            .iter()
+            .find(|l| l.account_number == "401")
+            .expect("401");
+        assert_eq!(four.debit_cents, 12_000);
+        assert_eq!(four.credit_cents, 0);
+        assert!(confirmed.invoice_id.is_none());
     }
 
     #[test]
@@ -3695,6 +3929,7 @@ Total TTC                 120,00
                 create_supplier_name: Some("ACME SAS".into()),
                 create_supplier_code: Some("C910".into()),
                 create_supplier_siret: None,
+                is_credit_note: false,
             },
         )
         .unwrap();
@@ -3734,6 +3969,7 @@ Total TTC                 120,00
                 create_supplier_name: Some("ACME SAS".into()),
                 create_supplier_code: Some("C910".into()),
                 create_supplier_siret: None,
+                is_credit_note: false,
             },
         )
         .unwrap_err();
@@ -3818,6 +4054,7 @@ Total TTC                 120,00
                 create_supplier_name: Some("ACME SAS".into()),
                 create_supplier_code: Some("C911".into()),
                 create_supplier_siret: None,
+                is_credit_note: false,
             },
         )
         .unwrap();
@@ -3857,6 +4094,7 @@ Total TTC                 120,00
                 create_supplier_name: Some("ACME SAS".into()),
                 create_supplier_code: Some("C911".into()),
                 create_supplier_siret: None,
+                is_credit_note: false,
             },
         )
         .unwrap_err();
@@ -3916,6 +4154,7 @@ Total TTC                 120,00
                 create_supplier_name: Some("FOURN X".into()),
                 create_supplier_code: Some("F901".into()),
                 create_supplier_siret: None,
+                is_credit_note: false,
             },
         )
         .unwrap();
@@ -3954,6 +4193,7 @@ Total TTC                 120,00
                 create_supplier_name: None,
                 create_supplier_code: None,
                 create_supplier_siret: None,
+                is_credit_note: false,
             },
         )
         .unwrap();
@@ -3992,6 +4232,7 @@ Total TTC                 120,00
             create_supplier_name: Some("FOURNITURES DELTA SAS".into()),
             create_supplier_code: Some("F901".into()),
             create_supplier_siret: Some("12345678900012".into()),
+            is_credit_note: false,
         };
         let confirmed = confirm_document_import(&conn, doc.id, &input).unwrap();
         let first_entry = confirmed.entry_id.expect("entry");
@@ -4119,6 +4360,7 @@ Total TTC                 120,00
                 create_supplier_name: Some("ACME LEGACY".into()),
                 create_supplier_code: Some("C942".into()),
                 create_supplier_siret: None,
+                is_credit_note: false,
             },
         )
         .unwrap();
@@ -4193,6 +4435,7 @@ Total TTC                 120,00
                 create_supplier_name: Some("CLIENT MIG".into()),
                 create_supplier_code: Some("C943".into()),
                 create_supplier_siret: None,
+                is_credit_note: false,
             },
         )
         .unwrap();
@@ -4256,6 +4499,7 @@ Total TTC                 120,00
                 create_supplier_name: Some("FOURN BF".into()),
                 create_supplier_code: Some("F942".into()),
                 create_supplier_siret: None,
+                is_credit_note: false,
             },
         )
         .unwrap();
@@ -4292,6 +4536,7 @@ Total TTC                 120,00
                 create_supplier_name: Some("CLIENT REL".into()),
                 create_supplier_code: Some("C944".into()),
                 create_supplier_siret: None,
+                is_credit_note: false,
             },
         )
         .unwrap();
@@ -4350,6 +4595,7 @@ Total TTC                 120,00
                 create_supplier_name: Some("CLIENT WRONG".into()),
                 create_supplier_code: Some("C945".into()),
                 create_supplier_siret: None,
+                is_credit_note: false,
             },
         )
         .unwrap();
