@@ -1,10 +1,15 @@
 import type { DraftLine } from "../modules/billing/quotes";
-import { emptyDraftLine } from "../modules/billing/quotes";
+import {
+  defaultVatCodeForBillingMode,
+  emptyDraftLine,
+  emptyDraftLineForVatMode,
+} from "../modules/billing/quotes";
 import type { VatCode } from "../lib/types";
 
 export type BillingLinesEditorProps = {
   lines: DraftLine[];
   onChange: (lines: DraftLine[]) => void;
+  /** Codes déjà filtrés pour le régime courant (collectée / exonéré / reverse). */
   vatCodes: VatCode[];
   vatMode: string;
   /** Compte par défaut pour une nouvelle ligne. */
@@ -22,18 +27,25 @@ export function BillingLinesEditor({
     onChange(lines.map((l) => (l.key === key ? { ...l, ...patch } : l)));
   }
 
+  function newLine(): DraftLine {
+    // vatCodes est déjà filtré par régime ; on préfère 20 % si présent.
+    const def = defaultVatCodeForBillingMode(vatMode, vatCodes);
+    if (def) {
+      return {
+        ...emptyDraftLine(def.rateBp, def.code),
+        accountNumber: defaultAccount,
+      };
+    }
+    return emptyDraftLineForVatMode(vatMode, vatCodes, defaultAccount);
+  }
+
   function addLine() {
-    const rate = vatCodes[0]?.rateBp ?? 2000;
-    const code = vatCodes[0]?.code ?? "T20C";
-    onChange([
-      ...lines,
-      { ...emptyDraftLine(rate, code), accountNumber: defaultAccount },
-    ]);
+    onChange([...lines, newLine()]);
   }
 
   function removeLine(key: string) {
     if (lines.length <= 1) {
-      onChange([{ ...emptyDraftLine(), accountNumber: defaultAccount }]);
+      onChange([newLine()]);
       return;
     }
     onChange(lines.filter((l) => l.key !== key));

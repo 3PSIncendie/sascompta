@@ -6,6 +6,7 @@ import type {
   QuoteLine,
   QuoteLineInput,
   QuoteStatus,
+  VatCode,
 } from "../../lib/types";
 
 export const QUOTE_STATUS_LABELS: Record<QuoteStatus, string> = {
@@ -38,6 +39,103 @@ export const BILLING_VAT_MODE_OPTIONS: {
     help: "Travaux BTP HT — le client assujetti reverse la TVA.",
   },
 ];
+
+/** Direction des codes TVA compatibles avec le régime document. */
+export function vatDirectionForBillingMode(
+  vatMode: BillingVatMode | string,
+): VatCode["direction"] {
+  if (vatMode === "sans") return "exempt";
+  if (vatMode === "autoliquidation_chantier") return "reverse";
+  return "collected";
+}
+
+/** Codes TVA proposés sur les lignes pour un régime donné. */
+export function vatCodesForBillingMode(
+  vatMode: BillingVatMode | string,
+  codes: VatCode[],
+): VatCode[] {
+  const direction = vatDirectionForBillingMode(vatMode);
+  return codes.filter((c) => c.active !== false && c.direction === direction);
+}
+
+/**
+ * Code TVA par défaut pour un régime (préfère 20 % si disponible).
+ * Utilisé pour les nouvelles lignes et le remappage hors régime.
+ */
+export function defaultVatCodeForBillingMode(
+  vatMode: BillingVatMode | string,
+  codes: VatCode[],
+  preferredRateBp = 2000,
+): VatCode | null {
+  const allowed = vatCodesForBillingMode(vatMode, codes);
+  if (!allowed.length) return null;
+  return (
+    allowed.find((c) => c.rateBp === preferredRateBp) ?? allowed[0] ?? null
+  );
+}
+
+/**
+ * Aligne les lignes sur le régime TVA :
+ * - conserve une ligne dont le code est déjà autorisé (override utilisateur) ;
+ * - sinon tente un code du même taux dans le nouveau régime ;
+ * - sinon applique le défaut du régime.
+ */
+export function syncDraftLinesToVatMode(
+  lines: DraftLine[],
+  vatMode: BillingVatMode | string,
+  codes: VatCode[],
+): DraftLine[] {
+  const allowed = vatCodesForBillingMode(vatMode, codes);
+  if (!allowed.length) return lines;
+  const fallback =
+    allowed.find((c) => c.rateBp === 2000) ?? allowed[0]!;
+  const byCode = new Map(allowed.map((c) => [c.code, c]));
+
+  return lines.map((line) => {
+    const current = byCode.get(line.vatCode);
+    if (current) {
+      return {
+        ...line,
+        vatCode: current.code,
+        vatRateBp: current.rateBp,
+      };
+    }
+    const sameRate =
+      allowed.find((c) => c.rateBp === line.vatRateBp) ?? fallback;
+    return {
+      ...line,
+      vatCode: sameRate.code,
+      vatRateBp: sameRate.rateBp,
+    };
+  });
+}
+
+/** Régime document initial selon le régime société (franchise → sans TVA). */
+export function defaultBillingVatModeForOrg(
+  vatRegime: string | null | undefined,
+): BillingVatMode {
+  const r = (vatRegime ?? "").toLowerCase();
+  if (r.includes("franchise")) return "sans";
+  return "normale";
+}
+
+export function emptyDraftLineForVatMode(
+  vatMode: BillingVatMode | string,
+  codes: VatCode[],
+  accountNumber = "706",
+): DraftLine {
+  const def = defaultVatCodeForBillingMode(vatMode, codes);
+  if (def) {
+    return { ...emptyDraftLine(def.rateBp, def.code), accountNumber };
+  }
+  if (vatMode === "sans") {
+    return { ...emptyDraftLine(0, "TEX"), accountNumber };
+  }
+  if (vatMode === "autoliquidation_chantier") {
+    return { ...emptyDraftLine(2000, "T20R"), accountNumber };
+  }
+  return { ...emptyDraftLine(2000, "T20C"), accountNumber };
+}
 
 export function legalMentionsFor(vatMode: BillingVatMode | string): string {
   switch (vatMode) {
