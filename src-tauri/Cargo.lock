@@ -3603,7 +3603,7 @@ dependencies = [
 
 [[package]]
 name = "sascompta"
-version = "0.6.15"
+version = "0.6.16"
 dependencies = [
  "argon2",
  "base64 0.22.1",
