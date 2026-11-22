@@ -792,6 +792,7 @@ export interface ClosingEventInfo {
 }
 
 export type NavId =
+  | "accueil"
   | "guide"
   | "ma-sas"
   | "plan"
