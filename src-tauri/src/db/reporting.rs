@@ -35,7 +35,12 @@ pub fn ledger_movements(conn: &Connection, filter: &LedgerFilter) -> DbResult<Ve
         if !ac.is_empty() {
             sql.push_str(&format!(" AND a.number = ?{idx}"));
             params_vec.push(Box::new(ac.clone()));
+            idx += 1;
         }
+    }
+    if let Some(fy_id) = filter.fiscal_year_id {
+        sql.push_str(&format!(" AND e.fiscal_year_id = ?{idx}"));
+        params_vec.push(Box::new(fy_id));
     }
     sql.push_str(" ORDER BY e.entry_date, e.id, el.line_no");
 
@@ -272,8 +277,80 @@ pub fn write_text_file(path: &Path, content: &str) -> DbResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::closing::{current_fiscal_year, ensure_open_fiscal_years_for_import};
+    use crate::db::ledger::{create_draft, post_entry};
     use crate::db::{create_demo_workspace, open_connection};
+    use crate::models::{CreateEntryInput, EntryLineInput};
     use tempfile::tempdir;
+
+    fn od_line(account: &str, debit: i64, credit: i64) -> EntryLineInput {
+        EntryLineInput {
+            account_number: account.into(),
+            label: None,
+            debit_cents: debit,
+            credit_cents: credit,
+            vat_code: None,
+            third_party_id: None,
+            comp_aux_type: None,
+            comp_aux_num: None,
+        }
+    }
+
+    #[test]
+    fn fiscal_year_id_excludes_prior_year_entries() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("fy-filter.sascompta");
+        create_demo_workspace(&path).unwrap();
+        let conn = open_connection(&path).unwrap();
+
+        let fy2025_id = ensure_open_fiscal_years_for_import(&conn, "2025-06-15").unwrap();
+        let prior = create_draft(
+            &conn,
+            &CreateEntryInput {
+                journal_code: "OD".into(),
+                entry_date: "2025-06-15".into(),
+                piece_ref: "OD-2025".into(),
+                label: "Charge N-1".into(),
+                lines: vec![od_line("627", 50_00, 0), od_line("512", 0, 50_00)],
+            },
+        )
+        .unwrap();
+        let prior = post_entry(&conn, prior.id).unwrap();
+        assert_eq!(prior.fiscal_year_id, fy2025_id);
+
+        let fy2026 = current_fiscal_year(&conn).unwrap();
+        assert_ne!(fy2026.id, fy2025_id);
+
+        let wide_current = LedgerFilter {
+            from_date: Some("2024-01-01".into()),
+            to_date: Some("2026-12-31".into()),
+            journal_code: None,
+            account_number: None,
+            fiscal_year_id: Some(fy2026.id),
+        };
+        let cur_moves = ledger_movements(&conn, &wide_current).unwrap();
+        assert!(
+            cur_moves.iter().all(|m| m.entry_id != prior.id),
+            "current-FY filter must not mix prior-year entries"
+        );
+
+        let prior_only = LedgerFilter {
+            from_date: Some("2024-01-01".into()),
+            to_date: Some("2026-12-31".into()),
+            journal_code: None,
+            account_number: None,
+            fiscal_year_id: Some(fy2025_id),
+        };
+        let prior_moves = ledger_movements(&conn, &prior_only).unwrap();
+        assert!(
+            prior_moves.iter().any(|m| m.entry_id == prior.id),
+            "prior-FY filter must still see its own entries"
+        );
+        assert!(prior_moves.iter().all(|m| {
+            // Demo 2026 seed entries must stay out of the 2025 scope.
+            m.entry_id == prior.id || m.entry_date.starts_with("2025")
+        }));
+    }
 
     #[test]
     fn balance_equals_ledger_ecart_zero() {
@@ -286,6 +363,7 @@ mod tests {
             to_date: Some("2026-12-31".into()),
             journal_code: None,
             account_number: None,
+            fiscal_year_id: None,
         };
         let movements = ledger_movements(&conn, &filter).unwrap();
         let report = balance_report(&conn, &filter).unwrap();
@@ -309,6 +387,7 @@ mod tests {
             to_date: None,
             journal_code: None,
             account_number: None,
+            fiscal_year_id: None,
         };
         let bal = balance_report(&conn, &filter).unwrap();
         let csv = export_balance_csv(&bal);

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  homeKpiFilters,
   homePeriods,
   kpisFromMonthStatements,
   monthStartYmd,
@@ -67,6 +68,29 @@ describe("homeKpis dates", () => {
     expect(p.monthFrom).toBe("2026-04-01");
     expect(p.monthTo).toBe("2026-04-15");
     expect(p.fyFrom).toBe("2026-04-01");
+  });
+
+  it("scopes Accueil KPI filters to the current exercice id", () => {
+    const { period, month, fyToDate } = homeKpiFilters(
+      {
+        id: 42,
+        startDate: "2026-01-01",
+        endDate: "2026-12-31",
+        label: "2026",
+      },
+      new Date(2026, 10, 22),
+    );
+    expect(period.monthFrom).toBe("2026-11-01");
+    expect(period.monthTo).toBe("2026-11-22");
+    expect(month.fiscalYearId).toBe(42);
+    expect(month.fromDate).toBe("2026-11-01");
+    expect(month.toDate).toBe("2026-11-22");
+    expect(fyToDate.fiscalYearId).toBe(42);
+    expect(fyToDate.fromDate).toBe("2026-01-01");
+    expect(fyToDate.toDate).toBe("2026-11-22");
+    // Never bleed into a prior calendar year when the current FY is 2026.
+    expect(month.fromDate! >= "2026-01-01").toBe(true);
+    expect(fyToDate.fromDate).toBe("2026-01-01");
   });
 });
 

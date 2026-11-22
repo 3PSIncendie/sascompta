@@ -1,4 +1,4 @@
-import type { AnnualStatements, FiscalYear } from "./types";
+import type { AnnualStatements, FiscalYear, LedgerFilter } from "./types";
 
 /** Local calendar date as YYYY-MM-DD (not UTC). */
 export function todayYmd(now = new Date()): string {
@@ -20,7 +20,7 @@ function clampYmd(value: string, min: string, max: string): string {
 }
 
 export interface HomePeriod {
-  /** Month-to-date within the open fiscal year (CA / charges / résultat). */
+  /** Month-to-date within the current fiscal year (CA / charges / résultat). */
   monthFrom: string;
   monthTo: string;
   /** FY start → as-of (trésorerie stock). */
@@ -32,8 +32,8 @@ export interface HomePeriod {
 }
 
 /**
- * Periods for home KPIs: month-to-date clamped to the open exercice,
- * plus FY-to-date for cash stock.
+ * Periods for home KPIs: month-to-date clamped to the current exercice,
+ * plus FY-to-date for cash stock. Never spans outside `fy` dates.
  */
 export function homePeriods(
   fy: Pick<FiscalYear, "startDate" | "endDate" | "label">,
@@ -53,6 +53,35 @@ export function homePeriods(
     fyTo: today,
     monthLabel,
     fyLabel: fy.label,
+  };
+}
+
+/**
+ * Ledger filters for Accueil KPIs — always scoped to the current exercice id
+ * so prior years stay separate (independent closing).
+ */
+export function homeKpiFilters(
+  fy: Pick<FiscalYear, "id" | "startDate" | "endDate" | "label">,
+  now = new Date(),
+): { period: HomePeriod; month: LedgerFilter; fyToDate: LedgerFilter } {
+  const period = homePeriods(fy, now);
+  const scope = {
+    journalCode: null as string | null,
+    accountNumber: null as string | null,
+    fiscalYearId: fy.id,
+  };
+  return {
+    period,
+    month: {
+      fromDate: period.monthFrom,
+      toDate: period.monthTo,
+      ...scope,
+    },
+    fyToDate: {
+      fromDate: period.fyFrom,
+      toDate: period.fyTo,
+      ...scope,
+    },
   };
 }
 

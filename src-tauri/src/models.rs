@@ -243,6 +243,9 @@ pub struct LedgerFilter {
     pub to_date: Option<String>,
     pub journal_code: Option<String>,
     pub account_number: Option<String>,
+    /// When set, only entries attached to this exercice (independent of date range).
+    #[serde(default)]
+    pub fiscal_year_id: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
