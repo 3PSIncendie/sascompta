@@ -364,92 +364,108 @@ export function DocumentImportScreen({ onNavigate }: Props) {
       {error && <p className="error">{error}</p>}
       {status && <p className="ok">{status}</p>}
 
-      <div
-        className={`import-dropzone${dragOver ? " is-over" : ""}`}
-        onDragOver={(e) => {
-          e.preventDefault();
-          setDragOver(true);
-        }}
-        onDragLeave={() => setDragOver(false)}
-        onDrop={onDrop}
-      >
-        <p>
-          Glissez un PDF / image ici, ou choisissez un fichier. Le fichier est
-          copié à côté de votre société (dossier <code>.files/imports</code>).
-        </p>
-        <div className="btn-row">
-          <button
-            type="button"
-            className="primary"
-            disabled={busy}
-            onClick={() => void onPickFile()}
-          >
-            Choisir un PDF / image
-          </button>
+      <div className="document-import-ingest">
+        <div
+          className={`import-dropzone${dragOver ? " is-over" : ""}`}
+          onDragOver={(e) => {
+            e.preventDefault();
+            setDragOver(true);
+          }}
+          onDragLeave={() => setDragOver(false)}
+          onDrop={onDrop}
+        >
+          <p>
+            Glissez un PDF / image ici, ou choisissez un fichier. Le fichier est
+            copié à côté de votre société (dossier <code>.files/imports</code>).
+          </p>
+          <div className="btn-row">
+            <button
+              type="button"
+              className="primary"
+              disabled={busy}
+              onClick={() => void onPickFile()}
+            >
+              Choisir un PDF / image
+            </button>
+          </div>
+          <p className="muted tiny">
+            Extraction locale (couche texte PDF). Pas d’API cloud payante. Image ou
+            PDF scanné : complètez les montants à la revue (OCR local optionnel plus
+            tard).
+          </p>
         </div>
-        <p className="muted tiny">
-          Extraction locale (couche texte PDF). Pas d’API cloud payante. Image ou
-          PDF scanné : complètez les montants à la revue (OCR local optionnel plus
-          tard).
-        </p>
+
+        <div className="companion-import-slot">
+          <FolderWatchPanel onDocumentReceived={() => void reload()} />
+        </div>
+
+        <div className="companion-import-slot">
+          <CompanionBridgePanel onDocumentReceived={() => void reload()} />
+        </div>
       </div>
 
-      <div className="companion-import-slot">
-        <FolderWatchPanel onDocumentReceived={() => void reload()} />
-      </div>
-
-      <div className="companion-import-slot">
-        <CompanionBridgePanel onDocumentReceived={() => void reload()} />
-      </div>
-
-      <div className="document-import-layout">
-        <aside className="document-import-list">
-          <h2>En revue ({pending.length})</h2>
-          {pending.length === 0 && (
-            <p className="muted">Aucun document en attente.</p>
-          )}
-          <ul>
-            {pending.map((d) => (
-              <li key={d.id}>
-                <button
-                  type="button"
-                  className={d.id === selectedId ? "is-active" : ""}
-                  onClick={() => selectDoc(d)}
-                >
-                  <span className="doc-name">{d.sourceFileName}</span>
-                  <span className="doc-meta">
-                    {docTypeMeta(d.docType).label} ·{" "}
-                    {confidenceLabel(d.confidence)}
-                  </span>
-                </button>
-              </li>
-            ))}
-          </ul>
-          {others.length > 0 && (
-            <>
-              <h2>Traités</h2>
-              <ul>
-                {others.map((d) => (
-                  <li key={d.id}>
-                    <button
-                      type="button"
-                      className={d.id === selectedId ? "is-active" : ""}
-                      onClick={() => selectDoc(d)}
-                    >
-                      <span className="doc-name">{d.sourceFileName}</span>
-                      <span className="doc-meta">
-                        {d.status}
-                        {d.entryId ? ` · écriture #${d.entryId}` : ""}
-                      </span>
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            </>
-          )}
+      <div
+        className="document-import-layout"
+        role="region"
+        aria-label="File de revue et panneau d’écriture"
+      >
+        <aside className="document-import-list" aria-label="Documents en revue">
+          <div className="document-import-list-head">
+            <h2>En revue ({pending.length})</h2>
+            <p className="muted tiny">
+              Faites défiler la file — la revue reste visible à droite.
+            </p>
+          </div>
+          <div className="document-import-list-scroll">
+            {pending.length === 0 && (
+              <p className="muted">Aucun document en attente.</p>
+            )}
+            <ul>
+              {pending.map((d) => (
+                <li key={d.id}>
+                  <button
+                    type="button"
+                    className={d.id === selectedId ? "is-active" : ""}
+                    onClick={() => selectDoc(d)}
+                  >
+                    <span className="doc-name">{d.sourceFileName}</span>
+                    <span className="doc-meta">
+                      {docTypeMeta(d.docType).label} ·{" "}
+                      {confidenceLabel(d.confidence)}
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+            {others.length > 0 && (
+              <>
+                <h2>Traités</h2>
+                <ul>
+                  {others.map((d) => (
+                    <li key={d.id}>
+                      <button
+                        type="button"
+                        className={d.id === selectedId ? "is-active" : ""}
+                        onClick={() => selectDoc(d)}
+                      >
+                        <span className="doc-name">{d.sourceFileName}</span>
+                        <span className="doc-meta">
+                          {d.status}
+                          {d.entryId ? ` · écriture #${d.entryId}` : ""}
+                        </span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
+          </div>
         </aside>
 
-        <section className="document-import-review">
+        <section
+          className="document-import-review"
+          aria-label="Revue avant écriture"
+        >
           {!form || !selected ? (
             <p className="muted">
               Importez un document pour ouvrir l’écran de revue guidée.

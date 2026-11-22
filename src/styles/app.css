@@ -1804,9 +1804,57 @@ label {
   max-width: 52rem;
 }
 
+/* Import docs : viewport fixe — file scrollable + revue toujours visible */
+.main:has(.document-import-screen) {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding-bottom: 1.15rem;
+}
+
+.main:has(.document-import-screen) > .update-banner,
+.main:has(.document-import-screen) > .deadline-banner {
+  flex: 0 0 auto;
+}
+
+.panel.document-import-screen {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  gap: 0.75rem;
+  /* Contredit .panel { overflow: visible } — nécessaire pour colonnes internes */
+  overflow: hidden;
+}
+
+.document-import-screen > .panel-head {
+  flex: 0 0 auto;
+}
+
+.document-import-screen > .error,
+.document-import-screen > .ok {
+  flex: 0 0 auto;
+  margin: 0;
+}
+
+.document-import-ingest {
+  flex: 0 1 auto;
+  max-height: min(28vh, 14.5rem);
+  min-height: 0;
+  overflow: auto;
+  padding-right: 0.2rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+
+.document-import-ingest .companion-import-slot {
+  margin: 0;
+}
+
 .import-dropzone {
-  margin: 0 0 1.25rem;
-  padding: 1.25rem 1.35rem;
+  margin: 0;
+  padding: 1rem 1.15rem;
   border: 1.5px dashed var(--line);
   border-radius: var(--radius);
   background:
@@ -1835,14 +1883,58 @@ label {
 
 .document-import-layout {
   display: grid;
-  grid-template-columns: minmax(200px, 260px) minmax(0, 1fr);
-  gap: 1.25rem;
-  align-items: start;
+  grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
+  gap: 1.1rem;
+  align-items: stretch;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .document-import-list,
 .document-import-review {
   min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+.document-import-list {
+  background:
+    linear-gradient(165deg, rgba(31, 201, 112, 0.14), transparent 42%),
+    linear-gradient(210deg, rgba(255, 122, 46, 0.08), transparent 55%),
+    var(--surface);
+  padding: 0.85rem 0.75rem 0.75rem;
+}
+
+.document-import-list-head {
+  flex: 0 0 auto;
+  padding: 0 0.2rem 0.55rem;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 0.55rem;
+}
+
+.document-import-list-head h2 {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.document-import-list-head .tiny {
+  margin-top: 0.25rem;
+}
+
+.document-import-list-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding-right: 0.15rem;
+}
+
+.document-import-list-scroll h2 {
+  margin: 0.85rem 0 0.45rem;
+  font-size: 0.95rem;
 }
 
 .document-import-list ul {
@@ -1854,13 +1946,22 @@ label {
 .document-import-list li button {
   width: 100%;
   text-align: left;
-  background: var(--surface);
+  background: rgba(255, 255, 255, 0.55);
   border: 1px solid var(--line);
   border-radius: 10px;
   padding: 0.65rem 0.75rem;
   margin-bottom: 0.45rem;
   cursor: pointer;
   color: inherit;
+  transition:
+    border-color 0.18s var(--motion-ease),
+    background 0.18s var(--motion-ease),
+    box-shadow 0.18s var(--motion-ease);
+}
+
+.document-import-list li button:hover {
+  border-color: rgba(15, 159, 86, 0.45);
+  background: rgba(255, 255, 255, 0.82);
 }
 
 .document-import-list li button.is-active {
@@ -1880,6 +1981,22 @@ label {
   font-size: 0.78rem;
   color: var(--ink-muted);
   margin-top: 0.15rem;
+}
+
+.document-import-review {
+  position: sticky;
+  top: 0;
+  align-self: stretch;
+  overflow: auto;
+  background:
+    linear-gradient(150deg, rgba(255, 122, 46, 0.1), transparent 40%),
+    linear-gradient(320deg, rgba(31, 201, 112, 0.1), transparent 48%),
+    var(--surface);
+  padding: 1rem 1.15rem 1.15rem;
+}
+
+.document-import-review > h2 {
+  margin-top: 0;
 }
 
 .document-import-review .hint-banner {
@@ -1972,8 +2089,32 @@ button.linkish {
 }
 
 @media (max-width: 860px) {
+  .main:has(.document-import-screen) {
+    overflow: auto;
+  }
+
+  .panel.document-import-screen {
+    overflow: visible;
+  }
+
+  .document-import-ingest {
+    max-height: none;
+    overflow: visible;
+  }
+
   .document-import-layout {
     grid-template-columns: 1fr;
+    flex: 0 0 auto;
+    min-height: auto;
+  }
+
+  .document-import-list {
+    max-height: min(42vh, 22rem);
+  }
+
+  .document-import-review {
+    position: relative;
+    max-height: none;
   }
 }
 
