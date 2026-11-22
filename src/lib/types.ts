@@ -7,6 +7,12 @@ export interface Organization {
   vatRegime: string;
   address: string | null;
   capitalCents: number;
+  /** E-mail société (bloc émetteur PDF). */
+  email?: string | null;
+  /** IBAN société (bandeau paiement facture). */
+  iban?: string | null;
+  /** BIC société (bandeau paiement facture). */
+  bic?: string | null;
 }
 
 export interface UpdateOrganizationInput {
@@ -17,6 +23,9 @@ export interface UpdateOrganizationInput {
   vatRegime: string;
   address?: string | null;
   capitalCents: number;
+  email?: string | null;
+  iban?: string | null;
+  bic?: string | null;
   displayName: string;
   fiscalYearLabel: string;
   startDate: string;

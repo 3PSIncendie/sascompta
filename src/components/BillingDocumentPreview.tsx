@@ -21,6 +21,7 @@ export function BillingDocumentPreview({
         <span className="muted small">Se met à jour à chaque saisie</span>
       </div>
       <div className="billing-doc-sheet-scroll">
+        <div className="billing-doc-a4-fit">
         <article className="billing-doc-sheet" aria-live="polite">
           <header className="billing-doc-head">
             <div className="billing-doc-head-row">
@@ -49,6 +50,7 @@ export function BillingDocumentPreview({
               {model.org.addressLines.map((line) => (
                 <div key={line}>{line}</div>
               ))}
+              {model.org.email ? <div>{model.org.email}</div> : null}
               {model.org.idLine ? <div>{model.org.idLine}</div> : null}
             </div>
             <div className="billing-doc-party">
@@ -111,8 +113,8 @@ export function BillingDocumentPreview({
               <strong>{model.vatLabel}</strong>
             </div>
             <div className="billing-doc-total-row billing-doc-ttc">
-              <span>Total TTC</span>
-              <strong>{model.ttcLabel}</strong>
+              <span className="billing-doc-ttc-label">Total TTC</span>
+              <strong className="billing-doc-ttc-value">{model.ttcLabel}</strong>
             </div>
           </div>
 
@@ -125,13 +127,47 @@ export function BillingDocumentPreview({
             </div>
           ) : null}
 
-          <footer className="billing-doc-footer">
-            <span>{model.footerLeft}</span>
-            <span>
-              {model.number} · 1/1
-            </span>
+          <footer
+            className={
+              model.payment
+                ? "billing-doc-footer billing-doc-footer-payment"
+                : "billing-doc-footer"
+            }
+          >
+            {model.payment ? (
+              <div className="billing-doc-payment">
+                <div className="billing-doc-payment-title">
+                  Détails du paiement
+                </div>
+                <dl className="billing-doc-payment-rows">
+                  <div>
+                    <dt>Nom du bénéficiaire</dt>
+                    <dd>{model.payment.beneficiary}</dd>
+                  </div>
+                  <div>
+                    <dt>BIC</dt>
+                    <dd>{model.payment.bic}</dd>
+                  </div>
+                  <div>
+                    <dt>IBAN</dt>
+                    <dd>{model.payment.iban}</dd>
+                  </div>
+                  <div>
+                    <dt>Référence</dt>
+                    <dd>{model.payment.reference}</dd>
+                  </div>
+                </dl>
+              </div>
+            ) : null}
+            <div className="billing-doc-footer-identity">
+              <span>{model.footerLeft}</span>
+              <span>
+                {model.number} · 1/1
+              </span>
+            </div>
           </footer>
         </article>
+        </div>
       </div>
     </aside>
   );

@@ -22,6 +22,9 @@ const org: Organization = {
   vatRegime: "reel_mensuel",
   address: "12 rue des Lilas\n75011 Paris",
   capitalCents: 100_000,
+  email: "contact@demo-sas.fr",
+  iban: "FR7616958000014398156414622",
+  bic: "QNTOFRP1XXX",
 };
 
 const client: ThirdParty = {
@@ -101,6 +104,8 @@ describe("documentPreview helpers", () => {
     expect(model.ttcLabel).toMatch(/3\u00a0000,00/);
     expect(model.notes).toBe("Atelier");
     expect(model.footerLeft).toContain("Demo SAS");
+    expect(model.org.email).toBe("contact@demo-sas.fr");
+    expect(model.payment).toBeNull();
   });
 
   it("injecte les mentions légales BTP", () => {
@@ -123,5 +128,8 @@ describe("documentPreview helpers", () => {
     expect(model.client.name).toMatch(/choisir/);
     expect(model.legalMentions).toMatch(/283/);
     expect(model.vatLabel).toMatch(/0,00/);
+    expect(model.payment?.iban).toBe("FR7616958000014398156414622");
+    expect(model.payment?.bic).toBe("QNTOFRP1XXX");
+    expect(model.payment?.reference).toBe("BROUILLON-FACT-2026-04");
   });
 });

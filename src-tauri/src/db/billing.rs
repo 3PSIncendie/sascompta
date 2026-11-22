@@ -13,8 +13,10 @@ use std::path::Path;
 
 /// Logo 3PSI embarqué (PNG) — rendu PDF offline (Tauri desktop).
 const COMMERCIAL_LOGO_PNG: &[u8] = include_bytes!("../../../src/assets/brand/3psi-logo.png");
-/// Largeur/hauteur logo sur A4 (~24 mm) — ne compacte pas le bloc client/émetteur.
-const COMMERCIAL_LOGO_MM: f32 = 24.0;
+/// Largeur/hauteur logo sur A4 — calé sur la référence 3PSI (~94,5 pt ≈ 33,34 mm).
+const COMMERCIAL_LOGO_MM: f32 = 33.34;
+/// Hauteur page A4 (mm) — origine PDF en bas à gauche.
+const PAGE_H_MM: f32 = 297.0;
 
 pub const SCHEMA_BILLING_VERSION: i32 = 11;
 
@@ -1892,8 +1894,9 @@ fn rule_color() -> Color {
     Color::Rgb(Rgb::new(0.863, 0.863, 0.851, None))
 }
 
-fn white_color() -> Color {
-    Color::Rgb(Rgb::new(1.0, 1.0, 1.0, None))
+/// Texte sur bandeau sombre (réf. Qonto/3PSI ≈ #F8F8F7, pas blanc pur).
+fn band_text_color() -> Color {
+    Color::Rgb(Rgb::new(0.973, 0.973, 0.969, None))
 }
 
 fn fill_rect(layer: &PdfLayerReference, x0: f32, y0: f32, x1: f32, y1: f32, color: Color) {
@@ -1935,11 +1938,21 @@ struct PdfLineView<'a> {
     vat_rate_bp: i32,
 }
 
+/// Bloc « Détails du paiement » (facture) — calqué sur la référence 3PSI.
+struct PaymentDetailsPdf<'a> {
+    beneficiary: &'a str,
+    bic: &'a str,
+    iban: &'a str,
+    reference: &'a str,
+}
+
 struct CommercialPdf<'a> {
     title: &'a str,
     number: &'a str,
     meta: Vec<(&'a str, String)>,
     org: &'a Organization,
+    /// E-mail émetteur (optionnel — affiché sous l’adresse si présent).
+    org_email: Option<&'a str>,
     client: &'a ThirdParty,
     lines: Vec<PdfLineView<'a>>,
     ht_cents: i64,
@@ -1948,11 +1961,13 @@ struct CommercialPdf<'a> {
     notes: Option<&'a str>,
     legal_mentions: Option<&'a str>,
     footer_left: String,
+    /// Présent sur les factures lorsque IBAN société renseigné.
+    payment: Option<PaymentDetailsPdf<'a>>,
 }
 
-/// Layout calqué sur le modèle devis/facture 3PSI (sans bandeau « Détails du paiement » / RIB).
+/// Layout calqué sur le modèle devis/facture 3PSI (A4 exact, métriques référence).
 fn render_commercial_pdf(doc_title: &str, spec: &CommercialPdf<'_>, path: &Path) -> DbResult<()> {
-    let (doc, page1, layer1) = PdfDocument::new(doc_title, Mm(210.0), Mm(297.0), "L1");
+    let (doc, page1, layer1) = PdfDocument::new(doc_title, Mm(210.0), Mm(PAGE_H_MM), "L1");
     let font = doc
         .add_builtin_font(BuiltinFont::Helvetica)
         .map_err(|e| format!("PDF font: {e}"))?;
@@ -1965,23 +1980,30 @@ fn render_commercial_pdf(doc_title: &str, spec: &CommercialPdf<'_>, path: &Path)
     let page_w = 210.0_f32;
     let content_r = page_w - margin_r;
     // Colonnes tableau (mm) — bords droits calés sur la référence 3PSI
-    let col_desc_r = 103.2_f32;
+    let col_desc_r = 103.19_f32;
     let col_qty_right = 118.0_f32;
     let col_unit_right = 145.0_f32;
     let col_vat_right = 164.0_f32;
     let col_ht_right = 195.3_f32;
-    let meta_value_x = 52.0_f32;
-    let mid_x = 108.7_f32;
+    let meta_value_x = 52.02_f32;
+    let mid_x = 108.74_f32;
     let totals_label_x = 123.3_f32;
     let line_leading = 4.76_f32;
-    let footer_band_h = 23.2_f32;
+    // Pied identité seul (devis) vs bandeau paiement + identité (facture)
+    let identity_band_h = 23.28_f32;
+    let payment_band_h = 54.77_f32;
+    let footer_band_h = if spec.payment.is_some() {
+        payment_band_h
+    } else {
+        identity_band_h
+    };
 
     let mut layer = doc.get_page(page1).get_layer(layer1);
     let mut page_idx = 1usize;
-    // Marge haute type référence (~24 mm sous le bord)
+    // Baseline titre : ~24 mm sous le bord haut (réf. glyph-top ≈ 17,6 mm)
     let mut y = 273.0_f32;
 
-    let draw_logo = |layer: &PdfLayerReference| {
+    let draw_logo = |layer: &PdfLayerReference, title_baseline: f32| {
         let Ok(decoder) =
             image_crate::codecs::png::PngDecoder::new(Cursor::new(COMMERCIAL_LOGO_PNG))
         else {
@@ -1993,8 +2015,8 @@ fn render_commercial_pdf(doc_title: &str, spec: &CommercialPdf<'_>, path: &Path)
         let px_w = image.image.width.0.max(1) as f32;
         // dpi tel que largeur image = COMMERCIAL_LOGO_MM.
         let dpi = px_w * 25.4 / COMMERCIAL_LOGO_MM;
-        // Coin haut-droit : translate = coin bas-gauche de l'image (origine PDF).
-        let logo_top = 285.0_f32;
+        // Aligné sur le haut du titre (ascent Helvetica Bold 24 pt ≈ 6,1 mm).
+        let logo_top = title_baseline + 6.1;
         let translate_x = content_r - COMMERCIAL_LOGO_MM;
         let translate_y = logo_top - COMMERCIAL_LOGO_MM;
         image.add_to_layer(
@@ -2014,20 +2036,20 @@ fn render_commercial_pdf(doc_title: &str, spec: &CommercialPdf<'_>, path: &Path)
         let edges = [
             margin_l,
             col_desc_r,
-            119.6_f32,
-            146.6_f32,
-            165.6_f32,
+            119.59_f32,
+            146.58_f32,
+            165.63_f32,
             content_r,
         ];
         for win in edges.windows(2) {
             fill_rect(layer, win[0], header_bot, win[1], y_top, header_fill());
         }
-        layer.set_fill_color(white_color());
+        layer.set_fill_color(band_text_color());
         let head_y = header_bot + 2.0;
         layer.use_text(
             "Description",
             7.5,
-            Mm(margin_l + 3.0),
+            Mm(margin_l + 3.18),
             Mm(head_y),
             &font_bold,
         );
@@ -2038,18 +2060,53 @@ fn render_commercial_pdf(doc_title: &str, spec: &CommercialPdf<'_>, path: &Path)
     };
 
     let draw_footer = |layer: &PdfLayerReference, page_idx: usize, total_pages: &str| {
-        // Bandeau bas sombre (identité) — distinct du bandeau RIB volontairement omis
         fill_rect(layer, 0.0, 0.0, page_w, footer_band_h, header_fill());
-        layer.set_fill_color(white_color());
+        if let Some(pay) = &spec.payment {
+            // Bloc « Détails du paiement » dans le bandeau sombre (réf. facture).
+            let pay_top = footer_band_h - 6.5;
+            layer.set_fill_color(band_text_color());
+            layer.use_text(
+                "Détails du paiement",
+                9.0,
+                Mm(margin_l),
+                Mm(pay_top),
+                &font_bold,
+            );
+            let pay_meta_x = 60.4_f32;
+            let mut py = pay_top - 6.5;
+            let rows = [
+                ("Nom du bénéficiaire", pay.beneficiary),
+                ("BIC", pay.bic),
+                ("IBAN", pay.iban),
+                ("Référence", pay.reference),
+            ];
+            for (label, value) in rows {
+                layer.set_fill_color(band_text_color());
+                layer.use_text(ascii_safe(label), 7.5, Mm(margin_l), Mm(py), &font);
+                layer.use_text(ascii_safe(value), 7.5, Mm(pay_meta_x), Mm(py), &font);
+                py -= 4.76;
+            }
+            // Règle claire au-dessus de la ligne d'identité
+            fill_rect(
+                layer,
+                margin_l,
+                18.9,
+                content_r,
+                18.9 + 0.26,
+                rule_color(),
+            );
+        }
+        layer.set_fill_color(band_text_color());
+        // Identité plus haute que le folio (réf. devis/facture).
         layer.use_text(
             ascii_safe(&spec.footer_left),
             7.5,
             Mm(margin_l),
-            Mm(16.2),
+            Mm(15.8),
             &font,
         );
         let right = format!("{} · {}", spec.number, total_pages);
-        draw_text_right(layer, &right, 7.5, content_r, 9.8, &font);
+        draw_text_right(layer, &right, 7.5, content_r, 9.5, &font);
         let _ = page_idx;
     };
 
@@ -2060,7 +2117,7 @@ fn render_commercial_pdf(doc_title: &str, spec: &CommercialPdf<'_>, path: &Path)
                       full_header: bool|
      -> DbResult<()> {
         if !full_header {
-            let (p, l) = doc.add_page(Mm(210.0), Mm(297.0), "L");
+            let (p, l) = doc.add_page(Mm(210.0), Mm(PAGE_H_MM), "L");
             *layer = doc.get_page(p).get_layer(l);
             *page_idx += 1;
             *y = 280.0;
@@ -2078,7 +2135,8 @@ fn render_commercial_pdf(doc_title: &str, spec: &CommercialPdf<'_>, path: &Path)
     };
 
     // ——— En-tête titre + logo haut-droite + méta ———
-    draw_logo(&layer);
+    let title_baseline = y;
+    draw_logo(&layer, title_baseline);
     layer.set_fill_color(ink_color());
     layer.use_text(ascii_safe(spec.title), 24.0, Mm(margin_l), Mm(y), &font_bold);
     y -= 16.2;
@@ -2127,6 +2185,10 @@ fn render_commercial_pdf(doc_title: &str, spec: &CommercialPdf<'_>, path: &Path)
             layer.use_text(ascii_safe(line), 7.5, Mm(mid_x), Mm(y_right), &font);
             y_right -= line_leading;
         }
+    }
+    if let Some(email) = spec.org_email {
+        layer.use_text(ascii_safe(email), 7.5, Mm(margin_l), Mm(y_left), &font);
+        y_left -= line_leading;
     }
     if let Some(email) = &spec.client.email {
         layer.use_text(ascii_safe(email), 7.5, Mm(mid_x), Mm(y_right), &font);
@@ -2226,9 +2288,9 @@ fn render_commercial_pdf(doc_title: &str, spec: &CommercialPdf<'_>, path: &Path)
     let edges = [
         margin_l,
         col_desc_r,
-        119.6_f32,
-        146.6_f32,
-        165.6_f32,
+        119.59_f32,
+        146.58_f32,
+        165.63_f32,
         content_r,
     ];
     for win in edges.windows(2) {
@@ -2247,7 +2309,7 @@ fn render_commercial_pdf(doc_title: &str, spec: &CommercialPdf<'_>, path: &Path)
         y,
         &font,
     );
-    y -= 8.5;
+    y -= 8.47;
     layer.use_text(
         "Montant total de la TVA",
         7.5,
@@ -2263,23 +2325,37 @@ fn render_commercial_pdf(doc_title: &str, spec: &CommercialPdf<'_>, path: &Path)
         y,
         &font,
     );
-    y -= 10.0;
+    y -= 8.47;
 
-    // Barre sombre Total TTC (sans RIB)
-    let ttc_h = 8.5_f32;
+    // Total TTC : deux cellules sombres adjacentes (réf. 3PSI), pas une barre unique.
+    let ttc_h = 8.47_f32;
+    let ttc_str = money_fr(spec.ttc_cents);
+    let ttc_value_pad = 6.0_f32;
+    let ttc_split = (content_r - approx_width_mm(&ttc_str, 7.5) - ttc_value_pad)
+        .max(totals_label_x + 40.0)
+        .min(content_r - 18.0);
+    let ttc_bot = y - 2.0;
     fill_rect(
         &layer,
-        totals_label_x - 2.0,
-        y - 2.0,
-        content_r,
-        y - 2.0 + ttc_h,
+        totals_label_x - 3.18,
+        ttc_bot,
+        ttc_split,
+        ttc_bot + ttc_h,
         header_fill(),
     );
-    layer.set_fill_color(white_color());
+    fill_rect(
+        &layer,
+        ttc_split,
+        ttc_bot,
+        content_r,
+        ttc_bot + ttc_h,
+        header_fill(),
+    );
+    layer.set_fill_color(band_text_color());
     layer.use_text("Total TTC", 7.5, Mm(totals_label_x), Mm(y), &font_bold);
     draw_text_right(
         &layer,
-        &money_fr(spec.ttc_cents),
+        &ttc_str,
         7.5,
         col_ht_right,
         y,
@@ -2355,12 +2431,14 @@ pub fn export_quote_pdf(
         .collect();
 
     let footer_left = commercial_footer_left(&org);
+    let org_email = org.email.as_deref().map(str::trim).filter(|s| !s.is_empty());
 
     let spec = CommercialPdf {
         title: "Devis",
         number: &quote.number,
         meta,
         org: &org,
+        org_email,
         client: &client,
         lines,
         ht_cents: quote.ht_cents,
@@ -2369,6 +2447,7 @@ pub fn export_quote_pdf(
         notes: quote.notes.as_deref(),
         legal_mentions: quote.legal_mentions.as_deref(),
         footer_left,
+        payment: None,
     };
     render_commercial_pdf("SasCompta Devis", &spec, path)
 }
@@ -2422,12 +2501,25 @@ pub fn export_invoice_pdf(
         .collect();
 
     let footer_left = commercial_footer_left(&org);
+    let org_email = org.email.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    let iban = org.iban.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    let bic = org.bic.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    let payment = match (iban, bic) {
+        (Some(iban), Some(bic)) => Some(PaymentDetailsPdf {
+            beneficiary: org.name.as_str(),
+            bic,
+            iban,
+            reference: number.as_str(),
+        }),
+        _ => None,
+    };
 
     let spec = CommercialPdf {
         title,
         number: &number,
         meta,
         org: &org,
+        org_email,
         client: &client,
         lines,
         ht_cents: inv.ht_cents,
@@ -2436,6 +2528,7 @@ pub fn export_invoice_pdf(
         notes: inv.notes.as_deref(),
         legal_mentions: inv.legal_mentions.as_deref(),
         footer_left,
+        payment,
     };
     render_commercial_pdf("SasCompta Facture", &spec, path)?;
     conn.execute(
@@ -2471,6 +2564,15 @@ pub fn seed_demo_quotes(conn: &Connection) -> DbResult<()> {
         [],
         |r| r.get(0),
     )?;
+    // Coordonnées émetteur pour PDF (e-mail + bandeau paiement facture).
+    let _ = conn.execute(
+        "UPDATE organization SET
+            email = COALESCE(NULLIF(TRIM(email), ''), 'contact@demo-sas.fr'),
+            iban = COALESCE(NULLIF(TRIM(iban), ''), 'FR7616958000014398156414622'),
+            bic = COALESCE(NULLIF(TRIM(bic), ''), 'QNTOFRP1XXX')
+         WHERE id = 1",
+        [],
+    );
     // Adresse émetteur pour pied de page / bloc parties (aperçu PDF)
     let _ = conn.execute(
         "UPDATE organization SET address = '12 rue de la Démo\n75001 Paris, FR',

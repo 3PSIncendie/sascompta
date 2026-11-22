@@ -89,6 +89,9 @@ function buildPayload(form: {
   legalForm: string;
   vatRegime: string;
   address: string;
+  email: string;
+  iban: string;
+  bic: string;
   capital: string;
   displayName: string;
   label: string;
@@ -102,6 +105,9 @@ function buildPayload(form: {
     legalForm: form.legalForm,
     vatRegime: form.vatRegime,
     address: form.address.trim() || null,
+    email: form.email.trim() || null,
+    iban: form.iban.replace(/\s/g, "") || null,
+    bic: form.bic.replace(/\s/g, "") || null,
     capitalCents: parseEurosToCents(form.capital),
     displayName: form.displayName.trim(),
     fiscalYearLabel: form.label.trim(),
@@ -128,6 +134,9 @@ export function MaSasScreen({
   const [legalForm, setLegalForm] = useState(org.legalForm || "SAS");
   const [vatRegime, setVatRegime] = useState(normalizeVat(org.vatRegime));
   const [address, setAddress] = useState(org.address ?? "");
+  const [email, setEmail] = useState(org.email ?? "");
+  const [iban, setIban] = useState(org.iban ?? "");
+  const [bic, setBic] = useState(org.bic ?? "");
   const [capital, setCapital] = useState(centsToEuroInput(org.capitalCents));
   const [displayName, setDisplayName] = useState(profile.displayName);
   const [label, setLabel] = useState(fy.label);
@@ -159,6 +168,9 @@ export function MaSasScreen({
     setLegalForm(org.legalForm || "SAS");
     setVatRegime(normalizeVat(org.vatRegime));
     setAddress(org.address ?? "");
+    setEmail(org.email ?? "");
+    setIban(org.iban ?? "");
+    setBic(org.bic ?? "");
     setCapital(centsToEuroInput(org.capitalCents));
     setDisplayName(profile.displayName);
     setLabel(fy.label);
@@ -365,6 +377,9 @@ export function MaSasScreen({
       legalForm,
       vatRegime,
       address,
+      email,
+      iban,
+      bic,
       capital,
       displayName,
       label,
@@ -384,6 +399,9 @@ export function MaSasScreen({
             legalForm: payload.legalForm,
             vatRegime: payload.vatRegime,
             address: payload.address ?? null,
+            email: payload.email ?? null,
+            iban: payload.iban ?? null,
+            bic: payload.bic ?? null,
             capitalCents: payload.capitalCents,
           },
           fiscalYear: fyOpen
@@ -484,6 +502,20 @@ export function MaSasScreen({
               <strong style={{ whiteSpace: "pre-wrap" }}>
                 {org.address || "—"}
               </strong>
+            </div>
+            <div className="meta-item">
+              <span>E-mail société</span>
+              <strong>{org.email || "—"}</strong>
+            </div>
+            <div className="meta-item">
+              <span>IBAN</span>
+              <strong style={{ fontSize: "0.85rem", wordBreak: "break-all" }}>
+                {org.iban || "—"}
+              </strong>
+            </div>
+            <div className="meta-item">
+              <span>BIC</span>
+              <strong>{org.bic || "—"}</strong>
             </div>
             <div className="meta-item">
               <span>
@@ -591,6 +623,34 @@ export function MaSasScreen({
                     onChange={(e) => setAddress(e.target.value)}
                     rows={3}
                     placeholder={"12 rue des Lilas\n75011 Paris"}
+                  />
+                </label>
+                <label>
+                  E-mail société
+                  <input
+                    type="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="contact@exemple.fr"
+                    autoComplete="email"
+                  />
+                </label>
+                <label>
+                  BIC (paiement facture)
+                  <input
+                    value={bic}
+                    onChange={(e) => setBic(e.target.value)}
+                    placeholder="QNTOFRP1XXX"
+                    autoComplete="off"
+                  />
+                </label>
+                <label style={{ gridColumn: "1 / -1" }}>
+                  IBAN (bandeau « Détails du paiement »)
+                  <input
+                    value={iban}
+                    onChange={(e) => setIban(e.target.value)}
+                    placeholder="FR76…"
+                    autoComplete="off"
                   />
                 </label>
               </div>
